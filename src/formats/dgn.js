@@ -85,6 +85,7 @@ export function parseDgn(input, { onProgress } = {}) {
     o += size;
   }
 
+  model.header.palette = Array.from(palette); // colour table (index -> 0xRRGGBB), for editing
   const usedLevels = new Set();
   const cells = [];
   model.cells = cells;
@@ -99,7 +100,9 @@ export function parseDgn(input, { onProgress } = {}) {
     ];
   };
 
-  const base = (o, type) => {
+  // Every entity keeps `dgn: [start, end)` = the byte range of its element(s) in the file, plus
+  // its colour index, so the round-trip writer (dgn-write.js) can keep untouched bytes as they are.
+  const base = (o, type, size) => {
     const level = b[o] & 0x3f;
     const top = stack[stack.length - 1];
     if (!(top && (top.type === 12 || top.type === 14))) usedLevels.add(level); // chain parts use the header's level
@@ -107,15 +110,19 @@ export function parseDgn(input, { onProgress } = {}) {
       layer: 'Level ' + level,
       color: 256,
       rgb: palette[b[o + 35]],
+      ci: b[o + 35],
       weight: (b[o + 34] & 0xf8) >> 3,
       ltype: (b[o + 34] & 7) ? 'DGN' + (b[o + 34] & 7) : 'CONTINUOUS',
       src: TYPE_NAMES[type] || 'TYPE_' + type,
+      dgn: [o, o + size],
     };
-    if (stack.length) {
-      for (let k = stack.length - 1; k >= 0; k--) if (stack[k].type === 2) { e.group = stack[k].id; break; }
-    }
+    const cell = enclosingCell();
+    if (cell) e.group = cell.id;
     return e;
   };
+  const enclosingCell = () => { for (let k = stack.length - 1; k >= 0; k--) if (stack[k].type === 2) return stack[k].cell; return null; };
+  /** Entities inside a cell become its children; everything else is top level. */
+  const place = (e) => { const cell = enclosingCell(); (cell ? cell.children : model.entities).push(e); };
 
   const readVerts = (o, count, size) => {
     const out = [];
@@ -130,7 +137,7 @@ export function parseDgn(input, { onProgress } = {}) {
   const emit = (e) => {
     const top = stack[stack.length - 1];
     if (top && (top.type === 14 || top.type === 12)) { top.parts.push(e); return; } // complex chain/shape: joined later
-    model.entities.push(e);
+    place(e);
   };
 
   const closeGroups = (o) => {
@@ -145,7 +152,7 @@ export function parseDgn(input, { onProgress } = {}) {
     }
     const closed = g.type === 14;
     if (closed && pts.length >= 4 && near(pts, pts.slice(0, 2))) pts.length -= 2;
-    if (pts.length >= 4) model.entities.push({ ...g.props, type: 'polyline', pts, bulges: null, closed });
+    if (pts.length >= 4) place({ ...g.props, type: 'polyline', pts, bulges: null, closed, dgn: [g.start, g.end] });
   };
   const near = (pts, seg) => Math.abs(pts[pts.length - 2] - seg[0]) < 1e-9 && Math.abs(pts[pts.length - 1] - seg[1]) < 1e-9;
   const partPoints = (e) => {
@@ -199,10 +206,11 @@ export function parseDgn(input, { onProgress } = {}) {
   let nextReport = 0;
   let o = 0;
   let elementCount = 0;
+  model.header.eod = len;
   while (o + 4 <= len) {
-    if (b[o] === 0xff && b[o + 1] === 0xff) break;
+    if (b[o] === 0xff && b[o + 1] === 0xff) { model.header.eod = o; break; }
     const size = 4 + 2 * u16(o + 2);
-    if (o + size > len) { warn(model, 'The file ended in the middle of an element; showing what was read.'); break; }
+    if (o + size > len) { model.header.eod = o; model.header.truncated = true; warn(model, 'The file ended in the middle of an element; showing what was read.'); break; }
     if (onProgress && o >= nextReport) { onProgress(o / total); nextReport = o + total / 50; }
     closeGroups(o);
     const type = b[o + 1] & 0x7f;
@@ -218,6 +226,7 @@ export function parseDgn(input, { onProgress } = {}) {
     }
     o += size;
   }
+  if (model.header.eod === len && o + 2 <= len && b[o] === 0xff && b[o + 1] === 0xff) model.header.eod = o; // marker in the last bytes
   while (stack.length) finishGroup(stack.pop());
 
   function handle(o, type, size) {
@@ -228,17 +237,19 @@ export function parseDgn(input, { onProgress } = {}) {
     countType(model, name);
     switch (type) {
       case 3: { // line
-        const e = base(o, type);
+        const e = base(o, type, size);
         e.type = 'line';
         e.a = [X(i32(o + 36)), Y(i32(o + 40))];
         e.b = dim === 3 ? [X(i32(o + 48)), Y(i32(o + 52))] : [X(i32(o + 44)), Y(i32(o + 48))];
+        if (dim === 3) e.zr = i32(o + 44); // raw Z (UOR), kept for saving
         emit(e);
         return;
       }
       case 4: case 6: case 11: { // line string, shape, curve
-        const e = base(o, type);
+        const e = base(o, type, size);
         const pts = readVerts(o, u16(o + 36), size);
         if (pts.length < 4) { notShown(model, name + ' (degenerate)'); return; }
+        if (dim === 3) e.zr = i32(o + 46);
         if (type === 11) {
           e.type = 'spline';
           e.closed = false;
@@ -255,7 +266,7 @@ export function parseDgn(input, { onProgress } = {}) {
       }
       case 12: case 14: { // complex chain / shape header
         const tot = u16(o + 36);
-        const g = { type, end: o + 38 + tot * 2, parts: [], props: base(o, type) };
+        const g = { type, start: o, end: o + 38 + tot * 2, parts: [], props: base(o, type, size) };
         stack.push(g);
         return;
       }
@@ -268,7 +279,9 @@ export function parseDgn(input, { onProgress } = {}) {
         const tot = u16(o + 36);
         const id = cells.length;
         const r50 = (v) => { const a = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ$.?0123456789'; return a[Math.floor(v / 1600) % 40] + a[Math.floor(v / 40) % 40] + a[v % 40]; };
-        const cell = { id, name: (r50(u16(o + 38)) + r50(u16(o + 40))).trim(), level: b[o] & 0x3f };
+        const end = o + 38 + tot * 2;
+        const cell = { ...base(o, type, size), type: 'cell', id, name: (r50(u16(o + 38)) + r50(u16(o + 40))).trim(), level: b[o] & 0x3f, children: [] };
+        cell.dgn = [o, end];
         if (dim === 2) {
           const t = [i32(o + 68) / 214748, i32(o + 72) / 214748, i32(o + 76) / 214748, i32(o + 80) / 214748];
           cell.trans = t;
@@ -281,11 +294,12 @@ export function parseDgn(input, { onProgress } = {}) {
           cell.origin = [X(i32(o + 112)), Y(i32(o + 116))];
         }
         cells.push(cell);
-        stack.push({ type, end: o + 38 + tot * 2, parts: [], id });
+        place(cell);
+        stack.push({ type, end, parts: [], id, cell });
         return;
       }
       case 15: case 16: { // ellipse, arc
-        const e = base(o, type);
+        const e = base(o, type, size);
         let r1, r2, rot = 0, m3 = null, cx, cy, start = 0, sweep = Math.PI * 2;
         if (type === 16) {
           start = (i32(o + 36) / 360000) * D2R;
@@ -294,18 +308,18 @@ export function parseDgn(input, { onProgress } = {}) {
           sweep = sw === 0 ? Math.PI * 2 : (sw / 360000) * D2R;
           r1 = vaxD(o + 44) * scale; r2 = vaxD(o + 52) * scale;
           if (dim === 2) { rot = (i32(o + 60) / 360000) * D2R; cx = X(vaxD(o + 64)); cy = Y(vaxD(o + 72)); }
-          else { m3 = quatMatrix(o + 60); cx = X(vaxD(o + 76)); cy = Y(vaxD(o + 84)); }
+          else { m3 = quatMatrix(o + 60); cx = X(vaxD(o + 76)); cy = Y(vaxD(o + 84)); e.zr = vaxD(o + 92); }
         } else {
           r1 = vaxD(o + 36) * scale; r2 = vaxD(o + 44) * scale;
           if (dim === 2) { rot = (i32(o + 52) / 360000) * D2R; cx = X(vaxD(o + 56)); cy = Y(vaxD(o + 64)); }
-          else { m3 = quatMatrix(o + 52); cx = X(vaxD(o + 68)); cy = Y(vaxD(o + 76)); }
+          else { m3 = quatMatrix(o + 52); cx = X(vaxD(o + 68)); cy = Y(vaxD(o + 76)); e.zr = vaxD(o + 84); }
         }
         if (!(r1 >= 0) || !(r2 >= 0) || !Number.isFinite(cx) || !Number.isFinite(cy)) { notShown(model, name + ' (invalid)'); return; }
         emit(conic(e, cx, cy, Math.abs(r1), Math.abs(r2), rot, m3, start, sweep));
         return;
       }
       case 17: { // text
-        const e = base(o, type);
+        const e = base(o, type, size);
         e.type = 'text';
         const lm = i32(o + 38) * scale * 6 / 1000, hm = i32(o + 42) * scale * 6 / 1000;
         let n, to;
@@ -317,6 +331,7 @@ export function parseDgn(input, { onProgress } = {}) {
           const m = quatMatrix(o + 46);
           e.rot = Math.atan2(m[3], m[0]);
           e.p = [X(i32(o + 62)), Y(i32(o + 66))];
+          e.zr = i32(o + 70);
           n = b[o + 74]; to = o + 76;
         }
         e.h = Math.abs(hm) || 1;
@@ -324,6 +339,7 @@ export function parseDgn(input, { onProgress } = {}) {
         e.text = decodeText(to, Math.min(n, size - (to - o)));
         e.halign = 0; e.valign = 0; e.oblique = 0;
         e.font = b[o + 36];
+        e.just = b[o + 37];
         if (!e.text.trim()) return;
         emit(e);
         return;

@@ -2,6 +2,10 @@
 // colours and line types, converts curves to exact conic primitives, lays out text, moves
 // everything to a local origin (precision far from 0,0) and builds a uniform-grid spatial index.
 // Output is plain objects + typed arrays so it can be transferred from the parse worker.
+//
+// Every primitive and text remembers the top-level model entity it came from (`ent`), and the
+// items of entity i are contiguous at build time (entPrim / entText offsets), so an edit can
+// replace one entity's items without rebuilding anything else (see edit/live-scene.js).
 
 import { FG } from './model.js';
 import { ACI } from './palettes.js';
@@ -9,9 +13,11 @@ import { bulgeToArc, insertMatrix, mul, apply, applyVec, TAU } from './geom.js';
 
 export const KIND = { POLY: 1, CONIC: 2, POINT: 3 };
 export const FLAG = { CLOSED: 1, FILL: 2, CURVEPTS: 4, EVENODD: 8, FULL: 16, PATTERN: 32 };
+/** Spatial-index ids: primitives are 0..n-1, texts are TEXT_ID + text index. */
+export const TEXT_ID = 0x80000000;
 
 const MAX_DEPTH = 24;
-const CHAR_W = 0.62; // average glyph advance in cap-height units (layout estimate)
+export const CHAR_W = 0.62; // average glyph advance in cap-height units (layout estimate)
 
 function aciRgb(aci) {
   if (aci === 7 || aci <= 0 || aci > 255) return FG;
@@ -37,17 +43,18 @@ export function dashFromPattern(pattern) {
   return out.every((v, i) => i % 2 === 1 || v > 0) ? out : null;
 }
 
-class Builder {
+export class Builder {
   constructor() {
     this.kind = []; this.flags = []; this.layer = []; this.color = []; this.style = []; this.weight = [];
-    this.src = []; this.blk = []; this.start = []; this.count = [];
+    this.src = []; this.blk = []; this.start = []; this.count = []; this.ent = [];
     this.coords = []; this.conics = [];
     this.texts = [];
     this.invalid = 0;
+    this.curEnt = 0;
   }
   base(k, flags, a) {
     this.kind.push(k); this.flags.push(flags); this.layer.push(a.layer); this.color.push(a.color);
-    this.style.push(a.style); this.weight.push(a.weight); this.src.push(a.src); this.blk.push(a.blk);
+    this.style.push(a.style); this.weight.push(a.weight); this.src.push(a.src); this.blk.push(a.blk); this.ent.push(this.curEnt);
   }
   poly(pts, flags, a) {
     for (let i = 0; i < pts.length; i += 2) {
@@ -97,29 +104,42 @@ export function conicBBox(c, o, out) {
 }
 
 /**
- * Build the scene. opts: { onProgress(fraction), fileName }
+ * Lookup tables shared by a full build and by incremental edits: layers, line types and the
+ * name tables used for hover info. From a model (full build) or re-derived from a scene.
  */
-export function buildScene(model, opts = {}) {
-  const B = new Builder();
-  const stats = model.stats;
-  const notShown = { ...stats.notShown };
-  const warnings = [...stats.warnings];
-  const addNS = (k, n = 1) => { notShown[k] = (notShown[k] || 0) + n; };
+export function sceneTables(model, scene = null) {
+  const layers = scene ? scene.layers
+    : model.layers.map((l) => ({ name: l.name, color: l.color, visible: l.visible !== false, frozen: !!l.frozen, ltype: l.ltype || 'CONTINUOUS', count: 0 }));
+  const ltypes = scene ? scene.ltypes : [{ name: 'CONTINUOUS', dash: null }];
+  const srcNames = scene ? scene.srcNames : [''];
+  const blockNames = scene ? scene.blockNames : [''];
+  const t = {
+    layers, ltypes, srcNames, blockNames,
+    layerIdx: new Map(layers.map((l, i) => [l.name.toUpperCase(), i])),
+    ltIdx: new Map(ltypes.map((l, i) => [l.name, i])),
+    srcIdx: new Map(srcNames.map((s, i) => [s, i])),
+    blkIdx: new Map(blockNames.map((s, i) => [s, i])),
+    notShown: scene ? {} : { ...model.stats.notShown },
+  };
+  t.srcIdx.delete('');
+  t.blkIdx.delete('');
+  return t;
+}
 
-  // ---- layers
-  const layers = model.layers.map((l) => ({ name: l.name, color: l.color, visible: l.visible !== false, frozen: !!l.frozen, ltype: l.ltype || 'CONTINUOUS', count: 0 }));
-  const layerIdx = new Map(layers.map((l, i) => [l.name.toUpperCase(), i]));
+/**
+ * Emitter: turns model entities into scene primitives/texts (absolute drawing coordinates) in
+ * `emitter.B`. emit(entity, entityIndex) handles one top-level entity (blocks expanded).
+ */
+export function createEmitter(model, tables) {
+  const B = new Builder();
+  const { layers, ltypes, srcNames, blockNames, layerIdx, ltIdx, srcIdx, blkIdx, notShown } = tables;
+  const addNS = (k, n = 1) => { notShown[k] = (notShown[k] || 0) + n; };
   const getLayer = (name) => {
     const key = String(name).toUpperCase();
     let i = layerIdx.get(key);
     if (i === undefined) { i = layers.length; layers.push({ name: String(name), color: FG, visible: true, frozen: false, ltype: 'CONTINUOUS', count: 0 }); layerIdx.set(key, i); }
     return i;
   };
-  getLayer('0');
-
-  // ---- line types
-  const ltypes = [{ name: 'CONTINUOUS', dash: null }];
-  const ltIdx = new Map([['CONTINUOUS', 0]]);
   const getLtype = (name) => {
     name = String(name || 'CONTINUOUS').toUpperCase();
     if (ltIdx.has(name)) return ltIdx.get(name);
@@ -130,16 +150,9 @@ export function buildScene(model, opts = {}) {
     ltIdx.set(name, i);
     return i;
   };
-
-  // ---- name tables for hover info
-  const srcNames = [''], srcIdx = new Map();
   const srcOf = (s) => { s = s || '?'; let i = srcIdx.get(s); if (i === undefined) { i = srcNames.length; srcNames.push(s); srcIdx.set(s, i); } return i; };
-  const blockNames = [''], blkIdx = new Map();
   const blkOf = (s) => { let i = blkIdx.get(s); if (i === undefined) { i = blockNames.length; blockNames.push(s); blkIdx.set(s, i); } return i; };
-
   const blocks = model.blocks;
-  const total = model.entities.length || 1;
-  let done = 0, nextReport = 0;
 
   // ctx: { M (affine|null), layer (idx, for entities on layer 0 inside blocks), color (BYBLOCK colour), ltype (BYBLOCK), blk, depth, stack }
   const topCtx = { M: null, layer: -1, color: FG, ltype: 0, blk: 0, depth: 0, stack: [] };
@@ -261,16 +274,12 @@ export function buildScene(model, opts = {}) {
         const px = x + u * X[0] + v * Y[0], py = y + u * X[1] + v * Y[1];
         if (px < bb[0]) bb[0] = px; if (py < bb[1]) bb[1] = py; if (px > bb[2]) bb[2] = px; if (py > bb[3]) bb[3] = py;
       }
-      B.texts.push({ s: ln.s, x, y, m: [X[0], X[1], Y[0], Y[1]], align, fit, layer: a.layer, color: a.color, blk: a.blk, bbox: bb });
+      B.texts.push({ s: ln.s, x, y, m: [X[0], X[1], Y[0], Y[1]], align, fit, layer: a.layer, color: a.color, blk: a.blk, bbox: bb, ent: B.curEnt });
     }
   }
 
   function walk(ents, ctx) {
     for (const e of ents) {
-      if (!ctx.depth && opts.onProgress) {
-        done++;
-        if (done >= nextReport) { nextReport = done + total / 40; opts.onProgress(done / total); }
-      }
       if (!e || e.invisible) continue;
       try {
         walkOne(e, ctx);
@@ -282,7 +291,8 @@ export function buildScene(model, opts = {}) {
 
   function walkOne(e, ctx) {
     const a = attrsFor(e, ctx);
-    const M = compose(ctx.M, e.xf);
+    // e.mv: a move/rotate applied by an edit to a dimension (its geometry lives in a block)
+    const M = compose(e.mv && e.type === 'dimension' ? compose(ctx.M, e.mv) : ctx.M, e.xf);
     switch (e.type) {
       case 'line':
         B.poly(xform(M, [e.a[0], e.a[1], e.b[0], e.b[1]]), 0, a);
@@ -349,6 +359,9 @@ export function buildScene(model, opts = {}) {
       case 'mtext':
         emitText(e, M, a);
         break;
+      case 'cell': // DGN cell: components are stored already placed; the cell is one selectable item
+        walk(e.children || [], { ...ctx, blk: ctx.blk || blkOf(e.name || 'cell') });
+        break;
       case 'insert':
       case 'dimension': {
         const key = String(e.block || '').toUpperCase();
@@ -392,8 +405,43 @@ export function buildScene(model, opts = {}) {
     }
   }
 
-  walk(model.entities, topCtx);
-  if (B.invalid) addNS('Items with invalid coordinates', B.invalid);
+  return {
+    B,
+    tables,
+    /** Emit one top-level entity (index i) into B. */
+    emit(e, i) {
+      B.curEnt = i;
+      if (!e || e.invisible) return;
+      try {
+        walkOne(e, topCtx);
+      } catch (err) {
+        addNS((e.src || e.type) + ' (error)');
+      }
+    },
+  };
+}
+
+/**
+ * Build the scene. opts: { onProgress(fraction), fileName }
+ */
+export function buildScene(model, opts = {}) {
+  const stats = model.stats;
+  const tables = sceneTables(model);
+  const { layers, ltypes, srcNames, blockNames, notShown } = tables;
+  // layer "0" always exists
+  if (!tables.layerIdx.has('0')) { tables.layerIdx.set('0', layers.length); layers.push({ name: '0', color: FG, visible: true, frozen: false, ltype: 'CONTINUOUS', count: 0 }); }
+  const em = createEmitter(model, tables);
+  const B = em.B;
+  const warnings = [...stats.warnings];
+
+  const ents = model.entities;
+  const total = ents.length || 1;
+  let nextReport = 0;
+  for (let i = 0; i < ents.length; i++) {
+    if (opts.onProgress && i + 1 >= nextReport) { nextReport = i + 1 + total / 40; opts.onProgress((i + 1) / total); }
+    em.emit(ents[i], i);
+  }
+  if (B.invalid) notShown['Items with invalid coordinates'] = (notShown['Items with invalid coordinates'] || 0) + B.invalid;
   if (model.format === 'DGN') {
     // DGN levels have no colour of their own: show the most common element colour as the swatch
     const tally = layers.map(() => new Map());
@@ -417,10 +465,11 @@ export function buildScene(model, opts = {}) {
     entityCount: stats.entities,
     header: model.header,
     fileName: opts.fileName || '',
-  });
+  }, ents.length);
 }
 
-function layoutMtext(e) {
+/** MTEXT lines: [{ s, dy }] with dy in text heights from the insertion point. */
+export function layoutMtext(e) {
   const out = [];
   const paras = String(e.text).split('\n');
   const maxChars = e.width > 0 ? Math.max(1, Math.floor(e.width / (e.h * (e.wf || 1) * CHAR_W))) : Infinity;
@@ -443,18 +492,17 @@ function layoutMtext(e) {
   return out;
 }
 
-/** Local origin, typed arrays, per-primitive bboxes and the grid index. */
-function finalize(B, meta) {
+/** Builder arrays -> typed arrays + per-primitive bboxes (absolute coordinates). */
+export function typedPrims(B) {
   const n = B.kind.length;
   const coords = new Float64Array(B.coords);
   const conics = new Float64Array(B.conics);
   const kind = Uint8Array.from(B.kind), flags = Uint8Array.from(B.flags);
   const layer = Uint16Array.from(B.layer), color = Uint32Array.from(B.color);
   const style = Uint8Array.from(B.style.map((s) => Math.min(255, s))), weight = Uint8Array.from(B.weight);
-  const src = Uint16Array.from(B.src), blk = Uint16Array.from(B.blk);
+  const src = Uint16Array.from(B.src), blk = Uint16Array.from(B.blk), ent = Uint32Array.from(B.ent);
   const start = Uint32Array.from(B.start), count = Uint32Array.from(B.count);
   const bbox = new Float64Array(n * 4);
-  const ext = [Infinity, Infinity, -Infinity, -Infinity];
   const tmp = [0, 0, 0, 0];
   for (let i = 0; i < n; i++) {
     tmp[0] = tmp[1] = Infinity; tmp[2] = tmp[3] = -Infinity;
@@ -468,8 +516,19 @@ function finalize(B, meta) {
       }
     }
     bbox.set(tmp, i * 4);
-    if (tmp[0] < ext[0]) ext[0] = tmp[0]; if (tmp[1] < ext[1]) ext[1] = tmp[1];
-    if (tmp[2] > ext[2]) ext[2] = tmp[2]; if (tmp[3] > ext[3]) ext[3] = tmp[3];
+  }
+  return { n, kind, flags, layer, color, style, weight, src, blk, ent, start, count, coords, conics, bbox };
+}
+
+/** Local origin, typed arrays, per-primitive bboxes and the grid index. */
+function finalize(B, meta, entityTotal) {
+  const P = typedPrims(B);
+  const { n, layer, ent, coords, conics, bbox } = P;
+  const ext = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < n; i++) {
+    const o = 4 * i;
+    if (bbox[o] < ext[0]) ext[0] = bbox[o]; if (bbox[o + 1] < ext[1]) ext[1] = bbox[o + 1];
+    if (bbox[o + 2] > ext[2]) ext[2] = bbox[o + 2]; if (bbox[o + 3] > ext[3]) ext[3] = bbox[o + 3];
   }
   const texts = B.texts;
   for (const t of texts) {
@@ -491,6 +550,13 @@ function finalize(B, meta) {
   for (let i = 0; i < n; i++) meta.layers[layer[i]].count++;
   for (const t of texts) meta.layers[t.layer].count++;
 
+  // entity -> item ranges (items of one top-level entity are contiguous)
+  const E = entityTotal;
+  const entPrim = new Uint32Array(E + 1), entText = new Uint32Array(E + 1);
+  for (let i = 0; i < n; i++) entPrim[ent[i] + 1]++;
+  for (const t of texts) entText[t.ent + 1]++;
+  for (let i = 1; i <= E; i++) { entPrim[i] += entPrim[i - 1]; entText[i] += entText[i - 1]; }
+
   const fitBox = robustFit(bbox, n, texts, extents);
   const grid = buildGrid(bbox, n, texts, extents);
   return {
@@ -499,9 +565,12 @@ function finalize(B, meta) {
     origin: [ox, oy],
     extents,
     fitBox,
-    n, kind, flags, layer, color, style, weight, src, blk, start, count, coords, conics, bbox,
+    ...P,
     texts,
     grid,
+    E,
+    entPrim,
+    entText,
     primCount: n,
     textCount: texts.length,
   };
@@ -528,31 +597,31 @@ function robustFit(bbox, n, texts, extents) {
   return extents.slice();
 }
 
+/** Grid cell for a bbox (BIG bucket = nx*ny for very large items). */
+export function gridCell(g, x0, y0, x1, y1) {
+  if (x1 - x0 > 3 * g.cw || y1 - y0 > 3 * g.ch) return g.nx * g.ny;
+  const ix = Math.min(g.nx - 1, Math.max(0, Math.floor(((x0 + x1) / 2 - g.x0) / g.cw)));
+  const iy = Math.min(g.ny - 1, Math.max(0, Math.floor(((y0 + y1) / 2 - g.y0) / g.ch)));
+  return iy * g.nx + ix;
+}
+
 function buildGrid(bbox, n, texts, ext) {
   const m = n + texts.length;
   const w = Math.max(ext[2] - ext[0], 1e-9), h = Math.max(ext[3] - ext[1], 1e-9);
   const target = Math.max(1, Math.min(16384, Math.ceil(m / 48)));
   let nx = Math.max(1, Math.round(Math.sqrt((target * w) / h)));
   nx = Math.min(256, nx);
-  let ny = Math.max(1, Math.min(256, Math.ceil(target / nx)));
-  const cw = w / nx, ch = h / ny;
+  const ny = Math.max(1, Math.min(256, Math.ceil(target / nx)));
+  const g = { nx, ny, x0: ext[0], y0: ext[1], cw: w / nx, ch: h / ny };
   const cells = nx * ny;
-  const BIG = cells; // extra bucket for very large items
   const cellOf = new Int32Array(m);
   const counts = new Uint32Array(cells + 2);
-  const place = (x0, y0, x1, y1) => {
-    if (x1 - x0 > 3 * cw || y1 - y0 > 3 * ch) return BIG;
-    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    const ix = Math.min(nx - 1, Math.max(0, Math.floor((cx - ext[0]) / cw)));
-    const iy = Math.min(ny - 1, Math.max(0, Math.floor((cy - ext[1]) / ch)));
-    return iy * nx + ix;
-  };
-  for (let i = 0; i < n; i++) { const c = place(bbox[4 * i], bbox[4 * i + 1], bbox[4 * i + 2], bbox[4 * i + 3]); cellOf[i] = c; counts[c + 1]++; }
-  for (let j = 0; j < texts.length; j++) { const b = texts[j].bbox; const c = place(b[0], b[1], b[2], b[3]); cellOf[n + j] = c; counts[c + 1]++; }
+  for (let i = 0; i < n; i++) { const c = gridCell(g, bbox[4 * i], bbox[4 * i + 1], bbox[4 * i + 2], bbox[4 * i + 3]); cellOf[i] = c; counts[c + 1]++; }
+  for (let j = 0; j < texts.length; j++) { const b = texts[j].bbox; const c = gridCell(g, b[0], b[1], b[2], b[3]); cellOf[n + j] = c; counts[c + 1]++; }
   for (let c = 1; c <= cells + 1; c++) counts[c] += counts[c - 1];
   const cellStart = counts.slice(0, cells + 2); // CSR offsets, length cells+2 (BIG bucket included)
   const fill = cellStart.slice();
-  const items = new Uint32Array(m); // item id: < n primitive, >= n text (id - n)
+  const items = new Uint32Array(m); // item id: primitive index, or TEXT_ID + text index
   const loose = new Float64Array((cells + 1) * 4);
   for (let c = 0; c <= cells; c++) { loose[4 * c] = loose[4 * c + 1] = Infinity; loose[4 * c + 2] = loose[4 * c + 3] = -Infinity; }
   const grow = (c, x0, y0, x1, y1) => {
@@ -562,30 +631,51 @@ function buildGrid(bbox, n, texts, ext) {
   };
   for (let i = 0; i < m; i++) {
     const c = cellOf[i];
-    items[fill[c]++] = i;
-    if (i < n) grow(c, bbox[4 * i], bbox[4 * i + 1], bbox[4 * i + 2], bbox[4 * i + 3]);
-    else { const b = texts[i - n].bbox; grow(c, b[0], b[1], b[2], b[3]); }
+    if (i < n) { items[fill[c]++] = i; grow(c, bbox[4 * i], bbox[4 * i + 1], bbox[4 * i + 2], bbox[4 * i + 3]); }
+    else { items[fill[c]++] = TEXT_ID + (i - n); const b = texts[i - n].bbox; grow(c, b[0], b[1], b[2], b[3]); }
   }
-  return { nx, ny, x0: ext[0], y0: ext[1], cw, ch, cellStart, items, loose };
+  return { ...g, cellStart, items, loose };
 }
 
-/** Visit grid items whose bbox intersects [x0,y0,x1,y1] (scene-local). cb(id) where id >= scene.n is a text. */
+/** Item bbox (scene-local) of a grid id. */
+export function itemBBox(scene, id) {
+  if (id >= TEXT_ID) return scene.texts[id - TEXT_ID].bbox;
+  const o = 4 * id, b = scene.bbox;
+  return [b[o], b[o + 1], b[o + 2], b[o + 3]];
+}
+
+/**
+ * Visit grid items whose bbox intersects [x0,y0,x1,y1] (scene-local). cb(id): id < TEXT_ID is a
+ * primitive, otherwise text (id - TEXT_ID). Items removed by edits are skipped; items added by
+ * edits live in grid.dyn (cell -> ids). Returning false from cb stops the walk.
+ */
 export function queryRect(scene, x0, y0, x1, y1, cb) {
   const g = scene.grid;
   const { nx, ny, cw, ch } = g;
-  const ix0 = Math.max(0, Math.floor((x0 - g.x0) / cw - 2)), ix1 = Math.min(nx - 1, Math.floor((x1 - g.x0) / cw + 2));
-  const iy0 = Math.max(0, Math.floor((y0 - g.y0) / ch - 2)), iy1 = Math.min(ny - 1, Math.floor((y1 - g.y0) / ch + 2));
+  const dead = scene.dead, dyn = g.dyn;
+  // clamp both ends: items outside the original extents (moved there by edits) live in the edge cells
+  const cl = (v, n) => Math.max(0, Math.min(n - 1, v));
+  const ix0 = cl(Math.floor((x0 - g.x0) / cw - 2), nx), ix1 = cl(Math.floor((x1 - g.x0) / cw + 2), nx);
+  const iy0 = cl(Math.floor((y0 - g.y0) / ch - 2), ny), iy1 = cl(Math.floor((y1 - g.y0) / ch + 2), ny);
+  const test = (id) => {
+    let b0, b1, b2, b3;
+    if (id < TEXT_ID) {
+      if (dead && dead[id]) return;
+      const o = 4 * id; b0 = scene.bbox[o]; b1 = scene.bbox[o + 1]; b2 = scene.bbox[o + 2]; b3 = scene.bbox[o + 3];
+    } else {
+      const t = scene.texts[id - TEXT_ID];
+      if (t.dead) return;
+      const b = t.bbox; b0 = b[0]; b1 = b[1]; b2 = b[2]; b3 = b[3];
+    }
+    if (b0 > x1 || b2 < x0 || b1 > y1 || b3 < y0) return;
+    return cb(id);
+  };
   const visit = (c) => {
     const L = g.loose;
     if (L[4 * c] > x1 || L[4 * c + 2] < x0 || L[4 * c + 1] > y1 || L[4 * c + 3] < y0) return;
-    for (let k = g.cellStart[c]; k < g.cellStart[c + 1]; k++) {
-      const id = g.items[k];
-      let b0, b1, b2, b3;
-      if (id < scene.n) { const o = 4 * id; b0 = scene.bbox[o]; b1 = scene.bbox[o + 1]; b2 = scene.bbox[o + 2]; b3 = scene.bbox[o + 3]; }
-      else { const b = scene.texts[id - scene.n].bbox; b0 = b[0]; b1 = b[1]; b2 = b[2]; b3 = b[3]; }
-      if (b0 > x1 || b2 < x0 || b1 > y1 || b3 < y0) continue;
-      if (cb(id) === false) return false;
-    }
+    for (let k = g.cellStart[c]; k < g.cellStart[c + 1]; k++) if (test(g.items[k]) === false) return false;
+    const extra = dyn && dyn.get(c);
+    if (extra) for (const id of extra) if (test(id) === false) return false;
   };
   for (let iy = iy0; iy <= iy1; iy++) for (let ix = ix0; ix <= ix1; ix++) if (visit(iy * nx + ix) === false) return;
   visit(nx * ny);
@@ -597,28 +687,28 @@ export function queryRect(scene, x0, y0, x1, y1, cb) {
  */
 export function packTexts(scene) {
   const T = scene.texts, n = T.length;
-  const f = new Float64Array(n * 11), u = new Uint32Array(n * 4);
+  const f = new Float64Array(n * 11), u = new Uint32Array(n * 5);
   const strs = new Array(n);
   for (let i = 0; i < n; i++) {
     const t = T[i];
     f.set([t.x, t.y, t.m[0], t.m[1], t.m[2], t.m[3], t.fit || 0, t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]], i * 11);
-    u[i * 4] = t.layer; u[i * 4 + 1] = t.color; u[i * 4 + 2] = t.blk; u[i * 4 + 3] = t.align;
+    u[i * 5] = t.layer; u[i * 5 + 1] = t.color; u[i * 5 + 2] = t.blk; u[i * 5 + 3] = t.align; u[i * 5 + 4] = t.ent;
     strs[i] = t.s;
   }
-  scene.textPack = { n, f, u, s: strs.join(' ') };
+  scene.textPack = { n, f, u, s: strs.join('\u0000') };
   delete scene.texts;
   return scene;
 }
 export function unpackTexts(scene) {
   if (!scene.textPack) return scene;
   const { n, f, u } = scene.textPack;
-  const strs = n ? scene.textPack.s.split(' ') : [];
+  const strs = n ? scene.textPack.s.split('\u0000') : [];
   const texts = new Array(n);
   for (let i = 0; i < n; i++) {
-    const o = i * 11, q = i * 4;
+    const o = i * 11, q = i * 5;
     texts[i] = {
       s: strs[i], x: f[o], y: f[o + 1], m: [f[o + 2], f[o + 3], f[o + 4], f[o + 5]], fit: f[o + 6],
-      bbox: [f[o + 7], f[o + 8], f[o + 9], f[o + 10]], layer: u[q], color: u[q + 1], blk: u[q + 2], align: u[q + 3],
+      bbox: [f[o + 7], f[o + 8], f[o + 9], f[o + 10]], layer: u[q], color: u[q + 1], blk: u[q + 2], align: u[q + 3], ent: u[q + 4],
     };
   }
   scene.texts = texts;
@@ -629,8 +719,8 @@ export function unpackTexts(scene) {
 /** Typed-array buffers to transfer from a worker. */
 export function sceneTransferables(scene) {
   const g = scene.grid;
-  const list = [scene.kind, scene.flags, scene.layer, scene.color, scene.style, scene.weight, scene.src, scene.blk, scene.start,
-    scene.count, scene.coords, scene.conics, scene.bbox, g.cellStart, g.items, g.loose];
+  const list = [scene.kind, scene.flags, scene.layer, scene.color, scene.style, scene.weight, scene.src, scene.blk, scene.ent, scene.start,
+    scene.count, scene.coords, scene.conics, scene.bbox, scene.entPrim, scene.entText, g.cellStart, g.items, g.loose];
   if (scene.textPack) list.push(scene.textPack.f, scene.textPack.u);
   return list.map((a) => a.buffer);
 }

@@ -14,6 +14,7 @@
   --card: rgba(29, 33, 40, 0.94);
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
   --focus: #8cc2ff;
+  --warn-text: #ffc861;
   --radius: 8px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color-scheme: dark;
@@ -33,6 +34,7 @@
   --card: rgba(255, 255, 255, 0.96);
   --shadow: 0 6px 24px rgba(20, 30, 50, 0.18);
   --focus: #0a5ad4;
+  --warn-text: #9a5b00;
   color-scheme: light;
 }
 
@@ -170,6 +172,33 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 .te-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
 .te-hint { font-size: 11px; color: var(--muted); }
 
+/* ------------------------------------------------------------------ edit mode */
+.dirty { font-size: 12px; font-weight: 600; color: var(--warn-text); white-space: nowrap; }
+.ecolor { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-3); cursor: pointer; color: var(--text); min-width: 96px; }
+.ecolor:hover { border-color: var(--accent); }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); flex: none; background: var(--c, transparent); }
+.sw.fg { background: linear-gradient(135deg, #fff 50%, #000 50%); }
+.sw.bylayer { background: repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 5px); }
+.color-pop { position: absolute; z-index: 12; grid-template-columns: repeat(4, auto); gap: 2px; min-width: 0; padding: 6px; }
+.color-pop button { padding: 6px 8px; font-size: 13px; white-space: nowrap; }
+.color-pop button[aria-checked="true"] { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.ctx { position: absolute; z-index: 12; min-width: 170px; }
+.ctx button { min-height: 40px; }
+.edit-text { position: absolute; left: 0; top: 0; z-index: 8; transform-origin: 0 0; pointer-events: auto; }
+.edit-text textarea {
+  display: block; margin: 0; padding: 0 3px 2px; border: 1.5px solid var(--accent); border-radius: 3px; resize: none; overflow: hidden;
+  background: var(--canvas); color: var(--text); font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.2;
+  white-space: pre; box-shadow: 0 0 0 3px var(--accent-soft); min-width: 3em;
+}
+.et-hint, .len-box { position: absolute; z-index: 9; padding: 3px 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); font-size: 12px; color: var(--muted); white-space: nowrap; pointer-events: none; }
+.len-box { display: flex; align-items: center; gap: 6px; pointer-events: auto; color: var(--text); }
+.len-box input { width: 7em; min-height: 26px; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg-2); font-variant-numeric: tabular-nums; }
+.warn-note { margin: 0; padding: 8px 10px; border-radius: 8px; border-left: 4px solid #f0a500; background: var(--bg-3); font-size: 13px; }
+.save-notes { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.save-notes:empty { display: none; }
+#layer-swatches { flex-wrap: wrap; }
+.tool-hint .act { pointer-events: auto; margin-left: 8px; }
+
 /* ------------------------------------------------------------------ layers panel */
 .panel { width: 300px; flex: none; display: flex; flex-direction: column; background: var(--bg-2); border-left: 1px solid var(--line); min-height: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; }
@@ -245,6 +274,8 @@ dialog::backdrop { background: rgba(5, 10, 20, .5); }
   .tools { padding: 2px 4px; }
   .tool { min-width: 54px; height: 50px; }
   .field.author input { width: 100px; }
+  .ecolor { min-width: 0; }
+  .dirty { font-size: 14px; }
   .panel { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; width: min(320px, 88vw); box-shadow: var(--shadow); }
   .measure-card { left: 8px; bottom: 8px; min-width: 0; }
   .mc-value { font-size: 20px; }

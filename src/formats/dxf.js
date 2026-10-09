@@ -221,7 +221,8 @@ export function parseDxf(input, { onProgress } = {}) {
 }
 
 function skipSection(R) {
-  while (R.next()) if (R.code === 0 && R.value.trim() === 'ENDSEC') { R.next(); return; }
+  // R sits on the first group after the section name (which may already be ENDSEC: empty section)
+  for (; R.code !== -1; R.next()) if (R.code === 0 && R.value.trim() === 'ENDSEC') { R.next(); return; }
 }
 
 // ------------------------------------------------------------------ HEADER
@@ -339,7 +340,7 @@ function readBlocks(ctx) {
         const g = new Groups('BLOCK', codes, vals);
         const name = (g.s(2, '') || g.s(3, '')).trim();
         const flags = g.i(70, 0);
-        const block = { name, base: [g.f(10), g.f(20)], entities: [], xref: !!(flags & 4) };
+        const block = { name, base: [g.f(10), g.f(20)], entities: [], xref: !!(flags & 4), flags };
         const sink = [];
         readEntitySection(ctx, sink, false, ['ENDBLK']);
         block.entities = sink;
@@ -411,6 +412,12 @@ function ocsOf(g) {
   if (!g.has(210) && !g.has(230)) return null;
   return ocsMatrix(g.f(210, 0), g.f(220, 0), g.f(230, 1));
 }
+/** Set e.xf (OCS -> plan) and keep the extrusion vector (e.ext) so a saved file keeps it. */
+function setOcs(e, g) {
+  e.xf = ocsOf(g);
+  if (e.xf) e.ext = [g.f(210, 0), g.f(220, 0), g.f(230, 1)];
+  return e;
+}
 
 function textStyle(ctx, g) {
   return ctx.styles[(g.s(7, 'STANDARD').trim() || 'STANDARD').toUpperCase()] || null;
@@ -438,7 +445,7 @@ function convertEntity(ctx, g, topLevel) {
       e.type = 'circle';
       e.c = [g.f(10), g.f(20)];
       e.r = Math.abs(g.f(40));
-      e.xf = ocsOf(g);
+      setOcs(e, g);
       return e;
     }
     case 'ARC': {
@@ -448,7 +455,7 @@ function convertEntity(ctx, g, topLevel) {
       e.r = Math.abs(g.f(40));
       e.a0 = g.f(50) * D2R;
       e.a1 = g.f(51) * D2R;
-      e.xf = ocsOf(g);
+      setOcs(e, g);
       return e;
     }
     case 'ELLIPSE': {
@@ -482,7 +489,7 @@ function convertEntity(ctx, g, topLevel) {
       e.pts = pts;
       e.bulges = anyBulge ? bul : null;
       e.closed = !!(g.i(70, 0) & 1);
-      e.xf = ocsOf(g);
+      setOcs(e, g);
       if (pts.length < 4) { if (pts.length === 2) return { ...e, type: 'point', p: pts.slice(0, 2) }; return null; }
       return e;
     }
@@ -492,7 +499,7 @@ function convertEntity(ctx, g, topLevel) {
     case 'TEXT':
       return textEntity(ctx, g, 73);
     case 'ATTDEF': {
-      if (topLevel) { const t = textEntity(ctx, g, 74); if (t) t.text = decodeTextCodes(g.s(2, '')); return t; }
+      if (topLevel) { const t = textEntity(ctx, g, 74); if (t) { t.raw = g.s(2, ''); t.text = decodeTextCodes(t.raw); } return t; }
       if (g.i(70, 0) & 2) return textEntity(ctx, g, 74); // constant attribute: drawn from the definition
       return null;
     }
@@ -508,7 +515,7 @@ function convertEntity(ctx, g, topLevel) {
       e.type = 'solid';
       const p = [g.f(10), g.f(20), g.f(11), g.f(21), g.f(13, g.f(12)), g.f(23, g.f(22)), g.f(12), g.f(22)];
       e.pts = p;
-      e.xf = ocsOf(g);
+      setOcs(e, g);
       return e;
     }
     case '3DFACE': {
@@ -551,7 +558,10 @@ function textEntity(ctx, g, valignCode) {
   const st = textStyle(ctx, g);
   e.type = 'text';
   e.h = Math.abs(g.f(40, 0)) || (st && st.h) || 1;
-  e.text = decodeTextCodes(g.s(1, ''));
+  e.raw = g.s(1, '');
+  e.text = decodeTextCodes(e.raw);
+  const sty = g.s(7, '').trim();
+  if (sty) e.style = sty;
   e.rot = g.f(50, 0) * D2R;
   e.wf = g.f(41, (st && st.wf) || 1) || 1;
   e.oblique = g.has(51) ? g.f(51) * D2R : (st ? st.oblique : 0);
@@ -565,7 +575,7 @@ function textEntity(ctx, g, valignCode) {
   if ((e.halign === 3 || e.halign === 5) && p2) { e.p = p1; e.p2 = p2; }
   else if ((e.halign || e.valign) && p2) e.p = p2;
   else e.p = p1;
-  e.xf = ocsOf(g);
+  setOcs(e, g);
   if (!e.text) return null;
   return e;
 }
@@ -584,7 +594,10 @@ function mtextEntity(ctx, g) {
   else e.rot = g.f(50, 0); // radians for MTEXT
   const parts = g.all(3);
   parts.push(g.s(1, ''));
-  e.text = mtextToPlain(parts.join(''));
+  e.raw = parts.join('');
+  e.text = mtextToPlain(e.raw);
+  const sty = g.s(7, '').trim();
+  if (sty) e.style = sty;
   if (!e.text.trim()) return null;
   return e;
 }
@@ -705,6 +718,7 @@ function readHatchLoops(g) {
     // source boundary objects
     if (codes[k] === 97) { const ns = int(k); k++; for (let i = 0; i < ns && codes[k] === 330; i++) k++; }
   }
+  loops.tail = k; // pattern definition + seed points follow; kept verbatim for saving
   return loops;
 }
 
@@ -715,10 +729,16 @@ function hatchEntity(model, g) {
   e.pattern = g.s(2, '').trim();
   try {
     e.loops = readHatchLoops(g);
+    const k = e.loops.tail;
+    if (k >= 0) {
+      e.tail = [];
+      for (let j = k; j < g.end; j++) { if (g.codes[j] >= 1000) break; e.tail.push([g.codes[j], g.vals[j]]); }
+    }
+    delete e.loops.tail;
   } catch {
     e.loops = [];
   }
-  e.xf = ocsOf(g);
+  setOcs(e, g);
   if (!e.loops.length) { notShown(model, 'HATCH (unreadable boundary)'); return null; }
   return e;
 }
@@ -728,7 +748,9 @@ function dimensionEntity(ctx, g) {
   e.type = 'dimension';
   e.block = g.s(2, '').trim();
   e.p = [0, 0];
-  e.xf = ocsOf(g);
+  const P = (c) => [g.f(c), g.f(c + 10)];
+  e.dim = { flags: g.i(70, 0), p10: P(10), p11: P(11), p13: P(13), p14: P(14), p15: P(15), p16: P(16), angle: g.f(50, 0), text: g.s(1, ''), measure: g.f(42, NaN), style: g.s(3, '').trim() };
+  setOcs(e, g);
   // fallback geometry if the block is missing (e.g. minimal generators)
   const fb = [];
   const dimType = g.i(70, 0) & 7;
@@ -792,6 +814,7 @@ function polylineBuilder(ctx, g) {
   const flags = g.i(70, 0);
   const verts = [];
   const xf = (flags & (8 | 16 | 64)) ? null : ocsOf(g);
+  const ext = xf ? [g.f(210, 0), g.f(220, 0), g.f(230, 1)] : undefined;
   return {
     kind: 'POLYLINE',
     vertex(v) {
@@ -836,7 +859,9 @@ function polylineBuilder(ctx, g) {
       let any = false;
       for (const v of vs) { pts.push(v.x, v.y); bul.push(v.b); if (v.b) any = true; }
       if (pts.length === 2) return [{ ...base, type: 'point', p: pts }];
-      return [{ ...base, type: 'polyline', pts, bulges: any && !(flags & 8) ? bul : null, closed: !!(flags & 1), xf }];
+      const e = { ...base, type: 'polyline', pts, bulges: any && !(flags & 8) ? bul : null, closed: !!(flags & 1), xf };
+      if (ext) e.ext = ext;
+      return [e];
     },
   };
 }
@@ -856,14 +881,16 @@ function insertBuilder(ctx, g) {
   e.rows = Math.max(1, Math.min(10000, g.i(71, 1) || 1));
   e.dc = g.f(44, 0);
   e.dr = g.f(45, 0);
-  e.xf = ocsOf(g);
+  setOcs(e, g);
   e.attribs = [];
   return {
     kind: 'INSERT',
     attrib(a) {
-      if (a.i(70, 0) & 1) return; // invisible
       const t = textEntity(ctx, a, 74);
-      if (t) e.attribs.push(t);
+      if (!t) return;
+      t.tag = a.s(2, '').trim();
+      if (a.i(70, 0) & 1) t.invisible = true; // kept for saving, never drawn
+      e.attribs.push(t);
     },
     finish() { return [e]; },
   };

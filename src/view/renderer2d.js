@@ -4,6 +4,7 @@
 //   r.resize(cssW, cssH, dpr);
 //   r.render(viewport, { theme, layerVisible, showText }) -> { ms, batches, texts }
 //   r.drawTo(ctx2d, viewport, opts, dpr)    // render into another context (export / print)
+//   r.applyEdit({ killed, added })          // after edit/live-scene.js changed some primitives
 //
 // Strategy: primitives are bucketed into spatial chunks and, inside each chunk, into batches of
 // identical style (layer, colour, line type, weight, fill). Each batch becomes one Path2D in
@@ -14,7 +15,7 @@
 
 import { KIND, FLAG } from '../scene.js';
 import { cssColor, THEMES } from './colors.js';
-import { buildChunks, BK } from './batches.js';
+import { buildChunks, BK, chunkGrid, chunkOf, batchStyle, newBatch, orderBase } from './batches.js';
 
 export const CAP_HEIGHT = 0.71; // cap height / em for common sans fonts
 const FONT_PX = 64;
@@ -35,6 +36,55 @@ export class Canvas2DRenderer {
     // batches normally arrive pre-built from the parse worker (scene.chunks); build them here otherwise
     this.chunks = scene ? (scene.chunks || buildChunks(scene)) : [];
     this.patterns.clear();
+    this.inc = null; // incremental-edit bookkeeping, built on the first edit
+  }
+
+  /**
+   * Primitives were retired (`killed`) or appended (`added`) by an edit: rebuild only the batches
+   * that contain them. New primitives join the batch of their chunk + style (created if needed).
+   */
+  applyEdit({ killed = [], added = [] }) {
+    const scene = this.scene;
+    if (!scene) return;
+    if (!this.inc) {
+      const batchOf = new Map(), byCi = new Map(), orderOf = new Map();
+      let maxOrder = 0;
+      for (const ch of this.chunks) {
+        byCi.set(ch.ci, ch);
+        ch.byKey = new Map();
+        for (const g of ch.batches) {
+          ch.byKey.set(g.key, g);
+          for (const id of g.ids) batchOf.set(id, g);
+          if (!orderOf.has(g.key)) orderOf.set(g.key, g.order);
+          maxOrder = Math.max(maxOrder, g.order % 1e6);
+        }
+      }
+      this.inc = { batchOf, byCi, orderOf, next: maxOrder + 1, cg: chunkGrid(scene) };
+    }
+    const { batchOf, byCi, orderOf, cg } = this.inc;
+    for (const id of killed) { const g = batchOf.get(id); if (g) { g.path = null; batchOf.delete(id); } }
+    for (const id of added) {
+      const ci = chunkOf(cg, scene, id);
+      let ch = byCi.get(ci);
+      if (!ch) { ch = { ci, bbox: [Infinity, Infinity, -Infinity, -Infinity], batches: [], byKey: new Map() }; byCi.set(ci, ch); this.chunks.push(ch); }
+      const st = batchStyle(scene, id);
+      const key = st.nk + ':' + st.color;
+      let g = ch.byKey.get(key);
+      if (!g) {
+        let ord = orderOf.get(key);
+        if (ord === undefined) { ord = orderBase(st.bk) + this.inc.next++; orderOf.set(key, ord); }
+        g = newBatch(scene, st, ord);
+        g.ids = new Uint32Array(0);
+        ch.byKey.set(key, g);
+        ch.batches.push(g);
+      }
+      (g.more || (g.more = [])).push(id);
+      g.path = null;
+      batchOf.set(id, g);
+      const o = 4 * id, b = ch.bbox, bb = scene.bbox;
+      if (bb[o] < b[0]) b[0] = bb[o]; if (bb[o + 1] < b[1]) b[1] = bb[o + 1];
+      if (bb[o + 2] > b[2]) b[2] = bb[o + 2]; if (bb[o + 3] > b[3]) b[3] = bb[o + 3];
+    }
   }
 
   resize(w, h, dpr) {
@@ -159,7 +209,7 @@ export class Canvas2DRenderer {
     let lastAlign = -1, lastColor = '';
     for (const t of scene.texts) {
       const b = t.bbox;
-      if (b[0] > vr[2] || b[2] < vr[0] || b[1] > vr[3] || b[3] < vr[1]) continue;
+      if (t.dead || b[0] > vr[2] || b[2] < vr[0] || b[1] > vr[3] || b[3] < vr[1]) continue;
       if (vis && !vis[t.layer]) continue;
       const m = t.m;
       const hdev = Math.hypot(m[2], m[3]) * s * dpr; // cap height in device pixels
@@ -247,7 +297,9 @@ export function addPoly(p, scene, i) {
 
 function buildPath(scene, g) {
   const p = new Path2D();
-  for (const i of g.ids) {
+  const dead = scene.dead;
+  const add = (i) => {
+    if (dead && dead[i]) return; // removed by an edit
     const k = scene.kind[i];
     if (k === KIND.CONIC) addConic(p, scene, i);
     else if (k === KIND.POINT) {
@@ -255,7 +307,9 @@ function buildPath(scene, g) {
       p.moveTo(scene.coords[s], scene.coords[s + 1]);
       p.lineTo(scene.coords[s], scene.coords[s + 1]);
     } else addPoly(p, scene, i);
-  }
+  };
+  for (const i of g.ids) add(i);
+  if (g.more) for (const i of g.more) add(i);
   return p;
 }
 

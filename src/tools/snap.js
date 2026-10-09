@@ -1,6 +1,6 @@
 // Object snaps on the render scene (scene-local coordinates). Pure functions, no DOM.
-import { KIND, FLAG, queryRect, conicPoint } from '../scene.js';
-import { segSeg, nearestOnSeg, TAU } from '../geom.js';
+import { KIND, FLAG, TEXT_ID, queryRect, conicPoint } from '../scene.js';
+import { segSeg, nearestOnSeg, pointInPolygon, TAU } from '../geom.js';
 
 export const SNAP_KINDS = ['endpoint', 'midpoint', 'center', 'intersection', 'nearest'];
 const PRIORITY = { endpoint: 0, intersection: 0, midpoint: 1, center: 2, nearest: 3 };
@@ -21,13 +21,14 @@ function conicPolyline(scene, i, segsPerTurn = 128) {
 /**
  * Find the best snap near (x, y) within `tol` (scene units).
  * opts.enabled: { endpoint, midpoint, center, intersection, nearest } (all true by default)
- * opts.isVisible(layerIndex) -> bool
+ * opts.isVisible(layerIndex) -> bool;  opts.skip(primId) -> bool (e.g. items being moved)
  * Returns { x, y, kind, prim } or null.
  */
 export function findSnap(scene, x, y, tol, opts = {}) {
   if (!scene || scene.n === 0) return null;
   const en = { endpoint: true, midpoint: true, center: true, intersection: true, nearest: true, ...(opts.enabled || {}) };
   const vis = opts.isVisible || (() => true);
+  const skip = opts.skip || null;
   const t2 = tol * tol;
   let best = null;
   const consider = (px, py, kind, prim) => {
@@ -44,8 +45,8 @@ export function findSnap(scene, x, y, tol, opts = {}) {
   };
 
   queryRect(scene, x - tol, y - tol, x + tol, y + tol, (id) => {
-    if (id >= scene.n) return; // text: no snaps in v0.1
-    if (!vis(scene.layer[id])) return;
+    if (id >= TEXT_ID) return; // text: no snaps
+    if (!vis(scene.layer[id]) || (skip && skip(id))) return;
     const k = scene.kind[id];
     if (k === KIND.POINT) {
       const s = scene.start[id] * 2;
@@ -118,17 +119,21 @@ export function findSnap(scene, x, y, tol, opts = {}) {
   return { x: best.x, y: best.y, kind: best.kind, prim: best.prim };
 }
 
-/** Nearest primitive or text to a point within tol (for hover info). Returns { id, isText, d }. */
+/**
+ * Nearest primitive or text to a point within tol (hover info, picking). Returns
+ * { id, isText, d, ent } (ent = top-level model entity). Ties go to the item drawn last (topmost).
+ */
 export function pickItem(scene, x, y, tol, isVisible = () => true) {
   let best = null;
+  const better = (d, id) => !best || d < best.d - 1e-12 || (Math.abs(d - best.d) <= 1e-12 && id > best.id);
   queryRect(scene, x - tol, y - tol, x + tol, y + tol, (id) => {
-    if (id >= scene.n) {
-      const t = scene.texts[id - scene.n];
+    if (id >= TEXT_ID) {
+      const t = scene.texts[id - TEXT_ID];
       if (!isVisible(t.layer)) return;
       const b = t.bbox;
       if (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) {
         const d = tol * 0.5;
-        if (!best || d < best.d) best = { id, isText: true, d };
+        if (better(d, id)) best = { id, isText: true, d, ent: t.ent };
       }
       return;
     }
@@ -146,8 +151,18 @@ export function pickItem(scene, x, y, tol, isVisible = () => true) {
       const r = nearestOnSeg(x, y, pts[2 * i], pts[2 * i + 1], pts[2 * j], pts[2 * j + 1]);
       if (r[3] < d2) d2 = r[3];
     }
-    const d = Math.sqrt(d2);
-    if (d <= tol && (!best || d < best.d)) best = { id, isText: false, d };
+    let d = Math.sqrt(d2);
+    // inside a filled area (solid, hatch): pickable, but lines nearby win
+    if (d > tol * 0.75 && (scene.flags[id] & (FLAG.FILL | FLAG.PATTERN)) && insideRings(x, y, pts)) d = tol * 0.75;
+    if (d <= tol && better(d, id)) best = { id, isText: false, d, ent: scene.ent ? scene.ent[id] : undefined };
   });
   return best;
+}
+
+function insideRings(x, y, pts) {
+  let inside = false, ring = [];
+  const flush = () => { if (ring.length >= 6 && pointInPolygon(x, y, ring)) inside = !inside; ring = []; };
+  for (let i = 0; i < pts.length; i += 2) { if (pts[i] !== pts[i]) flush(); else ring.push(pts[i], pts[i + 1]); }
+  flush();
+  return inside;
 }

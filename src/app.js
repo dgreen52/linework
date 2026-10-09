@@ -3,7 +3,7 @@
 import { APP_NAME, APP_VERSION } from './config.js';
 import { Viewport, cssTransformBetween } from './view/viewport.js';
 import { Canvas2DRenderer, primPath } from './view/renderer2d.js';
-import { unpackTexts } from './scene.js';
+import { unpackTexts, TEXT_ID } from './scene.js';
 import { findSnap, pickItem } from './tools/snap.js';
 import { measure, describe, details, fmtNum } from './tools/measure.js';
 import { createMarkup, rectCorners, moveMarkup } from './markup/model.js';
@@ -14,11 +14,13 @@ import { smoothStroke } from './geom.js';
 import { $, $$, toast, download, readFileAsArrayBuffer, storage, fmtBytes } from './app/ui.js';
 import { LayersPanel } from './app/layers-panel.js';
 import { exportPng, buildPrintSheet, clearPrintSheet } from './app/print.js';
+import { initEdit, EDIT_TOOLS, EDIT_HINTS, TOUCH_HINTS } from './app/edit-ui.js';
 
 const TOOL_GROUP = {
   pan: 'view', zoombox: 'view', distance: 'measure', length: 'measure', area: 'measure',
   select: 'markup', pen: 'markup', line: 'markup', arrow: 'markup', rect: 'markup', ellipse: 'markup',
   cloud: 'markup', callout: 'markup', highlight: 'markup',
+  eselect: 'edit', eline: 'edit', epoly: 'edit', erect: 'edit', ecircle: 'edit', etext: 'edit',
 };
 const MEASURE_TOOLS = new Set(['distance', 'length', 'area']);
 const MARKUP_TOOLS = new Set(['pen', 'line', 'arrow', 'rect', 'ellipse', 'cloud', 'callout', 'highlight']);
@@ -36,6 +38,7 @@ const HINTS = {
   cloud: 'Drag a box to cloud it, or click corners and double-click to finish',
   callout: 'Press on the item, drag to where the note goes, release and type',
   highlight: 'Drag over the area to highlight',
+  ...EDIT_HINTS,
 };
 const SNAP_LABEL = { endpoint: 'End', midpoint: 'Middle', center: 'Centre', intersection: 'Crossing', nearest: 'On line' };
 
@@ -78,6 +81,7 @@ const app = {
   editing: null,
 };
 window.__linework = app; // test/automation hook (read-only use)
+let edit = null; // Edit mode controller (src/app/edit-ui.js), created at start-up
 
 const stage = $('#stage');
 const cvDrawing = $('#cv-drawing');
@@ -192,7 +196,7 @@ function drawOverlay() {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     if (app.hover.isText) {
-      const b = app.scene.texts[app.hover.id - app.scene.n].bbox;
+      const b = app.scene.texts[app.hover.id - TEXT_ID].bbox;
       ctx.lineWidth = 1.5 / app.view.scale;
       ctx.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
     } else {
@@ -203,6 +207,7 @@ function drawOverlay() {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawAnnotations(ctx, app.view, { theme: app.theme, live: true });
+  edit.drawOverlay(ctx);
 }
 
 function drawAnnotations(ctx, view, opts = {}) {
@@ -342,10 +347,11 @@ function getWorker() {
     worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (ev) => {
       const m = ev.data;
+      if (m.type === 'model-part' || m.type === 'model') { modelMessage(m); return; }
       const job = jobs.get(m.id);
       if (!job) return;
       if (m.type === 'progress') job.progress(m.phase, m.fraction);
-      else { jobs.delete(m.id); if (m.type === 'done') job.resolve(unpackTexts(m.scene)); else job.reject(Object.assign(new Error(m.message), { code: m.code })); }
+      else { jobs.delete(m.id); if (m.type === 'done') job.resolve(Object.assign(unpackTexts(m.scene), { jobId: m.id })); else job.reject(Object.assign(new Error(m.message), { code: m.code })); }
     };
     worker.onerror = (e) => {
       e.preventDefault?.();
@@ -357,6 +363,17 @@ function getWorker() {
     worker = false;
   }
   return worker || null;
+}
+
+// the drawing model (for editing/saving) follows the scene in pieces; see worker.js
+const modelParts = new Map();
+function modelMessage(m) {
+  if (m.type === 'model-part') { if (!modelParts.has(m.id)) modelParts.set(m.id, []); modelParts.get(m.id).push(m.entities); return; }
+  const parts = modelParts.get(m.id) || [];
+  modelParts.delete(m.id);
+  const entities = parts.length === 1 ? parts[0] : [].concat(...parts);
+  const model = { ...m.meta, entities, paperEntities: m.paperEntities || [] };
+  if (app.scene && app.scene.jobId === m.id) edit.setModel(model, m.bytes ? new Uint8Array(m.bytes) : null);
 }
 
 async function parseOffThread(name, buffer, sample, progress) {
@@ -376,7 +393,11 @@ async function parseOffThread(name, buffer, sample, progress) {
   const { loadInWorkerScope } = await import('./worker.js');
   progress('Reading', 0.1);
   await new Promise((r) => setTimeout(r, 30));
-  return loadInWorkerScope({ id: 0, name, buffer, sample }, () => {});
+  const r = await loadInWorkerScope({ id: 0, name, buffer, sample }, () => {});
+  const id = 'local-' + ++jobSeq;
+  r.scene.jobId = id;
+  setTimeout(() => { if (app.scene && app.scene.jobId === id) edit.setModel(r.model, r.bytes); }, 0);
+  return r.scene;
 }
 
 function showProgress(label, f) {
@@ -385,6 +406,11 @@ function showProgress(label, f) {
   $('#progress-fill').style.width = `${Math.round(Math.max(0, Math.min(1, f)) * 100)}%`;
 }
 const hideProgress = () => { $('#progress').hidden = true; };
+
+/** Opening another drawing drops unsaved edits: ask first. */
+function okToReplace() {
+  return !(edit && edit.dirty) || window.confirm('The drawing has unsaved edits. Open another drawing anyway?');
+}
 
 async function openDrawing(name, buffer, size, sample) {
   if (app.loading) return;
@@ -407,12 +433,14 @@ app.openDrawing = openDrawing;
 async function openFile(file) {
   if (!file) return;
   if (/\.json$/i.test(file.name)) { await loadMarkupFile(file); return; }
+  if (!okToReplace()) return;
   if (file.size > 400 * 1024 * 1024) { toast('This file is too large to open in the browser (over 400 MB).', { kind: 'error' }); return; }
   const buf = await readFileAsArrayBuffer(file);
   await openDrawing(file.name, buf, file.size);
 }
 
 async function openSample(key) {
+  if (!okToReplace()) return;
   if (key === 'stress') return openDrawing('stress-test-53k.dxf', null, null, 'stress');
   try {
     const res = await fetch(key);
@@ -442,6 +470,8 @@ function setDocument(scene, name, size, ms) {
   app.measures = []; app.mdraft = null; app.draft = null;
   app.history.clear();
   app.markups = [];
+  edit.reset();
+  if (EDIT_TOOLS.has(app.tool)) setTool(app.tool);
   $('#empty').hidden = true;
   $('#docinfo').hidden = false;
   $('#doc-name').textContent = name;
@@ -539,6 +569,7 @@ function addMarkup(m) { commit(() => { app.markups = [...app.markups, m]; }); }
 function undo() {
   const prev = app.history.undo(app.markups);
   if (!prev) return;
+  if (prev.kind === 'edit') { edit.revert(prev); updateUndoButtons(); return; }
   app.markups = prev;
   if (!prev.some((m) => m.id === app.selected)) app.selected = null;
   autosave(); updateUndoButtons(); invalidate();
@@ -546,13 +577,14 @@ function undo() {
 function redo() {
   const next = app.history.redo(app.markups);
   if (!next) return;
+  if (next.kind === 'edit') { edit.reapply(next); updateUndoButtons(); return; }
   app.markups = next;
   autosave(); updateUndoButtons(); invalidate();
 }
 app.undo = undo; app.redo = redo;
 function updateUndoButtons() {
-  $('#btn-undo').disabled = !app.history.canUndo();
-  $('#btn-redo').disabled = !app.history.canRedo();
+  for (const b of $$('[data-action="undo"]')) b.disabled = !app.history.canUndo();
+  for (const b of $$('[data-action="redo"]')) b.disabled = !app.history.canRedo();
 }
 function deleteSelected() {
   if (!app.selected) return false;
@@ -613,16 +645,23 @@ function setTool(t) {
   for (const b of $$('.tool[data-tool]')) b.setAttribute('aria-pressed', String(b.dataset.tool === t));
   selectTab(TOOL_GROUP[t]);
   if (!MARKUP_TOOLS.has(t) && t !== 'select') app.selected = null;
-  cvOverlay.className = t === 'pan' ? '' : t === 'select' ? 'pointer' : 'crosshair';
-  const hint = $('#tool-hint');
-  hint.hidden = !HINTS[t] || !app.scene;
-  hint.textContent = HINTS[t] || '';
+  cvOverlay.className = t === 'pan' ? '' : t === 'select' || t === 'eselect' ? 'pointer' : 'crosshair';
+  restoreHint();
+  edit.toolChanged(t);
   updateMeasureCard();
   updateFinishBar();
   updateSelectionStatus();
   invalidate();
 }
 app.setTool = setTool;
+
+function restoreHint() {
+  const hint = $('#tool-hint');
+  const touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+  const text = (touch && TOUCH_HINTS[app.tool]) || HINTS[app.tool] || '';
+  hint.hidden = !text || !app.scene;
+  hint.textContent = text;
+}
 
 function selectTab(name) {
   for (const tab of $$('[role="tab"]')) {
@@ -642,7 +681,7 @@ function cancelDrafts() {
 }
 
 function updateFinishBar() {
-  const active = (app.mdraft && app.mdraft.mode !== 'distance' && app.mdraft.pts.length > 0) || (app.draft && app.draft.type === 'cloud-poly');
+  const active = (app.mdraft && app.mdraft.mode !== 'distance' && app.mdraft.pts.length > 0) || (app.draft && app.draft.type === 'cloud-poly') || (edit && edit.draftActive);
   $('#finish-bar').hidden = !active;
 }
 
@@ -725,7 +764,7 @@ function updateHover(sx, sy) {
   const s = app.scene;
   if (!h) { $('#st-info').textContent = ''; return; }
   if (h.isText) {
-    const t = s.texts[h.id - s.n];
+    const t = s.texts[h.id - TEXT_ID];
     $('#st-info').textContent = `Text “${t.s.slice(0, 60)}” · Layer ${s.layers[t.layer].name}${t.blk ? ' · Block ' + s.blockNames[t.blk] : ''}`;
   } else {
     const type = (s.srcNames[s.src[h.id]] || '').replace(/_/g, ' ');
@@ -751,6 +790,7 @@ function hitMarkup(sx, sy, tol) {
 
 // tool pointer handlers (sx, sy in CSS px)
 function toolDown(sx, sy, e) {
+  if (EDIT_TOOLS.has(app.tool)) { edit.down(sx, sy, e); return; }
   const [wx, wy] = screenToWorld(sx, sy);
   const t = app.tool;
   if (t === 'zoombox') { app.zoomBox = { x0: sx, y0: sy, x1: sx, y1: sy }; return; }
@@ -806,6 +846,7 @@ function toolDown(sx, sy, e) {
 function toolMove(sx, sy, e, pressed) {
   updateCursor(sx, sy, e.pointerType);
   const t = app.tool;
+  if (EDIT_TOOLS.has(t)) { edit.move(sx, sy, e, pressed); return; }
   if (MEASURE_TOOLS.has(t)) { if (app.mdraft && app.mdraft.pts.length) updateMeasureCard(); invalidate(); return; }
   if (!pressed) {
     if (t === 'pan' || t === 'select') updateHover(sx, sy);
@@ -835,8 +876,9 @@ function toolMove(sx, sy, e, pressed) {
   invalidate();
 }
 
-function toolUp(sx, sy) {
+function toolUp(sx, sy, e) {
   const t = app.tool;
+  if (EDIT_TOOLS.has(t)) { edit.up(sx, sy, e); return; }
   if (t === 'zoombox' && app.zoomBox) {
     const z = app.zoomBox;
     app.zoomBox = null;
@@ -893,10 +935,22 @@ function toolUp(sx, sy) {
 }
 
 function toolDouble(sx, sy) {
+  if (EDIT_TOOLS.has(app.tool)) { edit.dbl(sx, sy); return; }
   if (finishDraft()) return;
   if (app.tool === 'select') {
     const m = hitMarkup(sx, sy, 7);
-    if (m && m.type === 'callout') openTextEditor({ editId: m.id, pts: m.pts.slice(), size: m.size, text: m.text });
+    if (m && m.type === 'callout') { openTextEditor({ editId: m.id, pts: m.pts.slice(), size: m.size, text: m.text }); return; }
+  }
+  if ((app.tool === 'pan' || app.tool === 'select') && app.scene) {
+    // double-clicking drawing text outside Edit mode: point the way
+    const [lx, ly] = app.view.toWorld(sx, sy);
+    const h = pickItem(app.scene, lx, ly, 6 / app.view.scale, (li) => !app.layerVisible || app.layerVisible[li]);
+    if (h && h.isText) {
+      toast('Switch to Edit to change the drawing', {
+        key: 'edit-hint', timeout: 6000, detail: 'View and Markup never change the drawing itself.',
+        actions: [{ label: 'Edit this text', onClick: () => { setTool('eselect'); if (edit.ready) edit.editEntity(h.ent); } }],
+      });
+    }
   }
 }
 
@@ -951,7 +1005,7 @@ cvOverlay.addEventListener('pointerdown', (e) => {
   const p = local(e);
   pointers.set(e.pointerId, p);
   if (pointers.size === 2) {
-    if (gesture && gesture.type === 'tool') { app.draft = null; app.zoomBox = null; if (app.drag) { app.drag = null; } }
+    if (gesture && gesture.type === 'tool') { app.draft = null; app.zoomBox = null; if (app.drag) { app.drag = null; } edit.cancelGesture(); }
     const [a, b] = [...pointers.values()];
     gesture = { type: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
     interact();
@@ -965,7 +1019,11 @@ cvOverlay.addEventListener('pointerdown', (e) => {
     cvOverlay.classList.add('dragging');
     return;
   }
-  if (e.button === 2) { finishDraft(); return; }
+  if (e.button === 2) {
+    if (EDIT_TOOLS.has(app.tool)) { if (!edit.context(p.x, p.y)) edit.finishDraft(); return; }
+    finishDraft();
+    return;
+  }
   if (e.button !== 0) return;
   gesture = { type: 'tool' };
   toolDown(p.x, p.y, e);
@@ -1007,11 +1065,11 @@ function endPointer(e) {
   const p = local(e);
   if (gesture && gesture.type === 'pinch') { if (pointers.size === 0) gesture = null; return; }
   if (gesture && gesture.type === 'pan') { gesture = null; cvOverlay.classList.remove('dragging'); return; }
-  if (gesture && gesture.type === 'tool') { gesture = null; if (e.type === 'pointerup') toolUp(p.x, p.y, e); else { app.draft = null; app.zoomBox = null; invalidate(); } }
+  if (gesture && gesture.type === 'tool') { gesture = null; if (e.type === 'pointerup') toolUp(p.x, p.y, e); else { app.draft = null; app.zoomBox = null; edit.cancelGesture(); invalidate(); } }
 }
 cvOverlay.addEventListener('pointerup', endPointer);
 cvOverlay.addEventListener('pointercancel', endPointer);
-cvOverlay.addEventListener('pointerleave', () => { if (!pointers.size) { app.hover = null; app.cursor = app.cursor && MEASURE_TOOLS.has(app.tool) ? app.cursor : null; invalidate(); } });
+cvOverlay.addEventListener('pointerleave', () => { if (!pointers.size) { app.hover = null; if (app.edit) app.edit.hover = -1; app.cursor = app.cursor && MEASURE_TOOLS.has(app.tool) ? app.cursor : null; invalidate(); } });
 cvOverlay.addEventListener('dblclick', (e) => { const p = local(e); toolDouble(p.x, p.y); });
 cvOverlay.addEventListener('contextmenu', (e) => e.preventDefault());
 cvOverlay.addEventListener('wheel', (e) => {
@@ -1044,13 +1102,22 @@ document.addEventListener('keydown', (e) => {
   if (mod) {
     if (k === 'o') { e.preventDefault(); $('#file-input').click(); return; }
     if (typing) return;
-    if (k === 's') { e.preventDefault(); if (app.doc) saveMarkups(); return; }
+    if (k === 's') {
+      e.preventDefault();
+      if (!app.doc) return;
+      if (e.shiftKey) edit.openSaveAs();
+      else if (TOOL_GROUP[app.tool] === 'edit' || $('#tab-edit').getAttribute('aria-selected') === 'true') edit.quickSave();
+      else saveMarkups();
+      return;
+    }
+    if (k === 'a' && EDIT_TOOLS.has(app.tool)) { e.preventDefault(); edit.selectAll(); return; }
     if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
     if (k === 'p') { e.preventDefault(); if (app.doc) openPrintDialog(); return; }
     return;
   }
   if (typing || e.altKey) return;
+  if (edit.key(e)) return;
   if (e.key === ' ') { if (!app.spaceDown) { app.spaceDown = true; cvOverlay.classList.add('dragging'); } e.preventDefault(); return; }
   if (e.key === 'Escape') {
     if (app.mdraft && app.mdraft.pts.length) { app.mdraft.pts = []; updateMeasureCard(); updateFinishBar(); invalidate(); return; }
@@ -1075,6 +1142,7 @@ document.addEventListener('keydown', (e) => {
   if (k === 'l') { toggleLayers(); return; }
   if (k === 'b') { toggleTheme(); return; }
   if (k === 's') { toggleSnap(); return; }
+  if (k === 'e') { setTool('eselect'); return; }
   if (KEY_TOOLS[k]) { setTool(KEY_TOOLS[k]); }
 });
 document.addEventListener('keyup', (e) => { if (e.key === ' ') { app.spaceDown = false; if (!gesture) cvOverlay.classList.remove('dragging'); } });
@@ -1092,7 +1160,7 @@ function toggleTheme() {
 app.toggleTheme = toggleTheme;
 function toggleSnap() {
   app.snapOn = !app.snapOn;
-  $('#btn-snap').setAttribute('aria-pressed', String(app.snapOn));
+  for (const b of $$('[data-action="snap"]')) b.setAttribute('aria-pressed', String(app.snapOn));
   storage.set('linework:snap', app.snapOn ? '1' : '0');
   toast(app.snapOn ? 'Snap on' : 'Snap off', { timeout: 1200 });
 }
@@ -1120,6 +1188,9 @@ const actions = {
   'load-markup': () => { if (app.doc) $('#markup-input').click(); else toast('Open the drawing first, then load its markups.', { kind: 'warn' }); },
   export: () => doExport(),
   print: () => openPrintDialog(),
+  'e-delete': () => edit.deleteSel(),
+  'e-save': () => edit.quickSave(),
+  'e-saveas': () => edit.openSaveAs(),
 };
 for (const b of $$('[data-action]')) b.addEventListener('click', () => { $('#menu-more').hidden = true; actions[b.dataset.action]?.(); });
 
@@ -1140,9 +1211,10 @@ $('#btn-more').addEventListener('click', (e) => {
   if (!m.hidden) m.querySelector('button').focus();
 });
 document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#menu-more, #btn-more')) $('#menu-more').hidden = true; });
-$('#btn-finish').addEventListener('click', () => finishDraft());
-$('#btn-undo-point').addEventListener('click', () => undoPoint());
-$('#btn-cancel-draft').addEventListener('click', () => { if (app.mdraft) app.mdraft.pts = []; app.draft = null; updateFinishBar(); updateMeasureCard(); invalidate(); });
+$('#btn-erotate').addEventListener('click', (e) => edit.rotateSel(e.shiftKey ? -Math.PI / 2 : Math.PI / 2));
+$('#btn-finish').addEventListener('click', () => { if (edit.draftActive) edit.finishDraft(); else finishDraft(); });
+$('#btn-undo-point').addEventListener('click', () => { if (!edit.undoDraftPoint()) undoPoint(); });
+$('#btn-cancel-draft').addEventListener('click', () => { edit.cancelDraft(); if (app.mdraft) app.mdraft.pts = []; app.draft = null; updateFinishBar(); updateMeasureCard(); invalidate(); });
 $('#btn-copy-measure').addEventListener('click', async () => {
   const v = $('#mc-value').textContent;
   try { await navigator.clipboard.writeText(v); toast(`Copied ${v}`, { timeout: 1500 }); } catch { toast('Copy is not available here.', { kind: 'warn' }); }
@@ -1214,13 +1286,28 @@ window.addEventListener('beforeunload', (e) => {
   if (app.pendingCallout && $('#ta-callout').value) { e.preventDefault(); e.returnValue = ''; }
 });
 
+// ------------------------------------------------------------------ edit mode
+function layersChanged() {
+  const prev = app.layerVisible;
+  layersPanel.setLayers(app.scene.layers);
+  if (prev) for (let i = 0; i < prev.length && i < layersPanel.visible.length; i++) layersPanel.visible[i] = prev[i];
+  layersPanel.sync();
+  app.layerVisible = layersPanel.visible;
+}
+edit = initEdit(app, {
+  invalidate, setTool, accent, drawSnapGlyph, updateUndoButtons, updateFinishBar, layersChanged, restoreHint,
+  setInfo: (t) => { $('#st-info').textContent = t; },
+  setCursor: (c) => { if (!cvOverlay.classList.contains('dragging')) cvOverlay.className = c === 'grab' ? '' : c; },
+  focusStage: () => stage.focus({ preventScroll: true }),
+});
+
 // ------------------------------------------------------------------ start-up
 function init() {
   for (const el of $$('[data-app-name]')) el.textContent = APP_NAME;
   $('#about-line').textContent = `${APP_NAME} ${APP_VERSION} · free and open source (GPL-3.0) · runs entirely in your browser.`;
   if (storage.get('linework:theme') === 'paper') toggleTheme();
   app.snapOn = storage.get('linework:snap') !== '0';
-  $('#btn-snap').setAttribute('aria-pressed', String(app.snapOn));
+  for (const b of $$('[data-action="snap"]')) b.setAttribute('aria-pressed', String(app.snapOn));
   app.precision = Number(storage.get('linework:precision', '2')) || 0;
   $('#sel-precision').value = String(app.precision);
   app.author = storage.get('linework:author', '') || '';

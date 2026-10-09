@@ -591,6 +591,545 @@ test('performance: 53k-entity stress drawing (frame times)', async () => {
   await close(page);
 });
 
+// ------------------------------------------------------------------ v0.2: Edit mode
+const ED = {
+  sel: (page) => page.evaluate(() => [...window.__linework.edit.sel].sort((a, b) => a - b)),
+  ent: (page, i) => page.evaluate((k) => { const e = window.__linework.edit.doc.model.entities[k]; return e ? JSON.parse(JSON.stringify(e)) : null; }, i),
+  count: (page) => page.evaluate(() => window.__linework.edit.doc.model.entities.length),
+  last: (page) => page.evaluate(() => { const l = window.__linework.edit.doc.model.entities; return JSON.parse(JSON.stringify(l[l.length - 1])); }),
+  dirty: (page) => page.evaluate(() => !document.querySelector('#doc-dirty').hidden),
+  scale: (page) => page.evaluate(() => window.__linework.view.scale),
+};
+const nearPt = (p, q, tol) => Math.abs(p[0] - q[0]) <= tol && Math.abs(p[1] - q[1]) <= tol;
+async function openForEdit(page, name, sample) {
+  if (sample) await openSample(page, sample, name); else await openFixture(page, name);
+  await clearToasts(page);
+  await page.waitForFunction(() => window.__linework.edit.ready, null, { timeout: 60000 });
+  await page.click('#tab-edit');
+  await page.click('[data-tool="eselect"]');
+  await settle(page);
+}
+const setSnap = (page, on) => page.evaluate((v) => { if (window.__linework.snapOn !== v) document.querySelector('#panel-edit [data-action="snap"]').click(); }, on);
+const zoomTo = async (page, x0, y0, x1, y1) => { await page.evaluate((b) => window.__linework.zoomToWorld(...b), [x0, y0, x1, y1]); await settle(page); };
+async function dragWorld(page, a, b, steps = 10) { await dragScreen(page, await client(page, ...a), await client(page, ...b), steps); }
+async function textAt(page, s) { // world centre of a drawn text
+  return page.evaluate((str) => { const a = window.__linework, t = a.scene.texts.find((x) => !x.dead && x.s === str); const [ox, oy] = a.scene.origin; return [(t.bbox[0] + t.bbox[2]) / 2 + ox, (t.bbox[1] + t.bbox[3]) / 2 + oy]; }, s);
+}
+
+test('edit: select (click, Shift+click, window vs crossing box), move with snaps, nudge, delete, shared undo/redo', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'house-plan.dxf');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 500, 300, 8300, 7500);
+  const L0 = await ED.ent(page, 33);
+  eq(L0.type, 'line', 'fixture: entity 33 is the FURNITURE line');
+  await clickWorld(page, 2300, 6600);
+  eq(JSON.stringify(await ED.sel(page)), '[33]', 'click selects the line');
+  assert(/1 selected · Line · Layer FURNITURE · ByLayer/.test(await page.textContent('#st-info')), 'status bar: count, type, layer, colour: ' + await page.textContent('#st-info'));
+  await page.keyboard.down('Shift'); await clickWorld(page, 3300, 1700); await page.keyboard.up('Shift');
+  eq(JSON.stringify(await ED.sel(page)), '[33,34]', 'Shift+click adds the circle');
+  await page.keyboard.down('Shift'); await clickWorld(page, 3300, 1700); await page.keyboard.up('Shift');
+  eq(JSON.stringify(await ED.sel(page)), '[33]', 'Shift+click again removes it');
+  await page.keyboard.press('Escape');
+  eq((await ED.sel(page)).length, 0, 'Esc clears the selection');
+  // window (left -> right) vs crossing (right -> left) over the lounge
+  const a = await client(page, 4900, 500), b = await client(page, 7900, 2700);
+  await page.mouse.move(...a); await page.mouse.down(); await page.mouse.move(...b, { steps: 8 });
+  await shot(page, 'edit-box-window-dark-1440');
+  await page.mouse.up();
+  const win = await ED.sel(page);
+  assert([39, 40, 51, 52].every((i) => win.includes(i)), 'window selects what is fully inside: ' + win);
+  assert(!win.includes(2), 'window leaves out the wall that only crosses the box');
+  await page.mouse.move(...b); await page.mouse.down(); await page.mouse.move(...a, { steps: 8 });
+  await shot(page, 'edit-box-crossing-dark-1440');
+  await page.mouse.up();
+  const cr = await ED.sel(page);
+  assert(cr.includes(2) && win.every((i) => cr.includes(i)), 'crossing adds what it touches: ' + cr);
+  assert(!cr.includes(1), 'crossing ignores an outline whose box overlaps but whose lines are not touched');
+  await shot(page, 'edit-selection-dark-1440');
+  await page.keyboard.press('b'); await shot(page, 'edit-selection-paper-1440'); await page.keyboard.press('b');
+  await page.keyboard.press('Escape');
+  // move with snaps: grab the line's end, drop it on a wall corner (exact)
+  await setSnap(page, true);
+  await clickWorld(page, 2300, 6600);
+  const g = await client(page, 1000, 6600), t = await client(page, 5100, 3500);
+  await dragScreen(page, [g[0] + 3, g[1] + 2], [t[0] + 3, t[1] - 3], 14);
+  const L1 = await ED.ent(page, 33);
+  assert(nearPt(L1.a, [5100, 3500], 1e-6) && nearPt(L1.b, [7700, 3500], 1e-6), 'moved exactly onto the wall corner (endpoint snap): ' + JSON.stringify(L1));
+  assert(await ED.dirty(page), 'dirty indicator after an edit');
+  assert((await page.title()).startsWith('•'), 'tab title marks unsaved edits');
+  // ortho with Shift: horizontal only
+  await setSnap(page, false);
+  const m1 = await client(page, 6400, 3500);
+  await page.keyboard.down('Shift');
+  await dragScreen(page, m1, [m1[0] + 60, m1[1] + 25], 10);
+  await page.keyboard.up('Shift');
+  const L2 = await ED.ent(page, 33);
+  assert(L2.a[1] === 3500 && L2.a[0] > 5100, 'Shift keeps the move horizontal');
+  // nudge: 1 px, Shift = 10 px
+  const s = await ED.scale(page);
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Shift+ArrowUp');
+  const L3 = await ED.ent(page, 33);
+  assert(Math.abs(L3.a[0] - L2.a[0] - 1 / s) < 1e-6 && Math.abs(L3.a[1] - L2.a[1] - 10 / s) < 1e-6, 'arrow nudges in screen pixels');
+  // delete, then one undo stack shared with markups
+  await page.keyboard.press('Delete');
+  eq(await ED.ent(page, 33), null, 'Delete removes the selection');
+  await page.click('#tab-markup');
+  await page.click('[data-tool="line"]');
+  const p0 = await client(page, 1500, 1500);
+  await dragScreen(page, p0, [p0[0] + 80, p0[1] + 40]);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'markup added after the drawing edits');
+  await page.keyboard.press('Control+z');
+  eq(await page.evaluate(() => window.__linework.markups.length), 0, 'undo 1: the markup (most recent)');
+  assert(await ED.ent(page, 33) === null, 'drawing edit still applied');
+  await page.keyboard.press('Control+z');
+  assert((await ED.ent(page, 33)) !== null, 'undo 2: the delete');
+  for (let k = 0; k < 4; k++) await page.keyboard.press('Control+z');
+  const back = await ED.ent(page, 33);
+  assert(nearPt(back.a, L0.a, 0) && nearPt(back.b, L0.b, 0), 'undo back to the original position');
+  assert(!(await ED.dirty(page)), 'no unsaved edits after undoing them all');
+  for (let k = 0; k < 5; k++) await page.keyboard.press('Control+y');
+  eq(await ED.ent(page, 33), null, 'redo all the way: deleted again');
+  eq(await page.evaluate(() => window.__linework.markups.length), 0, 'markup redo is next in line');
+  await page.keyboard.press('Control+y');
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'markup redone');
+  await close(page);
+});
+
+test('edit: double-click text to type over it (TEXT and MTEXT); hint outside Edit mode', async () => {
+  const page = await newPage();
+  await openFixture(page, 'house-plan.dxf');
+  await clearToasts(page);
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 3000, 1000, 10000, 7000);
+  // View mode: a gentle hint with a button that switches to Edit
+  const hall = await client(page, ...(await textAt(page, 'HALL')));
+  await page.mouse.dblclick(...hall);
+  await page.waitForSelector('.toast:has-text("Switch to Edit to change the drawing")');
+  await shot(page, 'edit-hint-view-dark-1440');
+  await page.click('.toast button:has-text("Edit this text")');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  eq(await page.evaluate(() => window.__linework.tool), 'eselect', 'switched to Edit');
+  eq(await page.inputValue('#ta-edit'), 'HALL', 'type-over box holds the text');
+  await shot(page, 'edit-text-dark-1440');
+  await page.keyboard.press('End');
+  await page.keyboard.press('b'); // shortcuts (b = theme) are ignored while typing
+  eq(await page.inputValue('#ta-edit'), 'HALLb', 'typing goes into the box');
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type('HALLWAY');
+  await page.keyboard.press('Enter');
+  eq((await ED.ent(page, 53)).text, 'HALLWAY', 'Enter commits single-line text');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => !t.dead && t.s === 'HALLWAY')), 'new text drawn');
+  // Esc cancels
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'HALLWAY')))));
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await page.keyboard.type('XXX');
+  await page.keyboard.press('Escape');
+  eq((await ED.ent(page, 53)).text, 'HALLWAY', 'Esc cancels');
+  // click-away commits
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'LOUNGE')))));
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await page.keyboard.type('SITTING ROOM');
+  await page.mouse.click(...(await client(page, 9500, 6500)));
+  eq((await ED.ent(page, 51)).text, 'SITTING ROOM', 'clicking away commits');
+  // MTEXT: Enter = new line, Ctrl+Enter commits
+  await page.keyboard.press('f');
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'GROUND FLOOR PLAN')))));
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  eq((await page.inputValue('#ta-edit')).split('\n')[0], 'GROUND FLOOR PLAN', 'multi-line text loaded');
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type('FIRST FLOOR PLAN');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Scale 1:50');
+  await page.keyboard.press('b');
+  await page.keyboard.press('Backspace');
+  assert(await page.isVisible('#edit-text'), 'Enter keeps editing multi-line text');
+  await page.keyboard.press('Control+Enter');
+  eq((await ED.ent(page, 59)).text, 'FIRST FLOOR PLAN\nScale 1:50', 'Ctrl+Enter commits multi-line text');
+  await page.keyboard.press('b');
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'FIRST FLOOR PLAN')))));
+  await shot(page, 'edit-text-paper-1440');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('b');
+  await close(page);
+});
+
+test('edit: reshape with handles — drag, add (double-click a side), delete (right-click); circle radius; block hint', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'house-plan.dxf');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, false);
+  await zoomTo(page, 4900, 300, 8300, 2000);
+  const P0 = await ED.ent(page, 39);
+  eq(P0.type, 'polyline', 'fixture: entity 39 is a polyline');
+  const n0 = P0.pts.length / 2;
+  // double-click a side: shows the points
+  await page.mouse.dblclick(...(await client(page, (P0.pts[0] + P0.pts[2]) / 2, (P0.pts[1] + P0.pts[3]) / 2)));
+  await page.waitForFunction(() => window.__linework.edit.vedit === 39);
+  assert(/Drag a point/.test(await page.textContent('#tool-hint')), 'reshape hint shown');
+  await shot(page, 'edit-handles-dark-1440');
+  await page.keyboard.press('b'); await shot(page, 'edit-handles-paper-1440'); await page.keyboard.press('b');
+  // drag the last vertex
+  const vx = P0.pts[2 * n0 - 2], vy = P0.pts[2 * n0 - 1];
+  await dragWorld(page, [vx, vy], [vx + 200, vy + 150]);
+  const P1 = await ED.ent(page, 39);
+  const s = await ED.scale(page);
+  assert(nearPt([P1.pts[2 * n0 - 2], P1.pts[2 * n0 - 1]], [vx + 200, vy + 150], 1.5 / s), 'vertex dragged: ' + P1.pts.slice(-2));
+  // Shift locks the handle horizontally
+  await page.keyboard.down('Shift');
+  await dragWorld(page, [P1.pts[0], P1.pts[1]], [P1.pts[0] - 150, P1.pts[1] + 120]);
+  await page.keyboard.up('Shift');
+  const P2 = await ED.ent(page, 39);
+  eq(P2.pts[1], P1.pts[1], 'Shift keeps the point on its horizontal');
+  // add a point: double-click the middle of the first side
+  const mid = [(P2.pts[0] + P2.pts[2]) / 2, (P2.pts[1] + P2.pts[3]) / 2];
+  await page.mouse.dblclick(...(await client(page, ...mid)));
+  const P3 = await ED.ent(page, 39);
+  eq(P3.pts.length / 2, n0 + 1, 'double-click on a side adds a point');
+  assert(nearPt([P3.pts[2], P3.pts[3]], mid, 1.5 / s), 'new point on the side');
+  // delete it again: right-click the point
+  const c = await client(page, P3.pts[2], P3.pts[3]);
+  await page.mouse.click(c[0], c[1], { button: 'right' });
+  eq((await ED.ent(page, 39)).pts.length / 2, n0, 'right-click on a point deletes it');
+  // right-click on a side adds one too
+  const c2 = await client(page, ...mid);
+  await page.mouse.click(c2[0], c2[1], { button: 'right' });
+  eq((await ED.ent(page, 39)).pts.length / 2, n0 + 1, 'right-click on a side adds a point');
+  await page.keyboard.press('Escape');
+  eq(await page.evaluate(() => window.__linework.edit.vedit), -1, 'Esc leaves reshaping');
+  // circle: centre + radius handles
+  await zoomTo(page, 1500, 500, 4500, 2900);
+  await page.mouse.dblclick(...(await client(page, 2700, 2300)));
+  await page.waitForFunction(() => window.__linework.edit.vedit === 34);
+  await dragWorld(page, [3300, 1700], [3500, 1700]);
+  const C1 = await ED.ent(page, 34);
+  assert(Math.abs(C1.r - 800) < 2 / s, 'radius handle: ' + C1.r);
+  await dragWorld(page, [2700, 1700], [2900, 1800]);
+  const C2 = await ED.ent(page, 34);
+  assert(nearPt(C2.c, [2900, 1800], 2 / s) && Math.abs(C2.r - C1.r) < 1e-9, 'centre handle moves the circle');
+  // blocks: hint, no editing inside
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('f');
+  const door = await page.evaluate(() => { const a = window.__linework, s = a.scene, it = a.edit.doc.items(16); const p = it.prims[0], o = s.start[p] * 2; return [s.coords[o] + s.origin[0], s.coords[o + 1] + s.origin[1]]; });
+  await page.mouse.dblclick(...(await client(page, ...door)));
+  await page.waitForFunction(() => /editing inside them is planned/.test(document.querySelector('#tool-hint').textContent));
+  await close(page);
+});
+
+test('edit: draw line (+typed length), polyline (C closes), rectangle, circle, text on a new layer; layer and colour changes', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'house-plan.dxf');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, false);
+  await zoomTo(page, -3000, -6000, 15000, -500);
+  const before = await ED.count(page);
+  // new layer with a colour
+  await page.selectOption('#sel-elayer', '__new');
+  await page.waitForSelector('#dlg-layer[open]');
+  await page.fill('#layer-name', 'E2E NEW');
+  await page.click('#layer-swatches [aria-label="Green"]');
+  await shot(page, 'edit-new-layer-dark-1440');
+  await page.click('#btn-do-layer');
+  eq(await page.inputValue('#sel-elayer'), 'E2E NEW', 'new layer is current');
+  assert(await page.evaluate(() => window.__linework.scene.layers.some((l) => l.name === 'E2E NEW' && l.color === 0x00ff00)), 'layer in the drawing, green');
+  // colour for new items
+  await page.click('#btn-ecolor');
+  await page.click('#color-pop button:has-text("Red")');
+  eq((await page.textContent('#ecolor-label')).trim(), 'Red');
+  const s = await ED.scale(page);
+  const tol = 1.5 / s;
+  // line chain: two clicks, then a typed length along the cursor direction
+  await page.keyboard.press('n');
+  eq(await page.evaluate(() => window.__linework.tool), 'eline', 'N = line in Edit');
+  await clickWorld(page, 0, -2000);
+  await clickWorld(page, 2000, -2000);
+  const ln = await ED.last(page);
+  eq(ln.type, 'line'); eq(ln.layer, 'E2E NEW'); eq(ln.color, 1);
+  assert(nearPt(ln.a, [0, -2000], tol) && nearPt(ln.b, [2000, -2000], tol), 'line endpoints');
+  const dir = await client(page, 2000, -1000); // straight up from the last point
+  await page.mouse.move(...dir);
+  await page.keyboard.type('1500');
+  assert(await page.isVisible('#len-box'), 'typing a number opens the length box');
+  await shot(page, 'edit-draw-length-dark-1440');
+  await page.keyboard.press('Enter');
+  const l2 = await ED.last(page);
+  assert(Math.abs(Math.hypot(l2.b[0] - l2.a[0], l2.b[1] - l2.a[1]) - 1500) < 1e-6, 'typed length is exact');
+  assert(Math.abs(l2.b[0] - l2.a[0]) < tol, 'along the cursor direction');
+  await page.keyboard.press('Enter'); // stop the chain
+  // polyline closed with C
+  await page.keyboard.press('p');
+  for (const q of [[4000, -2000], [6000, -2000], [5000, -4000]]) await clickWorld(page, ...q);
+  await page.keyboard.press('c');
+  const pl = await ED.last(page);
+  eq(pl.type, 'polyline'); eq(pl.closed, true); eq(pl.pts.length, 6, 'three vertices, closed');
+  // rectangle
+  await page.keyboard.press('r');
+  await clickWorld(page, 7000, -4500); await clickWorld(page, 9000, -2000);
+  const rc = await ED.last(page);
+  eq(rc.closed, true); eq(rc.pts.length, 8, 'rectangle = closed 4-vertex polyline');
+  assert(nearPt([rc.pts[0], rc.pts[1]], [7000, -4500], tol) && nearPt([rc.pts[4], rc.pts[5]], [9000, -2000], tol), 'rectangle corners');
+  // circle
+  await page.keyboard.press('o');
+  await clickWorld(page, 11000, -3000); await clickWorld(page, 12000, -3000);
+  const ci = await ED.last(page);
+  eq(ci.type, 'circle'); assert(Math.abs(ci.r - 1000) < tol, 'circle radius');
+  // text
+  await page.keyboard.press('t');
+  await clickWorld(page, 0, -5000);
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await page.keyboard.type('NEW NOTE');
+  await shot(page, 'edit-draw-text-dark-1440');
+  await page.keyboard.press('Enter');
+  const tx = await ED.last(page);
+  eq(tx.type, 'text'); eq(tx.text, 'NEW NOTE'); eq(tx.layer, 'E2E NEW');
+  eq(await ED.count(page), before + 6, 'six new items');
+  await shot(page, 'edit-draw-dark-1440');
+  // change layer and colour of a selection
+  await page.keyboard.press('v');
+  await clickWorld(page, 12000, -3000);
+  eq(JSON.stringify(await ED.sel(page)), JSON.stringify([before + 4]), 'circle selected');
+  await page.selectOption('#sel-elayer', 'TEXT');
+  eq((await ED.last(page)) && (await ED.ent(page, before + 4)).layer, 'TEXT', 'selection moved to layer TEXT');
+  await page.click('#btn-ecolor');
+  await shot(page, 'edit-colours-dark-1440');
+  await page.click('#color-pop button:has-text("Blue")');
+  eq((await ED.ent(page, before + 4)).color, 5, 'selection recoloured');
+  await page.click('#btn-ecolor');
+  await page.click('#color-pop button:has-text("ByLayer")');
+  eq((await ED.ent(page, before + 4)).color, 256, 'back to ByLayer');
+  // undo everything: the new layer disappears again
+  while (await page.evaluate(() => window.__linework.history.canUndo())) await page.click('#btn-eundo');
+  eq(await page.evaluate(() => window.__linework.edit.doc.model.entities.filter(Boolean).length), before, 'all new items undone');
+  assert(!(await page.evaluate(() => [...document.querySelectorAll('#sel-elayer option')].some((o) => o.value === 'E2E NEW'))), 'new layer undone');
+  assert(!(await ED.dirty(page)), 'clean again');
+  await close(page);
+});
+
+test('edit: Save DXF and re-open it; Save as DGN; DGN round trip keeps untouched bytes; lost-item warning; dirty + beforeunload', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'house-plan.dxf');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, true);
+  await zoomTo(page, 500, 300, 8300, 7500);
+  await clickWorld(page, 2300, 6600);
+  const g = await client(page, 1000, 6600), t = await client(page, 5100, 3500);
+  await dragScreen(page, [g[0] + 3, g[1] + 2], [t[0] + 3, t[1] - 3], 14);
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'HALL')))));
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await page.keyboard.press('Control+a'); await page.keyboard.type('HALL 2'); await page.keyboard.press('Enter');
+  assert(await ED.dirty(page), 'unsaved');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  eq(dl.suggestedFilename(), 'house-plan-edited.dxf', 'Save = same format, -edited name');
+  const out1 = join(OUT, 'house-plan-edited.dxf');
+  await dl.saveAs(out1);
+  assert(!(await ED.dirty(page)), 'saved: indicator cleared');
+  // re-open the downloaded file: the edits survived
+  await page.setInputFiles('#file-input', out1);
+  await page.waitForFunction(() => window.__linework.doc.name === 'house-plan-edited.dxf' && window.__linework.edit.ready);
+  const moved = await page.evaluate(() => window.__linework.edit.doc.model.entities.some((e) => e && e.type === 'line' && e.layer === 'FURNITURE' && e.a[0] === 5100 && e.a[1] === 3500 && e.b[0] === 7700));
+  assert(moved, 'moved line is in the saved file');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((x) => x.s === 'HALL 2')), 'edited text is in the saved file');
+  eq(await page.evaluate(() => window.__linework.scene.layers.length), 9, 'layers kept');
+  // Save as DGN from a DXF
+  await page.click('#tab-edit');
+  await page.click('#btn-esaveas');
+  await page.waitForSelector('#dlg-save[open]');
+  await page.check('input[name="fmt"][value="DGN"]');
+  eq(await page.inputValue('#save-name'), 'house-plan-edited-edited.dgn', 'name follows the format');
+  assert(/levels 1–63/.test(await page.textContent('#save-notes')), 'explains layers -> levels');
+  await shot(page, 'save-dialog-dark-1440');
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#btn-do-save')]);
+  eq(dl2.suggestedFilename(), 'house-plan-edited-edited.dgn');
+  const out2 = join(OUT, 'house-plan-as.dgn');
+  await dl2.saveAs(out2);
+  await page.setInputFiles('#file-input', out2);
+  await page.waitForFunction(() => window.__linework.doc.name === 'house-plan-as.dgn');
+  const dg = await page.evaluate(() => ({ fmt: window.__linework.scene.format, n: window.__linework.scene.n + window.__linework.scene.textCount, lv: window.__linework.scene.layers.filter((l) => l.count).map((l) => l.name) }));
+  eq(dg.fmt, 'DGN', 'opens as DGN');
+  assert(dg.n > 100 && dg.lv.every((n) => /^Level \d+$/.test(n)), 'items on levels: ' + JSON.stringify(dg));
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((x) => x.s === 'HALL 2')), 'edited text in the DGN too');
+  // DGN round trip
+  await openForEdit(page, 'site-plan.dgn');
+  await setSnap(page, false);
+  const orig = readFileSync(FIX('site-plan.dgn'));
+  const st = await page.evaluate(() => { const m = window.__linework.edit.doc.model; const i = m.entities.findIndex((e) => e.layer === 'Level 2'); return { i, e: m.entities[i] }; });
+  await clickWorld(page, st.e.pts[0], (st.e.pts[1] + st.e.pts[3]) / 2 + 0.0001);
+  await page.keyboard.press('Shift+ArrowRight');
+  const [dl3] = await Promise.all([page.waitForEvent('download'), page.keyboard.press('Control+s')]);
+  eq(dl3.suggestedFilename(), 'site-plan-edited.dgn', 'DGN saves as DGN');
+  const out3 = join(OUT, 'site-plan-edited.dgn');
+  await dl3.saveAs(out3);
+  const nb = readFileSync(out3);
+  let same = 0, deleted = 0;
+  for (let o = 0; o + 4 <= orig.length;) {
+    if (orig[o] === 0xff && orig[o + 1] === 0xff) break;
+    const size = 4 + 2 * orig.readUInt16LE(o + 2);
+    const a2 = orig.subarray(o, o + size), b2 = nb.subarray(o, o + size);
+    if (a2.equals(b2)) same++;
+    else { assert(b2[1] === (a2[1] | 0x80) && Buffer.compare(a2.subarray(2), b2.subarray(2)) === 0, `element at ${o} only gets its deleted bit`); deleted++; }
+    o += size;
+  }
+  assert(same > 25 && deleted === 1, `untouched elements byte-identical (${same}), edited one deleted in place (${deleted})`);
+  await page.setInputFiles('#file-input', out3);
+  await page.waitForFunction(() => window.__linework.doc.name === 'site-plan-edited.dgn' && window.__linework.edit.ready);
+  const after = await page.evaluate((x0) => window.__linework.edit.doc.model.entities.some((e) => e && e.layer === 'Level 2' && e.pts && Math.abs(e.pts[0] - x0) > 1e-9), st.e.pts[0]);
+  assert(after, 'the moved shape is in the saved DGN');
+  // items the reader could not load: warn before saving
+  await openForEdit(page, 'edge-unknown-entities.dxf');
+  await clickWorld(page, 5, 0); await page.keyboard.press('Delete');
+  await page.click('#btn-esave');
+  await page.waitForSelector('#dlg-save[open]');
+  assert(/6 items from the original file weren.t loaded and won.t be in the saved copy/.test(await page.textContent('#save-warn')), 'lost-item warning');
+  await page.click('#dlg-save button[value="cancel"]');
+  // beforeunload while dirty
+  const dialogs = [];
+  page.on('dialog', (d) => { dialogs.push(d.type()); d.dismiss().catch(() => {}); });
+  const errs = page.errors.slice();
+  await page.close({ runBeforeUnload: true });
+  await new Promise((r) => setTimeout(r, 400));
+  assert(dialogs.includes('beforeunload'), 'leaving with unsaved edits asks first');
+  await page.ctx.close();
+  assert(!errs.length, 'no console errors: ' + errs.join(' | '));
+});
+
+test('edit at 390 px with touch: tap to select, finger-drag to move, long-press menu, pinch still zooms', async () => {
+  const page = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 } });
+  await openFixture(page, 'house-plan.dxf');
+  await clearToasts(page);
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await page.tap('#tab-edit');
+  await page.tap('[data-tool="eselect"]');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 600, 5000, 4000, 8000);
+  const cdp = await page.ctx.newCDPSession(page);
+  const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], i) => ({ x, y, id: i + 1, radiusX: 4, radiusY: 4, force: 1 })) });
+  const m = await client(page, 2300, 6600);
+  await touch('touchStart', [m]); await touch('touchEnd', []);
+  eq(JSON.stringify(await ED.sel(page)), '[33]', 'tap selects');
+  await shot(page, 'edit-selection-dark-390');
+  // finger drag moves the selection
+  await touch('touchStart', [m]);
+  for (let i = 1; i <= 8; i++) await touch('touchMove', [[m[0] + i * 6, m[1] - i * 4]]);
+  await touch('touchEnd', []);
+  const L = await ED.ent(page, 33);
+  assert(L.a[0] > 1000 && L.a[1] > 6600, 'finger drag moved the line: ' + L.a);
+  // long-press: context menu, Edit shows the points (big handles), Delete removes
+  const m2 = await client(page, (L.a[0] + L.b[0]) / 2, L.a[1]);
+  await touch('touchStart', [m2]); await page.waitForTimeout(750); await touch('touchEnd', []);
+  await page.waitForSelector('#ctx-menu:not([hidden])');
+  await shot(page, 'edit-longpress-dark-390');
+  await page.tap('#ctx-menu button:has-text("Edit")');
+  await page.waitForFunction(() => window.__linework.edit.vedit === 33);
+  await shot(page, 'edit-handles-dark-390');
+  await page.keyboard.press('b'); await shot(page, 'edit-handles-paper-390'); await page.keyboard.press('b');
+  await touch('touchStart', [m2]); await page.waitForTimeout(750); await touch('touchEnd', []);
+  await page.waitForSelector('#ctx-menu:not([hidden])');
+  await page.tap('#ctx-menu button:has-text("Delete")');
+  eq(await ED.ent(page, 33), null, 'long-press > Delete');
+  await page.tap('#btn-eundo');
+  assert((await ED.ent(page, 33)) !== null, 'Undo button brings it back');
+  // two fingers still pan/zoom in Edit mode
+  const s0 = await ED.scale(page);
+  const box = await stageBox(page);
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  await touch('touchStart', [[cx - 40, cy], [cx + 40, cy]]);
+  for (let i = 1; i <= 8; i++) await touch('touchMove', [[cx - 40 - i * 12, cy], [cx + 40 + i * 12, cy]]);
+  await touch('touchEnd', []);
+  await settle(page);
+  assert((await ED.scale(page)) > s0 * 1.8, 'pinch zooms in Edit mode');
+  const layout = await page.evaluate(() => [window.innerWidth, document.documentElement.scrollWidth]);
+  assert(layout[1] <= 390, 'no horizontal overflow at 390px');
+  // text on a phone: long-press > Edit opens the type-over box
+  await zoomTo(page, 1000, 4000, 4000, 5200);
+  const bed = await client(page, ...(await textAt(page, 'BEDROOM')));
+  await touch('touchStart', [bed]); await page.waitForTimeout(750); await touch('touchEnd', []);
+  await page.waitForSelector('#ctx-menu:not([hidden])');
+  await page.tap('#ctx-menu button:has-text("Edit")');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await shot(page, 'edit-text-dark-390');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => window.__linework.fit());
+  await settle(page);
+  const lm = await client(page, (L.a[0] + L.b[0]) / 2, L.a[1]);
+  await touch('touchStart', [lm]); await touch('touchEnd', []);
+  await page.keyboard.press('b'); await shot(page, 'edit-selection-paper-390'); await page.keyboard.press('b');
+  await shot(page, 'edit-dark-390');
+  await close(page);
+});
+
+test('performance: Edit mode on the 53k stress drawing (box-select ~500 items, drag, commit, undo)', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'stress-test-53k.dxf', 'stress');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await settle(page);
+  await page.waitForTimeout(400);
+  const record = async (action) => {
+    await page.evaluate(() => { window.__frames = []; let last = performance.now(); const tick = (t) => { window.__frames.push(t - last); last = t; if (window.__rec) requestAnimationFrame(tick); }; window.__rec = true; requestAnimationFrame(tick); });
+    await action();
+    const f = await page.evaluate(() => { window.__rec = false; return window.__frames.slice(2); });
+    f.sort((x, y) => x - y);
+    const pct = (p) => +f[Math.min(f.length - 1, Math.floor(p * (f.length - 1)))].toFixed(1);
+    return { frames: f.length, medianMs: pct(0.5), p95Ms: pct(0.95), maxMs: pct(1) };
+  };
+  await page.evaluate(() => { window.__lt = []; const t0 = performance.now(); new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.startTime >= t0) window.__lt.push(+e.duration.toFixed(1)); }).observe({ type: 'longtask' }); });
+  const a = await client(page, -3000, -3000), b = await client(page, 30500, 30500); // start in empty space (a press on an item moves it)
+  const boxSelect = await record(async () => { await page.mouse.move(...a); await page.mouse.down(); for (let i = 1; i <= 30; i++) await page.mouse.move(a[0] + ((b[0] - a[0]) * i) / 30, a[1] + ((b[1] - a[1]) * i) / 30); await page.mouse.up(); await settle(page); });
+  const sel = await page.evaluate(() => window.__linework.edit.lastSelect);
+  assert(sel.count >= 450 && sel.count <= 700, `about 500 items selected (${sel.count})`);
+  // drag the selection by grabbing one of its items
+  await zoomTo(page, -1000, -1000, 31000, 31000);
+  // grab a selected line near the middle (lines on the box edge overlap the next bay's lines)
+  const grab = await page.evaluate(() => {
+    const E = window.__linework.edit;
+    let best = null, bd = Infinity;
+    for (const k of E.sel) { const e = E.doc.model.entities[k]; if (e.type !== 'line') continue; const m = [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2]; const d = Math.hypot(m[0] - 15000, m[1] - 15000); if (d < bd) { bd = d; best = m; } }
+    return best;
+  });
+  await setSnap(page, false);
+  const g = await client(page, ...grab);
+  const drag = await record(async () => { await page.mouse.move(...g); await page.mouse.down(); for (let i = 1; i <= 40; i++) await page.mouse.move(g[0] + i * 5, g[1] + i * 3); await page.mouse.up(); await settle(page); });
+  const commit = await page.evaluate(() => window.__linework.edit.lastCommit);
+  assert(commit.items === sel.count, 'one move for the whole selection');
+  const after = await page.evaluate(async () => { const a2 = window.__linework; await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); const ms = []; for (let i = 0; i < 6; i++) ms.push(a2.renderer.render(a2.view, a2.renderOpts()).ms); ms.sort((x, y) => x - y); return +ms[3].toFixed(2); });
+  const undoMs = await page.evaluate(() => { const t0 = performance.now(); window.__linework.undo(); return +(performance.now() - t0).toFixed(1); });
+  const lt = await page.evaluate(() => window.__lt);
+  perf.editStress = { selected: sel.count, boxSelectMs: +sel.ms.toFixed(1), boxDragFrames: boxSelect, moveDragFrames: drag, commitMs: +commit.ms.toFixed(1), renderAfterCommitMs: after, undoMs, longTasks: lt };
+  await shot(page, 'perf-edit-stress');
+  assert(drag.p95Ms < 50, `dragging ~500 items stays smooth (p95 ${drag.p95Ms} ms)`);
+  assert(commit.ms < 300, `committing the move is quick (${commit.ms} ms)`);
+  await close(page);
+});
+
+test('edit: DGN drawing — cells move as one, colours come from the file colour table', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'site-plan.dgn');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, false);
+  const cell = await page.evaluate(() => { const m = window.__linework.edit.doc.model; const i = m.entities.findIndex((e) => e.type === 'cell' && e.name === 'NORTH'); return { i, o: m.entities[i].origin }; });
+  await zoomTo(page, cell.o[0] - 6, cell.o[1] - 6, cell.o[0] + 6, cell.o[1] + 6);
+  const tip = [cell.o[0] - Math.sin(Math.PI / 6) * 3 * 1, cell.o[1] + Math.cos(Math.PI / 6) * 3];
+  await clickWorld(page, ...tip);
+  eq(JSON.stringify(await ED.sel(page)), JSON.stringify([cell.i]), 'clicking a component selects the whole cell');
+  assert(/Cell “NORTH”/.test(await page.textContent('#st-info')), 'status names the cell');
+  await page.click('#btn-erotate');
+  const c2 = await ED.ent(page, cell.i);
+  assert(Math.abs(Math.atan2(c2.mv[1], c2.mv[0]) - Math.PI / 2) < 1e-9, 'rotated 90 degrees as a whole');
+  await page.click('#btn-ecolor');
+  const labels = await page.$$eval('#color-pop button', (bs) => bs.map((b) => b.textContent.trim()));
+  eq(labels.length, 16, 'DGN: 16 entries of the file colour table');
+  assert(labels[3] === 'Colour 3', 'labelled by colour index');
+  await page.click('#color-pop button:has-text("Colour 3")');
+  const c3 = await ED.ent(page, cell.i);
+  assert(c3.children.every((k) => k.ci === 3), 'components recoloured with table entry 3');
+  const on = await page.evaluate((k) => { const a = window.__linework, s = a.scene, it = a.edit.doc.items(k); const p = it.prims[0], o = s.start[p] * 2; return [s.coords[o] + s.origin[0], s.coords[o + 1] + s.origin[1]]; }, cell.i);
+  await page.mouse.dblclick(...(await client(page, ...on)));
+  await page.waitForFunction(() => /editing inside them is planned/.test(document.querySelector('#tool-hint').textContent));
+  await shot(page, 'edit-dgn-cell-dark-1440');
+  await close(page);
+});
+
 // ------------------------------------------------------------------ run
 let failed = 0;
 for (const t of tests) {

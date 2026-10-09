@@ -23,9 +23,13 @@
 //   { type:'point', p:[x,y] }
 //   { type:'solid', pts:[x,y,...] }                           filled
 //   { type:'hatch', loops:[[x,y,...], ...], solid }
-//   { type:'dimension', block, p:[x,y], text, fallback:[entities] }
+//   { type:'dimension', block, p:[x,y], text, fallback:[entities], dim:{...raw definition points} }
+//   { type:'cell', name, origin:[x,y], children:[entities] }   DGN cell: children already placed
 // Common props: layer (name), color (ACI 0..256; 0=BYBLOCK 256=BYLAYER), rgb (true colour or null),
 //               ltype (name | 'BYLAYER' | 'BYBLOCK'), weight (0..31 screen weight), group (cell id)
+// Write-back props (readers keep them so a saved file loses as little as possible):
+//   DXF: ext (OCS extrusion [x,y,z]), style (text style name), raw (TEXT/MTEXT string as stored),
+//        tag (ATTRIB tag); DGN: dgn ([start, end) byte range of the element(s)), ci (colour index)
 
 /** Colour flag meaning "foreground": white on dark backgrounds, black on paper (ACI 7). */
 export const FG = 0x1000000;
@@ -90,6 +94,15 @@ export function notShown(model, type, n = 1) {
 
 export function warn(model, msg) {
   if (model.stats.warnings.length < 50 && !model.stats.warnings.includes(msg)) model.stats.warnings.push(msg);
+}
+
+/** Entities with DGN cells expanded into their components (depth first). */
+export function flatEntities(list, out = []) {
+  for (const e of list) {
+    if (!e) continue;
+    if (e.type === 'cell') flatEntities(e.children || [], out); else out.push(e);
+  }
+  return out;
 }
 
 /** Error with a user-facing message and a machine code (e.g. 'binary-dxf', 'dwg'). */

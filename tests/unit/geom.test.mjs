@@ -176,12 +176,12 @@ test('scene text packing for the worker hand-off round-trips exactly', async () 
   const { load } = await import('./helpers.mjs');
   const { packTexts, unpackTexts, sceneTransferables } = await import('../../src/scene.js');
   const { scene } = load('bracket.dxf');
-  const before = JSON.stringify(scene.texts.map((t) => [t.s, t.x, t.y, t.m, t.fit || 0, t.bbox, t.layer, t.color, t.blk, t.align]));
+  const before = JSON.stringify(scene.texts.map((t) => [t.s, t.x, t.y, t.m, t.fit || 0, t.bbox, t.layer, t.color, t.blk, t.align, t.ent]));
   packTexts(scene);
   assert.equal(scene.texts, undefined);
-  assert.ok(sceneTransferables(scene).length === 18);
+  assert.ok(sceneTransferables(scene).length === 21); // + ent, entPrim, entText (v0.2 edit mapping)
   const clone = structuredClone(scene);
   unpackTexts(clone);
-  const after = JSON.stringify(clone.texts.map((t) => [t.s, t.x, t.y, t.m, t.fit || 0, t.bbox, t.layer, t.color, t.blk, t.align]));
+  const after = JSON.stringify(clone.texts.map((t) => [t.s, t.x, t.y, t.m, t.fit || 0, t.bbox, t.layer, t.color, t.blk, t.align, t.ent]));
   assert.equal(after, before);
 });

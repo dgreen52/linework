@@ -292,3 +292,13 @@ test('stress fixture: 50k+ entities parse and index quickly', { skip: !existsSyn
   assert.equal(scene.grid.items.length, scene.n + scene.texts.length);
   assert.equal(scene.kind.filter((k) => k === KIND.CONIC).length > 0, true);
 });
+
+test('an empty section (e.g. CLASSES) does not swallow the next one', () => {
+  const txt = ['0', 'SECTION', '2', 'CLASSES', '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',
+    '0', 'LAYER', '2', 'RED', '70', '0', '62', '1', '6', 'CONTINUOUS', '0', 'ENDTAB', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES', '0', 'LINE', '8', 'RED', '10', '0', '20', '0', '11', '1', '21', '1', '0', 'ENDSEC', '0', 'EOF'].join('\n');
+  const model = parseDxf(txt);
+  const L = model.layers.find((l) => l.name === 'RED');
+  assert.equal(L.aci, 1, 'layer table read after an empty section');
+  assert.equal(model.entities.length, 1);
+});

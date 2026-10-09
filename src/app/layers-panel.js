@@ -32,7 +32,7 @@ export class LayersPanel {
     this.visible = new Uint8Array(layers.length);
     layers.forEach((l, i) => { this.visible[i] = l.visible ? 1 : 0; });
     const rows = [];
-    const order = layers.map((l, i) => i).filter((i) => layers[i].count > 0 || (layers[i].name !== '0' && !/^Level \d+$/.test(layers[i].name)))
+    const order = layers.map((l, i) => i).filter((i) => !layers[i].removed && (layers[i].count > 0 || (layers[i].name !== '0' && !/^Level \d+$/.test(layers[i].name))))
       .sort((a, b) => layers[a].name.localeCompare(layers[b].name, undefined, { numeric: true }));
     for (const i of order) {
       const l = layers[i];

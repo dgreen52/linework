@@ -7,6 +7,7 @@ import { load, fixture, conics, texts, near, bytes } from './helpers.mjs';
 import { parseDgn } from '../../src/formats/dgn.js';
 import { DGN_DEFAULT } from '../../src/palettes.js';
 import { primPoints } from '../../src/scene.js';
+import { flatEntities } from '../../src/model.js';
 
 const oracleOf = (name) => JSON.parse(readFileSync(fixture(name.replace(/\.dgn$/, '.ogr.json')), 'utf8'));
 const hex = (v) => v.toString(16).padStart(6, '0');
@@ -31,10 +32,11 @@ function compareWithOgr(name) {
   const model = parseDgn(bytes(name));
   const oracle = oracleOf(name);
   const used = new Set();
+  const ents = flatEntities(model.entities); // OGR reports cell components, not cell headers
   for (const f of oracle.features) {
     const size = f.env ? Math.max(f.env[2] - f.env[0], f.env[3] - f.env[1]) : 0;
     const tol = 1e-6 + size * 0.01; // OGR tessellates arcs/curves, so allow 1% on curved items
-    const idx = model.entities.findIndex((e, i) => {
+    const idx = ents.findIndex((e, i) => {
       if (used.has(i)) return false;
       if (e.layer !== 'Level ' + f.level) return false;
       if (f.rgb && hex(e.rgb) !== f.rgb) return false;
@@ -44,7 +46,7 @@ function compareWithOgr(name) {
     });
     assert.ok(idx >= 0, `${name}: no match for OGR feature type ${f.type} level ${f.level} env ${f.env.map((v) => v.toFixed(3))}`);
     used.add(idx);
-    const e = model.entities[idx];
+    const e = ents[idx];
     if (f.points && e.type === 'line') {
       assert.ok(near(e.a[0], f.points[0][0]) && near(e.a[1], f.points[0][1]) && near(e.b[0], f.points.at(-1)[0]) && near(e.b[1], f.points.at(-1)[1]));
     } else if (f.points && e.type === 'polyline') {
@@ -58,13 +60,13 @@ function compareWithOgr(name) {
     }
     if (f.size != null) assert.ok(near(e.h, f.size, 1e-3), 'text size');
   }
-  assert.equal(used.size, model.entities.length, `${name}: every JS entity is matched by an OGR feature`);
+  assert.equal(used.size, ents.length, `${name}: every JS entity is matched by an OGR feature`);
   return { model, oracle };
 }
 
 test('site plan matches OGR element-for-element (geometry, levels, colours, text)', () => {
   const { model, oracle } = compareWithOgr('site-plan.dgn');
-  assert.equal(oracle.features.length, model.entities.length);
+  assert.equal(oracle.features.length, flatEntities(model.entities).length);
   const road = model.entities.find((e) => e.text === 'ACCESS ROAD');
   assert.ok(near((road.rot * 180) / Math.PI, -4, 1e-9), 'generator wrote -4 degrees');
   assert.ok(near(road.h, 1.2, 1e-6));
@@ -121,7 +123,7 @@ test('site plan: arcs, ellipse, curve, complex chain/shape, text node, deleted e
   assert.ok(texts(scene).some((t) => t.s === 'NOTE: SYNTHETIC SITE'));
   assert.ok(texts(scene).some((t) => t.s === 'NOT A REAL LOCATION'));
   // deleted element is not shown
-  assert.ok(!model.entities.some((e) => e.layer === 'Level 12'));
+  assert.ok(!flatEntities(model.entities).some((e) => e.layer === 'Level 12'));
   // conics in the scene reproduce the ellipse exactly
   const sc = conics(scene).find((c) => near(c.c[0], 72) && near(c.c[1], 8));
   assert.ok(sc && near(Math.hypot(...sc.u), 6));
@@ -143,12 +145,15 @@ test('site plan: cell headers (type 2) expose their placement transform; compone
   // the NORTH arrow tip (0,3) placed with S(1.5,1) R30 at (90,50)
   const a = Math.PI / 6;
   const tip = [90 - Math.sin(a) * 3, 50 + Math.cos(a) * 3];
-  const north = model.entities.find((e) => e.layer === 'Level 11');
+  const north = flatEntities(model.entities).find((e) => e.layer === 'Level 11' && e.type !== 'cell');
   const has = [];
   for (let i = 0; i < north.pts.length; i += 2) has.push([north.pts[i], north.pts[i + 1]]);
   assert.ok(has.some((p) => near(p[0], tip[0], 1e-3) && near(p[1], tip[1], 1e-3)), 'cell component at its placed position');
-  // components remember their cell for hover info
+  // components remember their cell for hover info; the cell is one top-level item holding them
   assert.ok(north.group != null);
+  const cellEnt = model.entities.find((e) => e.type === 'cell' && e.name === 'NORTH');
+  assert.ok(cellEnt && cellEnt.children.includes(north), 'cell entity holds its components');
+  assert.equal(model.entities.filter((e) => e.type === 'cell').length, o.cells.length, 'one top-level item per cell');
 });
 
 test('default palette (no colour table) matches OGR, imperial units', () => {

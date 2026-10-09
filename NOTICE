@@ -1,0 +1,53 @@
+Linework
+Copyright (C) 2026 Dillon Green and contributors.
+Licensed under the GNU General Public License version 3 (see LICENSE).
+
+This product includes work derived from third-party software:
+
+------------------------------------------------------------------------------
+GDAL/OGR  (https://gdal.org)  -  MIT/X licence
+------------------------------------------------------------------------------
+* src/formats/dgn.js re-implements, in JavaScript, the DGN v7 (ISFF) element
+  decoding logic of GDAL's "dgnlib" (ogr/ogrsf_frmts/dgn), originally written by
+  Frank Warmerdam: element header layout, TCB working units and global origin,
+  VAX D-float decoding, colour table handling, arc/ellipse/text/cell/complex
+  element layouts. No GDAL source code is included verbatim.
+* src/palettes.js contains two colour tables (the 256-entry DXF colour index
+  table and the default DGN v7 colour table) obtained by running GDAL's OGR DXF
+  and DGN readers on synthetic files (tools/extract_palettes.py).
+* Test oracles in tests/fixtures/*.ogr.json are produced by GDAL's OGR DGN
+  reader, and synthetic test drawings are created with GDAL's OGR DGN writer.
+
+GDAL/OGR is Copyright (c) the GDAL/OGR project contributors, including
+Frank Warmerdam and Even Rouault. Licence text:
+
+  Permission is hereby granted, free of charge, to any person obtaining a
+  copy of this software and associated documentation files (the "Software"),
+  to deal in the Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, sublicense,
+  and/or sell copies of the Software, and to permit persons to whom the
+  Software is furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included
+  in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+  OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+------------------------------------------------------------------------------
+File formats
+------------------------------------------------------------------------------
+The DXF reader (src/formats/dxf.js) was written from the publicly published
+DXF reference. No vendor software was decompiled, disassembled or copied.
+"DXF" and "DGN" are used only to name the file formats this app opens.
+
+------------------------------------------------------------------------------
+Not bundled
+------------------------------------------------------------------------------
+Playwright (Apache-2.0) is used only to run the end-to-end tests and to render
+the PNG app icons; it is not part of the app and is not redistributed.

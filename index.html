@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Linework · CAD drawing viewer &amp; markup</title>
+<meta name="description" content="Open, measure and mark up DXF and DGN v7 drawings in your browser. Files never leave your device. Works offline.">
+<meta name="theme-color" content="#16191e">
+<meta name="color-scheme" content="dark light">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+<script type="module" src="src/app.js"></script>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 24 24"><path d="M3 20 L10 4 L14 13 L17 8 L21 20 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="10" cy="4" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5V18a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-pan" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-zoombox" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15 15l5.5 5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 10.5h5M10.5 8v5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="8.5" y="8.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5Z M3 12.5l9 5 9-5 M3 16.5l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor"/></symbol>
+    <symbol id="i-distance" viewBox="0 0 24 24"><path d="M4 18 20 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="4" cy="18" r="2" fill="currentColor"/><circle cx="20" cy="6" r="2" fill="currentColor"/></symbol>
+    <symbol id="i-length" viewBox="0 0 24 24"><path d="M3 18l5-9 6 5 7-9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="3" cy="18" r="1.6" fill="currentColor"/><circle cx="8" cy="9" r="1.6" fill="currentColor"/><circle cx="14" cy="14" r="1.6" fill="currentColor"/><circle cx="21" cy="5" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-area" viewBox="0 0 24 24"><path d="M4 18 6 6l9-2 5 8-6 7Z" fill="currentColor" fill-opacity=".25" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-snap" viewBox="0 0 24 24"><rect x="8" y="8" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-clear" viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-select" viewBox="0 0 24 24"><path d="M6 3l12 9-5.5 1L15 20l-2.5 1-2.6-6.6L6 18Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19Z M14 7l3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-line" viewBox="0 0 24 24"><path d="M4 20 20 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 20 19 5M11 5h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-ellipse" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M5 9a2.5 2.5 0 0 1 4-2 2.5 2.5 0 0 1 4.5 0 2.5 2.5 0 0 1 4.5 1.5 2.5 2.5 0 0 1 1 4.5 2.5 2.5 0 0 1-2 4 2.5 2.5 0 0 1-4.5 1 2.5 2.5 0 0 1-4.5 0 2.5 2.5 0 0 1-4-2.5A2.5 2.5 0 0 1 3 12a2.5 2.5 0 0 1 2-3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-callout" viewBox="0 0 24 24"><rect x="9" y="3" width="12" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 6.5h6M12 9h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M10 11 4 20" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="4" cy="20" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-highlight" viewBox="0 0 24 24"><path d="M14 4l6 6-8 8H6v-6Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3 21h10" stroke="currentColor" stroke-width="3" stroke-opacity=".5" stroke-linecap="round"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M4 12h10a6 6 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -3)"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H10a6 6 0 0 0 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -3)"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 19h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-load" viewBox="0 0 24 24"><path d="M12 15V4M7 9l5-5 5 5M5 19h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3 16l5-5 4 4 3-3 6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="16" cy="9" r="1.5" fill="currentColor"/></symbol>
+    <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 9V3h10v6M7 17H4v-7h16v7h-3M7 14h10v7H7Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7v.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="currentColor"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<a class="skip" href="#stage">Skip to drawing</a>
+
+<header class="topbar">
+  <div class="brand" aria-label="Linework"><svg class="ic" aria-hidden="true"><use href="#i-logo"/></svg><span data-app-name>Linework</span></div>
+  <button type="button" class="btn primary" id="btn-open" title="Open a DXF or DGN drawing (Ctrl+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open</span></button>
+  <div class="docinfo" id="docinfo" hidden>
+    <span class="docname" id="doc-name"></span>
+    <span class="chip" id="doc-units" title="Drawing units"></span>
+  </div>
+  <span class="privacy" title="Drawings are read inside this browser tab. Nothing is uploaded to any server."><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg><span>Stays on this device</span></span>
+  <span class="spacer"></span>
+  <button type="button" class="btn hide-sm" id="btn-export" title="Save the current view (with markups) as a PNG image" disabled><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg><span>Export PNG</span></button>
+  <button type="button" class="btn hide-sm" id="btn-print" title="Print or save as PDF (Ctrl+P)" disabled><svg class="ic" aria-hidden="true"><use href="#i-print"/></svg><span>Print / PDF</span></button>
+  <button type="button" class="btn icon" id="btn-help" title="Help and keyboard shortcuts (?)" aria-label="Help and keyboard shortcuts"><svg class="ic" aria-hidden="true"><use href="#i-help"/></svg></button>
+  <button type="button" class="btn icon show-sm" id="btn-more" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><svg class="ic" aria-hidden="true"><use href="#i-more"/></svg></button>
+  <div class="menu" id="menu-more" role="menu" hidden>
+    <button type="button" role="menuitem" data-action="export"><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg>Export PNG</button>
+    <button type="button" role="menuitem" data-action="print"><svg class="ic" aria-hidden="true"><use href="#i-print"/></svg>Print / PDF</button>
+  </div>
+</header>
+
+<nav class="ribbon" aria-label="Tools">
+  <div class="tabs" role="tablist" aria-label="Tool groups">
+    <button type="button" role="tab" id="tab-view" aria-controls="panel-view" aria-selected="true" data-tab="view">View</button>
+    <button type="button" role="tab" id="tab-measure" aria-controls="panel-measure" aria-selected="false" data-tab="measure" tabindex="-1">Measure</button>
+    <button type="button" role="tab" id="tab-markup" aria-controls="panel-markup" aria-selected="false" data-tab="markup" tabindex="-1">Markup</button>
+  </div>
+  <div class="tools" role="tabpanel" id="panel-view" aria-labelledby="tab-view" data-panel="view">
+    <button type="button" class="tool" data-tool="pan" aria-pressed="true" title="Pan: drag to move around. Wheel zooms. (H)"><svg class="ic" aria-hidden="true"><use href="#i-pan"/></svg><span>Pan</span></button>
+    <button type="button" class="tool" data-tool="zoombox" aria-pressed="false" title="Zoom to a box: drag a rectangle (Z)"><svg class="ic" aria-hidden="true"><use href="#i-zoombox"/></svg><span>Zoom box</span></button>
+    <button type="button" class="tool" data-action="fit" title="Fit the whole drawing (F)"><svg class="ic" aria-hidden="true"><use href="#i-fit"/></svg><span>Fit</span></button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" class="tool" data-action="layers" aria-pressed="false" id="btn-layers" title="Show or hide layers (L)"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg><span>Layers</span></button>
+    <button type="button" class="tool" data-action="theme" id="btn-theme" title="Switch between a dark CAD background and white paper (B)"><svg class="ic" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-label">Paper</span></button>
+  </div>
+  <div class="tools" role="tabpanel" id="panel-measure" aria-labelledby="tab-measure" data-panel="measure" hidden>
+    <button type="button" class="tool" data-tool="distance" aria-pressed="false" title="Distance between two points (D)"><svg class="ic" aria-hidden="true"><use href="#i-distance"/></svg><span>Distance</span></button>
+    <button type="button" class="tool" data-tool="length" aria-pressed="false" title="Length along a path: click points, double-click or Enter to finish (G)"><svg class="ic" aria-hidden="true"><use href="#i-length"/></svg><span>Length</span></button>
+    <button type="button" class="tool" data-tool="area" aria-pressed="false" title="Area of a shape: click corners, double-click or Enter to finish (A)"><svg class="ic" aria-hidden="true"><use href="#i-area"/></svg><span>Area</span></button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" class="tool" data-action="snap" id="btn-snap" aria-pressed="true" title="Snap to ends, middles, centres and crossings (S)"><svg class="ic" aria-hidden="true"><use href="#i-snap"/></svg><span>Snap</span></button>
+    <label class="field" title="Decimal places for measurements"><span>Decimals</span>
+      <select id="sel-precision" aria-label="Decimal places">
+        <option>0</option><option>1</option><option selected>2</option><option>3</option><option>4</option><option>6</option>
+      </select>
+    </label>
+    <button type="button" class="tool" data-action="clear-measure" title="Remove all measurements"><svg class="ic" aria-hidden="true"><use href="#i-clear"/></svg><span>Clear</span></button>
+  </div>
+  <div class="tools" role="tabpanel" id="panel-markup" aria-labelledby="tab-markup" data-panel="markup" hidden>
+    <button type="button" class="tool" data-tool="select" aria-pressed="false" title="Select, move or delete markups (V)"><svg class="ic" aria-hidden="true"><use href="#i-select"/></svg><span>Select</span></button>
+    <button type="button" class="tool" data-tool="pen" aria-pressed="false" title="Freehand pen (P)"><svg class="ic" aria-hidden="true"><use href="#i-pen"/></svg><span>Pen</span></button>
+    <button type="button" class="tool" data-tool="line" aria-pressed="false" title="Straight line: drag (N)"><svg class="ic" aria-hidden="true"><use href="#i-line"/></svg><span>Line</span></button>
+    <button type="button" class="tool" data-tool="arrow" aria-pressed="false" title="Arrow: drag from tail to tip (W)"><svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg><span>Arrow</span></button>
+    <button type="button" class="tool" data-tool="rect" aria-pressed="false" title="Rectangle: drag corner to corner (R)"><svg class="ic" aria-hidden="true"><use href="#i-rect"/></svg><span>Box</span></button>
+    <button type="button" class="tool" data-tool="ellipse" aria-pressed="false" title="Ellipse: drag corner to corner (O)"><svg class="ic" aria-hidden="true"><use href="#i-ellipse"/></svg><span>Ellipse</span></button>
+    <button type="button" class="tool" data-tool="cloud" aria-pressed="false" title="Revision cloud: drag a box, or click corners and double-click to finish (C)"><svg class="ic" aria-hidden="true"><use href="#i-cloud"/></svg><span>Cloud</span></button>
+    <button type="button" class="tool" data-tool="callout" aria-pressed="false" title="Text callout: press on the item, drag to where the note goes, then type (T)"><svg class="ic" aria-hidden="true"><use href="#i-callout"/></svg><span>Callout</span></button>
+    <button type="button" class="tool" data-tool="highlight" aria-pressed="false" title="Highlighter (K)"><svg class="ic" aria-hidden="true"><use href="#i-highlight"/></svg><span>Highlight</span></button>
+    <span class="sep" aria-hidden="true"></span>
+    <div class="swatches" role="radiogroup" aria-label="Markup colour" id="swatches">
+      <button type="button" role="radio" class="swatch" data-color="#e5262b" aria-checked="true" aria-label="Red" title="Red"></button>
+      <button type="button" role="radio" class="swatch" data-color="#f08c00" aria-checked="false" aria-label="Orange" title="Orange"></button>
+      <button type="button" role="radio" class="swatch" data-color="#ffd400" aria-checked="false" aria-label="Yellow" title="Yellow"></button>
+      <button type="button" role="radio" class="swatch" data-color="#2f9e44" aria-checked="false" aria-label="Green" title="Green"></button>
+      <button type="button" role="radio" class="swatch" data-color="#1f6feb" aria-checked="false" aria-label="Blue" title="Blue"></button>
+      <button type="button" role="radio" class="swatch" data-color="#c2255c" aria-checked="false" aria-label="Magenta" title="Magenta"></button>
+      <label class="swatch custom" title="Custom colour"><span class="sr">Custom colour</span><input type="color" id="inp-color" value="#e5262b"></label>
+    </div>
+    <label class="field" title="Line width"><span>Width</span>
+      <select id="sel-width" aria-label="Line width">
+        <option value="1">Thin</option><option value="2" selected>Normal</option><option value="3">Bold</option><option value="5">Heavy</option>
+      </select>
+    </label>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" class="tool" data-action="undo" id="btn-undo" title="Undo (Ctrl+Z)" disabled><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
+    <button type="button" class="tool" data-action="redo" id="btn-redo" title="Redo (Ctrl+Y)" disabled><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span>Redo</span></button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" class="tool" data-action="save-markup" id="btn-save-markup" title="Save markups to a .markup.json file next to the drawing (Ctrl+S)"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg><span>Save</span></button>
+    <button type="button" class="tool" data-action="load-markup" title="Load markups from a .markup.json file"><svg class="ic" aria-hidden="true"><use href="#i-load"/></svg><span>Load</span></button>
+    <label class="field author" title="Your name is stored with each markup"><span>Your name</span><input type="text" id="inp-author" autocomplete="name" placeholder="Name" maxlength="60"></label>
+  </div>
+</nav>
+
+<main class="workspace">
+  <div class="stage" id="stage" tabindex="-1">
+    <canvas id="cv-drawing" aria-hidden="true"></canvas>
+    <canvas id="cv-overlay" role="img" aria-label="Drawing canvas. Open a drawing to begin."></canvas>
+
+    <section class="empty" id="empty" aria-labelledby="empty-title">
+      <div class="empty-card">
+        <svg class="ic hero" aria-hidden="true"><use href="#i-logo"/></svg>
+        <h1 id="empty-title">Open a CAD drawing</h1>
+        <p class="lead">View, measure and mark up <strong>DXF</strong> and <strong>DGN v7</strong> drawings in your browser.</p>
+        <button type="button" class="btn primary big" id="btn-open-empty"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg>Open a drawing…</button>
+        <p class="hint">or drag a file anywhere onto this window</p>
+        <p class="promise"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg><span><strong>Your files never leave this device.</strong> Nothing is uploaded — the drawing is read inside this browser tab, and it keeps working offline.</span></p>
+        <h2>No file handy? Try a sample</h2>
+        <div class="samples">
+          <button type="button" class="sample" data-sample="samples/house-plan.dxf"><strong>House floor plan</strong><span>DXF · walls, doors, dimensions</span></button>
+          <button type="button" class="sample" data-sample="samples/bracket.dxf"><strong>Machined bracket</strong><span>DXF · views, hatching, title block</span></button>
+          <button type="button" class="sample" data-sample="samples/schematic.dxf"><strong>Wiring schematic</strong><span>DXF R12 · symbols and labels</span></button>
+          <button type="button" class="sample" data-sample="samples/site-plan.dgn"><strong>Site plan</strong><span>DGN v7 · levels, cells, curves</span></button>
+          <button type="button" class="sample" data-sample="stress"><strong>Stress test</strong><span>DXF · 53,100 items, generated</span></button>
+        </div>
+        <p class="formats">Opens DXF (ASCII, R12 to 2018) and DGN v7. DWG support is coming — export to DXF for now.</p>
+      </div>
+    </section>
+
+    <div class="tool-hint" id="tool-hint" hidden></div>
+    <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+    <div class="progress" id="progress" hidden role="status" aria-live="polite">
+      <div class="progress-label" id="progress-label">Opening…</div>
+      <div class="bar"><div class="fill" id="progress-fill"></div></div>
+    </div>
+
+    <div class="card measure-card" id="measure-card" hidden aria-live="polite">
+      <div class="mc-head"><span id="mc-title">Distance</span>
+        <button type="button" class="btn icon sm" id="btn-copy-measure" title="Copy value" aria-label="Copy measurement"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg></button>
+      </div>
+      <div class="mc-value" id="mc-value">—</div>
+      <div class="mc-detail" id="mc-detail"></div>
+      <div class="mc-hint" id="mc-hint"></div>
+    </div>
+
+    <div class="finish-bar" id="finish-bar" hidden>
+      <button type="button" class="btn" id="btn-undo-point">Undo point</button>
+      <button type="button" class="btn primary" id="btn-finish"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>Finish</button>
+      <button type="button" class="btn" id="btn-cancel-draft">Cancel</button>
+    </div>
+
+    <div class="text-editor" id="text-editor" hidden>
+      <label for="ta-callout" class="sr">Callout text</label>
+      <textarea id="ta-callout" rows="2" placeholder="Type a note…"></textarea>
+      <div class="te-actions"><span class="te-hint">Enter to place · Shift+Enter new line · Esc cancel</span><button type="button" class="btn primary sm" id="btn-te-ok">Place</button></div>
+    </div>
+  </div>
+
+  <aside class="panel" id="layers-panel" hidden aria-labelledby="layers-title">
+    <div class="panel-head">
+      <h2 id="layers-title">Layers <span class="count" id="layers-count"></span></h2>
+      <button type="button" class="btn icon sm" id="btn-close-layers" aria-label="Close layers" title="Close"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="panel-tools">
+      <input type="search" id="layer-filter" placeholder="Filter layers" aria-label="Filter layers">
+      <button type="button" class="btn sm" id="btn-layers-all">Show all</button>
+    </div>
+    <ul class="layer-list" id="layer-list" aria-label="Layer visibility"></ul>
+  </aside>
+</main>
+
+<footer class="statusbar" aria-label="Status">
+  <span class="st coords" id="st-coords" title="Cursor position in drawing units">X — Y —</span>
+  <span class="st" id="st-snap"></span>
+  <span class="st info" id="st-info"></span>
+  <span class="spacer"></span>
+  <span class="st hide-sm" id="st-zoom"></span>
+  <span class="st hide-sm" id="st-perf"></span>
+</footer>
+
+<div class="drop-overlay" id="drop-overlay" hidden><div>Drop the drawing to open it<small>DXF · DGN v7 · or a .markup.json file</small></div></div>
+
+<dialog id="dlg-help" aria-labelledby="help-title">
+  <form method="dialog" class="dlg">
+    <div class="dlg-head"><h2 id="help-title">Help &amp; keyboard shortcuts</h2><button class="btn icon sm" value="close" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    <div class="dlg-body help-grid">
+      <section><h3>Get around</h3>
+        <dl>
+          <dt>Drag</dt><dd>Pan (Pan tool) — middle mouse or Space+drag always pans</dd>
+          <dt>Wheel / pinch</dt><dd>Zoom at the cursor</dd>
+          <dt><kbd>F</kbd></dt><dd>Fit the whole drawing</dd>
+          <dt><kbd>Z</kbd></dt><dd>Zoom to a box</dd>
+          <dt><kbd>+</kbd> <kbd>−</kbd></dt><dd>Zoom in / out</dd>
+          <dt><kbd>H</kbd></dt><dd>Pan tool</dd>
+          <dt><kbd>L</kbd></dt><dd>Layers panel</dd>
+          <dt><kbd>B</kbd></dt><dd>Dark background / white paper</dd>
+        </dl>
+      </section>
+      <section><h3>Measure</h3>
+        <dl>
+          <dt><kbd>D</kbd></dt><dd>Distance between two points</dd>
+          <dt><kbd>G</kbd></dt><dd>Length along a path</dd>
+          <dt><kbd>A</kbd></dt><dd>Area of a shape</dd>
+          <dt><kbd>S</kbd></dt><dd>Snap on / off</dd>
+          <dt><kbd>Enter</kbd> / double-click</dt><dd>Finish a length or area</dd>
+          <dt><kbd>Backspace</kbd></dt><dd>Remove the last point</dd>
+        </dl>
+      </section>
+      <section><h3>Mark up</h3>
+        <dl>
+          <dt><kbd>V</kbd></dt><dd>Select, drag to move, <kbd>Delete</kbd> to remove</dd>
+          <dt><kbd>P</kbd> <kbd>N</kbd> <kbd>W</kbd></dt><dd>Pen, line, arrow</dd>
+          <dt><kbd>R</kbd> <kbd>O</kbd> <kbd>C</kbd></dt><dd>Box, ellipse, revision cloud</dd>
+          <dt><kbd>T</kbd> <kbd>K</kbd></dt><dd>Text callout, highlighter</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></dt><dd>Undo / redo</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>S</kbd></dt><dd>Save markups (.markup.json)</dd>
+        </dl>
+      </section>
+      <section><h3>Files</h3>
+        <dl>
+          <dt><kbd>Ctrl</kbd>+<kbd>O</kbd></dt><dd>Open a drawing (or drop it on the window)</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>P</kbd></dt><dd>Print or save as PDF</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Cancel / back to Pan</dd>
+          <dt><kbd>?</kbd></dt><dd>This help</dd>
+        </dl>
+        <p class="note">Your drawings and markups stay on this device. Markups are saved as a small <code>.markup.json</code> file you keep next to the drawing; they are also kept in this browser until you clear them.</p>
+        <p class="note" id="about-line"></p>
+      </section>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-print" aria-labelledby="print-title">
+  <form method="dialog" class="dlg" id="print-form">
+    <div class="dlg-head"><h2 id="print-title">Print or save as PDF</h2><button class="btn icon sm" value="cancel" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    <div class="dlg-body form-grid">
+      <label>Title<input type="text" name="title" id="pr-title"></label>
+      <label>Author<input type="text" name="author" id="pr-author"></label>
+      <fieldset><legend>Orientation</legend>
+        <label class="radio"><input type="radio" name="orient" value="landscape" checked> Landscape</label>
+        <label class="radio"><input type="radio" name="orient" value="portrait"> Portrait</label>
+      </fieldset>
+      <fieldset><legend>What to print</legend>
+        <label class="radio"><input type="radio" name="area" value="view" checked> Current view</label>
+        <label class="radio"><input type="radio" name="area" value="all"> Whole drawing</label>
+      </fieldset>
+      <label class="check"><input type="checkbox" name="markups" checked> Include markups and measurements</label>
+      <p class="note">Tip: choose “Save as PDF” as the printer to make a PDF. Prints are not to scale.</p>
+    </div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="print" id="btn-do-print"><svg class="ic" aria-hidden="true"><use href="#i-print"/></svg>Print…</button></div>
+  </form>
+</dialog>
+
+<input type="file" id="file-input" accept=".dxf,.dgn,.dwg,.json,application/dxf,image/vnd.dxf" hidden>
+<input type="file" id="markup-input" accept=".json,application/json" hidden>
+<div id="print-root" aria-hidden="true"></div>
+<noscript><p class="noscript">This app needs JavaScript. It runs entirely in your browser; nothing is uploaded.</p></noscript>
+</body>
+</html>

@@ -1,0 +1,623 @@
+{
+ "features": [
+  {
+   "type": 6,
+   "level": 1,
+   "color": 3,
+   "rgb": "e62828",
+   "env": [
+    0.0,
+    0.0,
+    86.0,
+    58.0
+   ],
+   "geom": "POLYGON"
+  },
+  {
+   "type": 6,
+   "level": 2,
+   "color": 0,
+   "rgb": "ffffff",
+   "env": [
+    15.0,
+    12.0,
+    45.0,
+    30.0
+   ],
+   "geom": "POLYGON"
+  },
+  {
+   "type": 6,
+   "level": 2,
+   "color": 0,
+   "rgb": "ffffff",
+   "env": [
+    50.0,
+    20.0,
+    68.0,
+    38.0
+   ],
+   "geom": "POLYGON"
+  },
+  {
+   "type": 12,
+   "level": 3,
+   "color": 4,
+   "rgb": "fad200",
+   "env": [
+    -5.0,
+    -8.999900000000004,
+    91.85,
+    -3.0001999999999995
+   ],
+   "geom": "MULTILINESTRING"
+  },
+  {
+   "type": 14,
+   "level": 3,
+   "color": 4,
+   "rgb": "fad200",
+   "env": [
+    87.0,
+    -14.0,
+    103.0,
+    2.0
+   ],
+   "geom": "POLYGON"
+  },
+  {
+   "type": 4,
+   "level": 4,
+   "color": 6,
+   "rgb": "ff8c00",
+   "env": [
+    0.0,
+    -2.0,
+    40.0,
+    0.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     -2.0
+    ],
+    [
+     40.0,
+     -2.0
+    ],
+    [
+     40.0,
+     0.0
+    ]
+   ]
+  },
+  {
+   "type": 17,
+   "level": 6,
+   "color": 7,
+   "rgb": "00c8dc",
+   "env": [
+    20.0,
+    20.0,
+    20.0,
+    20.0
+   ],
+   "geom": "POINT",
+   "text": "MAIN HALL",
+   "size": 2.0
+  },
+  {
+   "type": 17,
+   "level": 6,
+   "color": 7,
+   "rgb": "00c8dc",
+   "env": [
+    55.0,
+    28.0,
+    55.0,
+    28.0
+   ],
+   "geom": "POINT",
+   "text": "STORE",
+   "size": 1.5,
+   "angle": 90.0
+  },
+  {
+   "type": 17,
+   "level": 6,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    30.0,
+    -5.0,
+    30.0,
+    -5.0
+   ],
+   "geom": "POINT",
+   "text": "ACCESS ROAD",
+   "size": 1.2,
+   "angle": -3.0
+  },
+  {
+   "type": 3,
+   "level": 5,
+   "color": 1,
+   "rgb": "285aff",
+   "env": [
+    0.0,
+    0.0,
+    86.0,
+    52.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     86.0,
+     52.0
+    ]
+   ]
+  },
+  {
+   "type": 3,
+   "level": 5,
+   "color": 1,
+   "rgb": "285aff",
+   "env": [
+    4.0,
+    0.0,
+    80.0,
+    58.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     80.0,
+     0.0
+    ],
+    [
+     4.0,
+     58.0
+    ]
+   ]
+  },
+  {
+   "type": 16,
+   "level": 7,
+   "color": 4,
+   "rgb": "fad200",
+   "env": [
+    34.0,
+    39.0,
+    46.0,
+    45.0
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 16,
+   "level": 7,
+   "color": 5,
+   "rgb": "c83cc8",
+   "env": [
+    70.0,
+    47.0,
+    73.0,
+    50.0
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 15,
+   "level": 7,
+   "color": 1,
+   "rgb": "285aff",
+   "env": [
+    66.41929844676659,
+    4.284413421451916,
+    77.58070155323341,
+    11.715586578548084
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 11,
+   "level": 8,
+   "color": 1,
+   "rgb": "285aff",
+   "env": [
+    0.0,
+    30.0,
+    12.0,
+    35.0
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 17,
+   "level": 9,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    2.0,
+    50.0,
+    2.0,
+    50.0
+   ],
+   "geom": "POINT",
+   "text": "NOTE: SYNTHETIC SITE",
+   "size": 1.0
+  },
+  {
+   "type": 17,
+   "level": 9,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    2.0,
+    48.5,
+    2.0,
+    48.5
+   ],
+   "geom": "POINT",
+   "text": "NOT A REAL LOCATION",
+   "size": 1.0
+  },
+  {
+   "type": 15,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    6.8,
+    38.8,
+    9.2,
+    41.2
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    6.799999999999997,
+    40.0,
+    9.199999999999996,
+    40.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     6.799999999999997,
+     40.0
+    ],
+    [
+     9.199999999999996,
+     40.0
+    ]
+   ]
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    8.0,
+    38.8,
+    8.0,
+    41.2
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     8.0,
+     38.8
+    ],
+    [
+     8.0,
+     41.2
+    ]
+   ]
+  },
+  {
+   "type": 15,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    10.2,
+    42.2,
+    13.8,
+    45.8
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    10.441199999999995,
+    43.1,
+    13.558799999999998,
+    44.9
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     10.441199999999995,
+     43.1
+    ],
+    [
+     13.558799999999998,
+     44.9
+    ]
+   ]
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    11.100000000000001,
+    42.4412,
+    12.899999999999999,
+    45.5588
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     12.899999999999999,
+     42.4412
+    ],
+    [
+     11.100000000000001,
+     45.5588
+    ]
+   ]
+  },
+  {
+   "type": 15,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    74.04,
+    44.04,
+    75.96,
+    45.96
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    74.3212,
+    44.3212,
+    75.6788,
+    45.6788
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     74.3212,
+     44.3212
+    ],
+    [
+     75.6788,
+     45.6788
+    ]
+   ]
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    74.3212,
+    44.3212,
+    75.6788,
+    45.6788
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     75.6788,
+     44.3212
+    ],
+    [
+     74.3212,
+     45.6788
+    ]
+   ]
+  },
+  {
+   "type": 15,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    28.8,
+    3.8,
+    31.2,
+    6.2
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    28.8,
+    5.0,
+    31.2,
+    5.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     28.8,
+     5.0
+    ],
+    [
+     31.2,
+     5.0
+    ]
+   ]
+  },
+  {
+   "type": 3,
+   "level": 10,
+   "color": 2,
+   "rgb": "1ebe46",
+   "env": [
+    30.0,
+    3.799999999999997,
+    30.0,
+    6.199999999999996
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     30.0,
+     3.799999999999997
+    ],
+    [
+     30.0,
+     6.199999999999996
+    ]
+   ]
+  },
+  {
+   "type": 6,
+   "level": 11,
+   "color": 0,
+   "rgb": "ffffff",
+   "env": [
+    88.5,
+    47.1429,
+    92.9486,
+    52.5981
+   ],
+   "geom": "POLYGON"
+  }
+ ],
+ "cells": [
+  {
+   "name": "TREE",
+   "origin": [
+    8,
+    40
+   ],
+   "scale": 1.0,
+   "rotation": 0
+  },
+  {
+   "name": "TREE",
+   "origin": [
+    12,
+    44
+   ],
+   "scale": 1.5,
+   "rotation": 30
+  },
+  {
+   "name": "TREE",
+   "origin": [
+    75,
+    45
+   ],
+   "scale": 0.8,
+   "rotation": 45
+  },
+  {
+   "name": "TREE",
+   "origin": [
+    30,
+    5
+   ],
+   "scale": 1.0,
+   "rotation": 0
+  },
+  {
+   "name": "NORTH",
+   "origin": [
+    90,
+    50
+   ],
+   "xscale": 1.5,
+   "yscale": 1.0,
+   "rotation": 30
+  }
+ ],
+ "uor_per_master": 10000,
+ "origin": [
+  -50,
+  -40
+ ],
+ "master": "m",
+ "sub": "mm",
+ "palette": [
+  "ffffff",
+  "285aff",
+  "1ebe46",
+  "e62828",
+  "fad200",
+  "c83cc8",
+  "ff8c00",
+  "00c8dc"
+ ],
+ "raw": {
+  "arcs": [
+   {
+    "c": [
+     40,
+     45
+    ],
+    "r": 6,
+    "start": 180,
+    "sweep": 180
+   },
+   {
+    "c": [
+     70,
+     47
+    ],
+    "r": 3,
+    "start": 90,
+    "sweep": -90
+   }
+  ],
+  "ellipse": {
+   "c": [
+    72,
+    8
+   ],
+   "r1": 6,
+   "r2": 3,
+   "rot": 25
+  },
+  "deleted": 1,
+  "textnode": 1,
+  "curve_points": 8
+ }
+}

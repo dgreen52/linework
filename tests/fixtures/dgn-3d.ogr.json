@@ -1,0 +1,60 @@
+{
+ "features": [
+  {
+   "type": 4,
+   "level": 1,
+   "color": 3,
+   "rgb": "ff0000",
+   "env": [
+    0.0,
+    0.0,
+    10.0,
+    10.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     10.0,
+     0.0
+    ],
+    [
+     10.0,
+     10.0
+    ]
+   ]
+  },
+  {
+   "type": 6,
+   "level": 2,
+   "color": 2,
+   "rgb": "00ff00",
+   "env": [
+    0.0,
+    0.0,
+    5.0,
+    5.0
+   ],
+   "geom": "POLYGON"
+  },
+  {
+   "type": 17,
+   "level": 3,
+   "color": 1,
+   "rgb": "0000ff",
+   "env": [
+    2.0,
+    8.0,
+    2.0,
+    8.0
+   ],
+   "geom": "POINT",
+   "text": "3D TEXT",
+   "size": 1.0
+  }
+ ],
+ "dimension": 3
+}

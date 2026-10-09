@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+node_modules/
+tests/e2e/out/
+tests/e2e/screens/*.tmp.png
+.DS_Store
+Thumbs.db
+tests/fixtures/stress-50k.dxf

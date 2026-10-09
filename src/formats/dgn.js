@@ -67,6 +67,14 @@ export function parseDgn(input, { onProgress } = {}) {
   model.units = unitsFromLabel(masterName);
   model.header = { dimension: dim, masterUnit: masterName, subUnit: subName, subPerMaster, uorPerSub, origin: [ox, oy] };
   if (dim === 3) warn(model, '3D design file: shown in top (plan) view.');
+  // Saved views (TCB bytes 46 + 118 * view): flags word (0x80 = view open), then a 64-bit level mask
+  // (bit n-1 = level n). The first open view (else view 1) decides which levels start visible, the way
+  // MicroStation opens the file.
+  let savedView = 0;
+  for (let v = 0; v < 8 && !savedView; v++) if (b[46 + v * 118] & 0x80) savedView = v + 1;
+  if (!savedView) savedView = 1;
+  const vmask = b.subarray(46 + (savedView - 1) * 118 + 2, 46 + (savedView - 1) * 118 + 10);
+  const levelOnInView = (lv) => vmask.length === 8 && !!(vmask[(lv - 1) >> 3] & (1 << ((lv - 1) & 7)));
   const X = (raw) => raw * scale - ox;
   const Y = (raw) => raw * scale - oy;
   const P = dim === 3 ? 12 : 8; // bytes per vertex
@@ -355,7 +363,16 @@ export function parseDgn(input, { onProgress } = {}) {
   }
 
   // levels -> layers (numeric order)
-  [...usedLevels].sort((a, c) => a - c).forEach((lv) => ensureLayer(model, 'Level ' + lv, 0xffffff));
+  const levels = [...usedLevels].sort((a, c) => a - c);
+  levels.forEach((lv) => ensureLayer(model, 'Level ' + lv, 0xffffff));
+  // Levels switched off in the saved view start hidden (Layers > Show all brings them back). If the mask
+  // would hide every level in use it is not trusted, and everything is shown.
+  const off = levels.filter((lv) => !levelOnInView(lv));
+  if (off.length && off.length < levels.length) {
+    for (const lv of off) ensureLayer(model, 'Level ' + lv).visible = false;
+    model.header.savedView = { view: savedView, levelsOff: off };
+    warn(model, `${off.length} level${off.length === 1 ? ' is' : 's are'} off in this drawing's saved view ${savedView}, so ${off.length === 1 ? 'it starts' : 'they start'} hidden, as in MicroStation. Layers > Show all brings ${off.length === 1 ? 'it' : 'them'} back.`);
+  }
   for (let i = 1; i <= 7; i++) model.ltypes['DGN' + i] = { name: 'DGN' + i, desc: 'DGN line style ' + i, px: DGN_STYLES[i] };
   model.stats.entities = model.entities.length;
   model.stats.elements = elementCount;

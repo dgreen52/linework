@@ -154,7 +154,7 @@ How saving works:
 | Dimensions, leaders | DIMENSION via its block (fallback drawing when the block is missing), LEADER with arrowhead | — |
 | Fills | SOLID, TRACE, HATCH (solid fill; pattern hatches as a light screen pattern) | — |
 | Points | POINT | — |
-| Layers / levels | LAYER table: colour (ACI and true colour), on/off, frozen, linetype | Levels 1–63 (swatch = most common colour) |
+| Layers / levels | LAYER table: colour (ACI and true colour), on/off, frozen, linetype | Levels 1–63 (swatch = most common colour); levels off in the saved open view start hidden |
 | Colours | ACI 256-colour table, true colour (420) | Colour table element (type 5) or the default DGN palette |
 | Line types | LTYPE dash patterns (shown at screen scale) | Line styles 0–7 |
 | Units | `$INSUNITS` | Master/sub units and UORs from the TCB, global origin |

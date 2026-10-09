@@ -1,7 +1,7 @@
 // Service worker: caches the app shell so the viewer works fully offline.
 // It never sees drawings: files opened by the user are read in the page and are not fetched.
 // When you change ANY file below, bump VERSION (tests/unit/sw.test.mjs checks the list).
-const VERSION = 'linework-0.2.0-r1';
+const VERSION = 'linework-0.2.1';
 const SHELL = [
   './',
   'index.html',

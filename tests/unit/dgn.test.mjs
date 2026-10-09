@@ -188,3 +188,33 @@ test('truncated DGN keeps elements read so far', () => {
   assert.ok(m.entities.length > 3);
   assert.ok(m.stats.warnings.some((w) => /ended/.test(w)) || m.entities.length > 0);
 });
+
+test('saved view: levels switched off in the open view start hidden, with a note; a mask that hides everything is ignored', () => {
+  const src = bytes('site-plan.dgn');
+  const levels = parseDgn(src).layers.map((l) => Number(l.name.replace('Level ', ''))).sort((a, c) => a - c);
+  assert.ok(levels.length >= 2, 'fixture uses several levels');
+  // all on in the seed: nothing hidden, no note
+  const plain = parseDgn(src);
+  assert.ok(plain.layers.every((l) => l.visible), 'all levels visible when the view shows them all');
+  assert.ok(!plain.stats.warnings.some((w) => /saved view/.test(w)));
+  // which view is open: flags word bit 0x80
+  const openView = [0, 1, 2, 3, 4, 5, 6, 7].find((v) => src[46 + v * 118] & 0x80);
+  assert.equal(openView, 0, 'seed opens view 1');
+  // switch off the first used level in view 1 (bit n-1 of the 64-bit mask at view + 2)
+  const b = src.slice();
+  const lv = levels[0];
+  b[46 + 2 + ((lv - 1) >> 3)] &= ~(1 << ((lv - 1) & 7));
+  const m = parseDgn(b);
+  for (const L of m.layers) assert.equal(L.visible, L.name !== 'Level ' + lv, L.name);
+  assert.ok(m.stats.warnings.some((w) => /1 level is off in this drawing's saved view 1/.test(w)), 'note explains it');
+  assert.deepEqual(m.header.savedView, { view: 1, levelsOff: [lv] });
+  assert.equal(m.entities.length, plain.entities.length, 'hidden, not dropped');
+  // the open view wins over view 1: open view 2 instead, whose mask still shows everything
+  const b2 = b.slice();
+  b2[46] &= ~0x80; b2[46 + 118] |= 0x80;
+  assert.ok(parseDgn(b2).layers.every((l) => l.visible), 'view 2 is the open one and shows all levels');
+  // a mask that hides every level in use is not trusted
+  const b3 = src.slice();
+  for (let k = 0; k < 8; k++) b3[46 + 2 + k] = 0;
+  assert.ok(parseDgn(b3).layers.every((l) => l.visible));
+});

@@ -1314,6 +1314,15 @@ function init() {
   $('#inp-author').value = app.author;
   setTool('pan');
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !new URLSearchParams(location.search).has('nosw')) {
+    // A new version installs in the background and takes over this page (skipWaiting + claim). The page
+    // itself is still the old code, so reload: straight away when nothing is open, otherwise ask.
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return;
+      if (!app.scene && !(edit && edit.dirty)) { reloading = true; location.reload(); return; }
+      toast('Linework was updated.', { key: 'update', timeout: 0, detail: 'Reload to use the new version.', actions: [{ label: 'Reload', onClick: () => { if (!(edit && edit.dirty) || window.confirm('The drawing has unsaved edits. Reload anyway?')) { reloading = true; location.reload(); } } }] });
+    });
     navigator.serviceWorker.register('sw.js').catch(() => { /* offline support unavailable */ });
   }
   if (location.protocol === 'file:') {

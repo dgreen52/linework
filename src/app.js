@@ -948,7 +948,11 @@ function toolDouble(sx, sy) {
     if (h && h.isText) {
       toast('Switch to Edit to change the drawing', {
         key: 'edit-hint', timeout: 6000, detail: 'View and Markup never change the drawing itself.',
-        actions: [{ label: 'Edit this text', onClick: () => { setTool('eselect'); if (edit.ready) edit.editEntity(h.ent); } }],
+        actions: [{ label: 'Edit this text', onClick: () => {
+          const t = app.scene.texts[h.id - TEXT_ID]; // a text inside a cell/insert carries its path
+          setTool('eselect');
+          if (edit.ready) edit.editEntity(h.ent, null, null, t && t.sub);
+        } }],
       });
     }
   }

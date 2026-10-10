@@ -51,6 +51,7 @@ export class Builder {
     this.texts = [];
     this.invalid = 0;
     this.curEnt = 0;
+    this.curSub = ''; // path of the component being emitted inside a cell or insert ('c3.c1', 'a2'; '#…' = shared block content)
   }
   base(k, flags, a) {
     this.kind.push(k); this.flags.push(flags); this.layer.push(a.layer); this.color.push(a.color);
@@ -274,7 +275,7 @@ export function createEmitter(model, tables) {
         const px = x + u * X[0] + v * Y[0], py = y + u * X[1] + v * Y[1];
         if (px < bb[0]) bb[0] = px; if (py < bb[1]) bb[1] = py; if (px > bb[2]) bb[2] = px; if (py > bb[3]) bb[3] = py;
       }
-      B.texts.push({ s: ln.s, x, y, m: [X[0], X[1], Y[0], Y[1]], align, fit, layer: a.layer, color: a.color, blk: a.blk, bbox: bb, ent: B.curEnt });
+      B.texts.push({ s: ln.s, x, y, m: [X[0], X[1], Y[0], Y[1]], align, fit, layer: a.layer, color: a.color, blk: a.blk, bbox: bb, ent: B.curEnt, sub: B.curSub });
     }
   }
 
@@ -287,6 +288,23 @@ export function createEmitter(model, tables) {
         addNS((e.src || e.type) + ' (error)');
       }
     }
+  }
+
+  /** walk() for the components of a cell ('c') or the attributes of an insert ('a'), recording each one's path. */
+  function walkParts(ents, kind, ctx) {
+    const up = B.curSub;
+    ents.forEach((e, k) => {
+      B.curSub = up && up[0] === '#' ? up : (up ? up + '.' : '') + kind + k;
+      walk([e], ctx);
+    });
+    B.curSub = up;
+  }
+  /** walk() for block-definition content: shared by every insert of the block, so not addressable. */
+  function walkShared(ents, ctx) {
+    const up = B.curSub;
+    B.curSub = '#' + up;
+    walk(ents, ctx);
+    B.curSub = up;
   }
 
   function walkOne(e, ctx) {
@@ -360,7 +378,7 @@ export function createEmitter(model, tables) {
         emitText(e, M, a);
         break;
       case 'cell': // DGN cell: components are stored already placed; the cell is one selectable item
-        walk(e.children || [], { ...ctx, blk: ctx.blk || blkOf(e.name || 'cell') });
+        walkParts(e.children || [], 'c', { ...ctx, blk: ctx.blk || blkOf(e.name || 'cell') });
         break;
       case 'insert':
       case 'dimension': {
@@ -384,7 +402,7 @@ export function createEmitter(model, tables) {
         if (ctx.depth >= MAX_DEPTH || ctx.stack.includes(key)) { addNS('Recursive block reference'); break; }
         const stack = [...ctx.stack, key];
         if (e.type === 'dimension') {
-          walk(blk.entities, { ...childCtxBase, M, stack });
+          walkShared(blk.entities, { ...childCtxBase, M, stack });
         } else {
           const cols = e.cols || 1, rows = e.rows || 1;
           const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
@@ -393,11 +411,11 @@ export function createEmitter(model, tables) {
               const ox = k * (e.dc || 0), oy = r * (e.dr || 0);
               const px = e.p[0] + c * ox - s * oy, py = e.p[1] + s * ox + c * oy;
               const Mi = insertMatrix(px, py, e.sx ?? 1, e.sy ?? 1, e.rot || 0, blk.base[0], blk.base[1]);
-              walk(blk.entities, { ...childCtxBase, M: M ? mul(M, Mi) : Mi, stack });
+              walkShared(blk.entities, { ...childCtxBase, M: M ? mul(M, Mi) : Mi, stack });
             }
           }
         }
-        if (e.attribs && e.attribs.length) walk(e.attribs, { ...ctx, M: ctx.M });
+        if (e.attribs && e.attribs.length) walkParts(e.attribs, 'a', { ...ctx, M: ctx.M });
         break;
       }
       default:
@@ -411,6 +429,7 @@ export function createEmitter(model, tables) {
     /** Emit one top-level entity (index i) into B. */
     emit(e, i) {
       B.curEnt = i;
+      B.curSub = '';
       if (!e || e.invisible) return;
       try {
         walkOne(e, topCtx);
@@ -688,14 +707,15 @@ export function queryRect(scene, x0, y0, x1, y1, cb) {
 export function packTexts(scene) {
   const T = scene.texts, n = T.length;
   const f = new Float64Array(n * 11), u = new Uint32Array(n * 5);
-  const strs = new Array(n);
+  const strs = new Array(n), subs = [];
   for (let i = 0; i < n; i++) {
     const t = T[i];
+    if (t.sub) subs.push(i, t.sub); // paths inside cells/inserts: sparse [index, path, ...]
     f.set([t.x, t.y, t.m[0], t.m[1], t.m[2], t.m[3], t.fit || 0, t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]], i * 11);
     u[i * 5] = t.layer; u[i * 5 + 1] = t.color; u[i * 5 + 2] = t.blk; u[i * 5 + 3] = t.align; u[i * 5 + 4] = t.ent;
     strs[i] = t.s;
   }
-  scene.textPack = { n, f, u, s: strs.join('\u0000') };
+  scene.textPack = { n, f, u, s: strs.join('\u0000'), sub: subs };
   delete scene.texts;
   return scene;
 }
@@ -708,9 +728,11 @@ export function unpackTexts(scene) {
     const o = i * 11, q = i * 5;
     texts[i] = {
       s: strs[i], x: f[o], y: f[o + 1], m: [f[o + 2], f[o + 3], f[o + 4], f[o + 5]], fit: f[o + 6],
-      bbox: [f[o + 7], f[o + 8], f[o + 9], f[o + 10]], layer: u[q], color: u[q + 1], blk: u[q + 2], align: u[q + 3], ent: u[q + 4],
+      bbox: [f[o + 7], f[o + 8], f[o + 9], f[o + 10]], layer: u[q], color: u[q + 1], blk: u[q + 2], align: u[q + 3], ent: u[q + 4], sub: '',
     };
   }
+  const subs = scene.textPack.sub || [];
+  for (let k = 0; k + 1 < subs.length; k += 2) texts[subs[k]].sub = subs[k + 1];
   scene.texts = texts;
   delete scene.textPack;
   return scene;

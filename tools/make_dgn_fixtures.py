@@ -194,13 +194,53 @@ def three_d(path):
     return {"dimension": 3}
 
 
+# --------------------------------------------------------------------------- title block (text inside cells)
+def with_attributes(elem, data):
+    """The element with attribute data appended (the header's attribute index already points past the body)."""
+    b = bytearray(elem)
+    b[32] |= 0x08                     # properties: attribute data present (0x0800)
+    words = (len(b) + len(data) - 4) // 2
+    b[2], b[3] = words & 0xFF, words >> 8
+    return bytes(b) + bytes(data)
+
+
+def title_block(path):
+    ds, lyr = create(path, ["MASTER_UNIT_NAME=m", "SUB_UNIT_NAME=mm", "SUB_UNITS_PER_MASTER_UNIT=1000",
+                            "UOR_PER_SUB_UNIT=10", "ORIGIN=0,0,0"])
+    add(lyr, wkt_line([(0, 0), (90, 0), (90, 60), (0, 60), (0, 0)]), Level=1, ColorIndex=1)   # sheet border
+    add(lyr, "POINT (5 55)", style='LABEL(t:"LOOSE NOTE",s:2g)', Level=3, ColorIndex=2)
+    ds = None
+    ctx = R.Ctx(10000, (0, 0))
+    # a TITLE cell at the bottom right: frame, a divider, three text fields (one carrying attribute data)
+    # and a nested STAMP cell with its own text. Components are stored already placed.
+    stamp = [R.as_component(R.ellipse15(ctx, (84, 12), 3, 3, 0, level=4, color=3)),
+             R.as_component(R.text17(ctx, (82.5, 11.2), "OK", 1.6, level=4, color=3))]
+    comps = [
+        R.as_component(R.multipoint(6, ctx, [(50, 2), (89, 2), (89, 16), (50, 16), (50, 2)], level=4, color=1)),
+        R.as_component(R.line3(ctx, (50, 9), (79, 9), level=4, color=1)),
+        R.as_component(R.text17(ctx, (52, 11), "DRAWING TITLE", 2.0, level=4, color=2)),
+        R.as_component(with_attributes(R.text17(ctx, (52, 4), "SHEET 1 OF 2", 1.5, level=4, color=2),
+                                       b"\x07\x10\x34\x12\x01\x00\x02\x00")),
+        R.as_component(R.text17(ctx, (71, 4), "REV A", 1.5, just=14, level=4, color=2)),
+        R.as_component(R.cell2(ctx, "STAMP", (84, 12), stamp, rng=(81, 9, 87, 15), level=4, color=3)),
+    ] + stamp
+    R.append_elements(path, [R.cell2(ctx, "TITLE", (50, 2), comps, rng=(50, 2, 89, 16), level=4, color=1)] + comps)
+    return {"uor_per_master": 10000, "origin": [0, 0], "master": "m", "sub": "mm",
+            "title": {"texts": ["DRAWING TITLE", "SHEET 1 OF 2", "REV A"], "stamp_text": "OK",
+                      "attributes": "07103412010002 00".replace(" ", "")}}
+
+
 def main():
     os.makedirs(SAMPLES, exist_ok=True)
     os.makedirs(FIX, exist_ok=True)
     jobs = [(os.path.join(SAMPLES, "site-plan.dgn"), site_plan),
             (os.path.join(FIX, "dgn-default-palette.dgn"), default_palette),
-            (os.path.join(FIX, "dgn-3d.dgn"), three_d)]
+            (os.path.join(FIX, "dgn-3d.dgn"), three_d),
+            (os.path.join(FIX, "dgn-titleblock.dgn"), title_block)]
+    only = set(sys.argv[1:])  # e.g. `python tools/make_dgn_fixtures.py dgn-titleblock` rebuilds just that one
     for path, fn in jobs:
+        if only and os.path.splitext(os.path.basename(path))[0] not in only:
+            continue
         extra = fn(path)
         feats = oracle(path, extra)
         print("wrote", os.path.relpath(path, ROOT), os.path.getsize(path), "bytes,", len(feats), "OGR features")

@@ -809,12 +809,12 @@ test('edit: reshape with handles — drag, add (double-click a side), delete (ri
   await dragWorld(page, [2700, 1700], [2900, 1800]);
   const C2 = await ED.ent(page, 34);
   assert(nearPt(C2.c, [2900, 1800], 2 / s) && Math.abs(C2.r - C1.r) < 1e-9, 'centre handle moves the circle');
-  // blocks: hint, no editing inside
+  // blocks: a part that is not text gets the hint
   await page.keyboard.press('Escape');
   await page.keyboard.press('f');
   const door = await page.evaluate(() => { const a = window.__linework, s = a.scene, it = a.edit.doc.items(16); const p = it.prims[0], o = s.start[p] * 2; return [s.coords[o] + s.origin[0], s.coords[o + 1] + s.origin[1]]; });
   await page.mouse.dblclick(...(await client(page, ...door)));
-  await page.waitForFunction(() => /editing inside them is planned/.test(document.querySelector('#tool-hint').textContent));
+  await page.waitForFunction(() => /double-click a text inside one to edit it/.test(document.querySelector('#tool-hint').textContent));
   await close(page);
 });
 
@@ -832,6 +832,7 @@ test('edit: draw line (+typed length), polyline (C closes), rectangle, circle, t
   await page.click('#layer-swatches [aria-label="Green"]');
   await shot(page, 'edit-new-layer-dark-1440');
   await page.click('#btn-do-layer');
+  await page.waitForFunction(() => document.querySelector('#sel-elayer').value !== '__new');
   eq(await page.inputValue('#sel-elayer'), 'E2E NEW', 'new layer is current');
   assert(await page.evaluate(() => window.__linework.scene.layers.some((l) => l.name === 'E2E NEW' && l.color === 0x00ff00)), 'layer in the drawing, green');
   // colour for new items
@@ -1125,8 +1126,84 @@ test('edit: DGN drawing — cells move as one, colours come from the file colour
   assert(c3.children.every((k) => k.ci === 3), 'components recoloured with table entry 3');
   const on = await page.evaluate((k) => { const a = window.__linework, s = a.scene, it = a.edit.doc.items(k); const p = it.prims[0], o = s.start[p] * 2; return [s.coords[o] + s.origin[0], s.coords[o + 1] + s.origin[1]]; }, cell.i);
   await page.mouse.dblclick(...(await client(page, ...on)));
-  await page.waitForFunction(() => /editing inside them is planned/.test(document.querySelector('#tool-hint').textContent));
+  await page.waitForFunction(() => /double-click a text inside one to edit it/.test(document.querySelector('#tool-hint').textContent));
   await shot(page, 'edit-dgn-cell-dark-1440');
+  await close(page);
+});
+
+test('edit: double-click a text inside a cell (DGN title block) or a block attribute (DXF) to type over it; saved', async () => {
+  const page = await newPage();
+  const typeOver = async (str, value) => {
+    await page.mouse.dblclick(...(await client(page, ...(await textAt(page, str)))));
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+    eq(await page.inputValue('#ta-edit'), str, `editor holds "${str}"`);
+    await page.keyboard.press('Control+a'); await page.keyboard.type(value); await page.keyboard.press('Enter');
+  };
+  await openForEdit(page, 'dgn-titleblock.dgn');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 46, -2, 93, 20);
+  const ci = await page.evaluate(() => window.__linework.edit.doc.model.entities.findIndex((e) => e && e.type === 'cell' && e.name === 'TITLE'));
+  assert(ci >= 0, 'title block cell');
+  // a field of the title block
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'SHEET 1 OF 2')))));
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await shot(page, 'edit-cell-text-dark-1440');
+  await page.keyboard.press('Control+a'); await page.keyboard.type('SHEET 2 OF 2'); await page.keyboard.press('Enter');
+  let cell = await ED.ent(page, ci);
+  eq(cell.children[3].text, 'SHEET 2 OF 2', 'field changed inside the cell');
+  eq(cell.children.length, 6, 'cell keeps all its parts');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => !t.dead && t.s === 'SHEET 2 OF 2')), 'new text drawn');
+  assert(await ED.dirty(page), 'unsaved');
+  // text in a cell nested inside the cell
+  await typeOver('OK', 'APPROVED');
+  eq((await ED.ent(page, ci)).children[5].children[1].text, 'APPROVED', 'nested cell text');
+  await page.keyboard.press('Control+z');
+  eq((await ED.ent(page, ci)).children[5].children[1].text, 'OK', 'undo: one step');
+  eq((await ED.ent(page, ci)).children[3].text, 'SHEET 2 OF 2', 'undo keeps the earlier edit');
+  await page.keyboard.press('Control+y');
+  eq((await ED.ent(page, ci)).children[5].children[1].text, 'APPROVED', 'redo');
+  // the frame is not text: the cell still moves as a whole
+  await page.mouse.dblclick(...(await client(page, 60, 2)));
+  await page.waitForFunction(() => /double-click a text inside one to edit it/.test(document.querySelector('#tool-hint').textContent));
+  // Save (same format) and reopen
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  const out = join(OUT, 'titleblock-edited.dgn');
+  await dl.saveAs(out);
+  await page.setInputFiles('#file-input', out);
+  await page.waitForFunction(() => window.__linework.doc.name === 'titleblock-edited.dgn' && window.__linework.edit.ready);
+  const texts = await page.evaluate(() => window.__linework.scene.texts.filter((t) => !t.dead).map((t) => t.s).sort());
+  eq(JSON.stringify(texts), JSON.stringify(['APPROVED', 'DRAWING TITLE', 'LOOSE NOTE', 'REV A', 'SHEET 2 OF 2']), 'the saved DGN has both edits');
+  cell = await page.evaluate(() => { const c = window.__linework.edit.doc.model.entities.find((e) => e && e.type === 'cell' && e.name === 'TITLE'); return { n: c.children.length, nested: c.children[5].name }; });
+  eq(JSON.stringify(cell), JSON.stringify({ n: 6, nested: 'STAMP' }), 'still one TITLE cell with the nested STAMP cell');
+  // outside Edit mode, the hint's button opens the editor on that field
+  await page.click('#tab-view');
+  await page.click('[data-tool="pan"]');
+  await zoomTo(page, 46, -2, 93, 20);
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'DRAWING TITLE')))));
+  await page.waitForSelector('.toast:has-text("Switch to Edit to change the drawing")');
+  await page.click('.toast button:has-text("Edit this text")');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  eq(await page.inputValue('#ta-edit'), 'DRAWING TITLE', 'View-mode hint opens that field');
+  await page.keyboard.press('Escape');
+  // DXF: an attribute of one insert is editable; text from the block definition is shared, so it explains
+  await openForEdit(page, 'bracket.dxf');
+  const at = await page.evaluate(() => {
+    const a = window.__linework, s = a.scene, [ox, oy] = s.origin;
+    const c = (t) => [(t.bbox[0] + t.bbox[2]) / 2 + ox, (t.bbox[1] + t.bbox[3]) / 2 + oy];
+    const attr = s.texts.find((t) => !t.dead && /^a\d+$/.test(t.sub || '') && t.s.trim());
+    const ents = a.edit.doc.model.entities;
+    const shared = s.texts.find((t) => !t.dead && (t.sub || '')[0] === '#' && t.s.trim() && ents[t.ent] && ents[t.ent].type === 'insert');
+    return { attr: attr && { s: attr.s, ent: attr.ent, k: Number(attr.sub.slice(1)), at: c(attr) }, shared: shared && { at: c(shared), b: shared.bbox } };
+  });
+  assert(at.attr && at.shared, 'bracket has an attribute and block text');
+  await zoomTo(page, at.attr.at[0] - 400, at.attr.at[1] - 250, at.attr.at[0] + 400, at.attr.at[1] + 250);
+  await typeOver(at.attr.s, 'EDITED ATTRIBUTE');
+  const ins = await ED.ent(page, at.attr.ent);
+  eq(ins.attribs[at.attr.k].text, 'EDITED ATTRIBUTE', 'attribute changed on that insert');
+  const sw = at.shared.b[2] - at.shared.b[0];
+  await zoomTo(page, at.shared.at[0] - sw * 3, at.shared.at[1] - sw * 2, at.shared.at[0] + sw * 3, at.shared.at[1] + sw * 2);
+  await page.mouse.dblclick(...(await client(page, ...at.shared.at)));
+  await page.waitForFunction(() => /shared by every copy/.test(document.querySelector('#tool-hint').textContent));
   await close(page);
 });
 

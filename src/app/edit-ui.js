@@ -5,7 +5,7 @@ import { EditDoc, selectInRect } from '../edit/doc.js';
 import { entityItems, entityBBox, liveExtents } from '../edit/live-scene.js';
 import {
   moveEntity, rotateEntity, gripsOf, moveGrip, insertVertex, deleteVertex, segmentsOf, nearestOnSegment,
-  setText, restyle, canReshape, isText, colorInfo,
+  setText, restyle, canReshape, isText, colorInfo, partAt, withPart,
 } from '../edit/ops.js';
 import { createEmitter, sceneTables, KIND, CHAR_W } from '../scene.js';
 import { addConic, addPoly, CAP_HEIGHT } from '../view/renderer2d.js';
@@ -33,7 +33,9 @@ export const TOUCH_HINTS = {
   epoly: 'Tap points · Finish when done',
   eline: 'Tap the start, then each next point · Finish to stop',
 };
-const BLOCK_HINT = 'Blocks and cells move, rotate and delete as a whole — editing inside them is planned';
+const BLOCK_HINT = 'Blocks and cells move, rotate and delete as a whole · double-click a text inside one to edit it';
+const SHARED_HINT = 'This text is part of a block definition shared by every copy, so it can’t be edited here yet · attributes can';
+const DIM_HINT = 'Dimensions move, rotate and delete as a whole';
 const DXF_COLORS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 40, 140, 200, 250, 254];
 const COLOR_NAMES = { 1: 'Red', 2: 'Yellow', 3: 'Green', 4: 'Cyan', 5: 'Blue', 6: 'Magenta', 7: 'White/black', 8: 'Dark grey', 9: 'Light grey', 30: 'Orange' };
 
@@ -502,16 +504,42 @@ export function initEdit(app, api) {
     if (hit < 0) return;
     editEntity(hit, sx, sy);
   }
-  /** Double-click / "Edit" on an entity: text editor, reshape handles, or a hint. */
-  function editEntity(i) {
+  /** Double-click / "Edit" on an entity: text editor (also for a text inside a cell or insert), reshape handles, or a hint. */
+  function editEntity(i, sx, sy, sub) {
     const e = entity(i);
     if (!e) return;
     E.sel = new Set([i]); E.selPath = null;
     if (isText(e)) { openText({ ent: i }); return; }
-    if (canReshape(e) && e.type !== 'point') { E.vedit = i; hint(coarse() ? VEDIT_HINT_TOUCH : VEDIT_HINT); status(); updateRibbon(); api.invalidate(); return; }
-    if (e.type === 'insert' || e.type === 'cell' || e.type === 'dimension') hint(BLOCK_HINT, 4500);
+    if (e.type === 'insert' || e.type === 'cell') {
+      // which text inside: given (a path from the scene), or the one under the cursor
+      const part = sub ? (sub[0] === '#' ? { shared: true } : { sub }) : sx != null ? partTextAt(i, sx, sy) : null;
+      if (part && part.sub) { openText({ ent: i, sub: part.sub }); return; }
+      hint(part && part.shared ? SHARED_HINT : BLOCK_HINT, 4500);
+    } else if (canReshape(e) && e.type !== 'point') { E.vedit = i; hint(coarse() ? VEDIT_HINT_TOUCH : VEDIT_HINT); }
+    else if (e.type === 'dimension') hint(DIM_HINT, 4000);
     else hint('This item can be moved, rotated, restyled or deleted, but not reshaped', 4000);
     status(); updateRibbon(); api.invalidate();
+  }
+  /**
+   * The text inside cell / insert i under the cursor (the smallest one when they overlap):
+   * { sub } when it can be edited on its own, { shared: true } for block-definition text, else null.
+   */
+  function partTextAt(i, sx, sy) {
+    const s = scene();
+    if (!s) return null;
+    const [lx, ly] = app.view.toWorld(sx, sy);
+    const tol = (coarse() ? 10 : 4) / app.view.scale;
+    let best = null, area = Infinity;
+    for (const k of entityItems(s, i).texts) {
+      const x = s.texts[k];
+      if (!x || x.dead || !x.sub || !vis(x.layer)) continue;
+      const b = x.bbox;
+      if (lx < b[0] - tol || lx > b[2] + tol || ly < b[1] - tol || ly > b[3] + tol) continue;
+      const a = (b[2] - b[0]) * (b[3] - b[1]);
+      if (a < area) { area = a; best = x; }
+    }
+    if (!best) return null;
+    return best.sub[0] === '#' ? { shared: true } : { sub: best.sub };
   }
   /** Leave reshaping (handles hidden, the tool's own hint back). */
   function endVedit() { if (E.vedit >= 0) { E.vedit = -1; E.gripHover = -1; hint(''); } }
@@ -562,7 +590,7 @@ export function initEdit(app, api) {
     if (hit < 0) return false;
     if (!E.sel.has(hit)) { E.sel = new Set([hit]); E.selPath = null; updateRibbon(); status(); }
     openMenu(sx, sy, [
-      { label: 'Edit…', act: () => editEntity(hit) },
+      { label: 'Edit…', act: () => editEntity(hit, sx, sy) },
       { label: 'Rotate 90°', act: () => rotateSel(Math.PI / 2) },
       { label: 'Delete', act: () => deleteSel() },
     ]);
@@ -713,19 +741,22 @@ export function initEdit(app, api) {
       E.text = { create: true, at: o.at, h };
     } else {
       const e = entity(o.ent);
+      const part = o.sub ? partAt(e, o.sub) : e;
+      if (!part) return;
       const it = entityItems(s, o.ent);
-      const t = it.texts.map((k) => s.texts[k]).find((x) => !x.dead);
+      const mine = it.texts.map((k) => s.texts[k]).filter((x) => x && !x.dead && (!o.sub || x.sub === o.sub));
+      const t = mine[0];
       if (!t) return;
       const [ox, oy] = s.origin;
       [ax, ay] = W2S(t.x + ox, t.y + oy);
       rot = Math.atan2(t.m[1], t.m[0]);
       capPx = Math.hypot(t.m[2], t.m[3]) * app.view.scale;
       align = t.align;
-      value = e.text;
+      value = part.text;
       // at least as wide as the drawn text, so the box covers it
-      for (const k of it.texts) { const x = s.texts[k]; if (!x.dead) minW = Math.max(minW, (x.w != null ? x.w : CHAR_W * x.s.length) * Math.hypot(x.m[0], x.m[1]) * app.view.scale); }
-      multi = e.type === 'mtext';
-      E.text = { ent: o.ent };
+      for (const x of mine) minW = Math.max(minW, (x.w != null ? x.w : CHAR_W * x.s.length) * Math.hypot(x.m[0], x.m[1]) * app.view.scale);
+      multi = part.type === 'mtext';
+      E.text = { ent: o.ent, sub: o.sub || null };
     }
     Object.assign(E.text, { multi, minW, ax, ay, rot, align, fontPx: Math.max(12, Math.min(160, capPx / CAP_HEIGHT)) });
     ta.value = value;
@@ -777,6 +808,14 @@ export function initEdit(app, api) {
       return;
     }
     const e = entity(st.ent);
+    if (st.sub) { // a text inside a cell or insert: the whole cell/insert is the undoable change
+      const part = e && partAt(e, st.sub);
+      if (!part || v === part.text) { api.invalidate(); return; }
+      const attr = /(^|\.)a\d+$/.test(st.sub); // an attribute is kept even when cleared
+      const after = withPart(e, st.sub, v.trim() || attr ? setText(part, v) : null);
+      commit(v.trim() ? 'Edit text' : attr ? 'Clear attribute' : 'Delete text', [{ i: st.ent, before: e, after }], [st.ent]);
+      return;
+    }
     if (!e || v === e.text) { api.invalidate(); return; }
     if (!v.trim()) commit('Delete', [{ i: st.ent, before: e, after: null }], []);
     else commit('Edit text', [{ i: st.ent, before: e, after: setText(e, v) }], [st.ent]);

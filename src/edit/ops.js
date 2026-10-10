@@ -225,6 +225,32 @@ export function deleteVertex(e, k) {
 export const isText = (e) => !!e && (e.type === 'text' || e.type === 'mtext');
 
 /** Replace the text content (single-line TEXT drops line breaks). */
+/**
+ * Component of a cell or insert by path: 'c3.c1' = children[3].children[1] (DGN cells, nested),
+ * 'a2' = attribs[2] (a DXF insert's attributes). Paths come from the scene (text items' `sub`).
+ */
+export function partAt(e, path) {
+  let cur = e;
+  for (const step of String(path || '').split('.')) {
+    const list = !cur ? null : step[0] === 'a' ? cur.attribs : step[0] === 'c' ? cur.children : null;
+    cur = list ? list[Number(step.slice(1))] : null;
+    if (!cur) return null;
+  }
+  return cur;
+}
+
+/** Copy of a cell or insert with the component at `path` replaced (or removed when part is null); the rest is shared. */
+export function withPart(e, path, part) {
+  const [step, ...rest] = String(path).split('.');
+  const key = step[0] === 'a' ? 'attribs' : 'children';
+  const k = Number(step.slice(1));
+  const list = (e[key] || []).slice();
+  if (rest.length) list[k] = withPart(list[k], rest.join('.'), part);
+  else if (part) list[k] = part;
+  else list.splice(k, 1);
+  return { ...e, [key]: list };
+}
+
 export function setText(e, s) {
   const o = { ...e, text: e.type === 'text' ? String(s).replace(/[\r\n]+/g, ' ') : String(s).replace(/\r\n?/g, '\n') };
   delete o.raw; // the stored (escaped) form no longer matches

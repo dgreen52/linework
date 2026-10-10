@@ -103,8 +103,12 @@ Open the **Edit** tab (or press `E`). The drawing itself is edited; markups stay
 * **Double-click a line, polyline or shape** to show its points: drag a point (`Shift` locks it
   horizontally/vertically), right-click a point to delete it, right-click or double-click a side
   to add one. Circles and arcs get a centre and a radius handle; ellipses a centre and an axis
-  handle. **Blocks (INSERTs) and DGN cells** move, rotate, restyle and delete as a whole —
-  editing inside them is planned.
+  handle. **Blocks (INSERTs) and DGN cells** move, rotate, restyle and delete as a whole.
+  **Text inside them can be retyped**: double-click a title-block field or a label in a cell
+  (nested cells too) or a block's attribute, and only that text changes. Saving a DGN rewrites
+  that one cell: its other parts are copied byte-for-byte and the edited text keeps its
+  attribute data. Text that lives in a DXF block definition is shared by every copy of the
+  block, so it stays locked for now (Linework says so).
 * **Draw** lines (click points; type a length + `Enter` for an exact length), polylines
   (`Enter`/double-click finishes, `C` closes), rectangles, circles and text. New items go on the
   **current layer** (Layer box; "New layer…" creates one with a colour) in the **current colour**
@@ -282,14 +286,15 @@ Trade-offs, for the owner to decide before the first public release:
 
 * **v0.2 (this version)** — Edit mode and saving as DXF / DGN v7.
 * **v0.3** — DWG via LibreDWG compiled to WebAssembly, lazy-loaded ([plan](DWG.md)); vector PDF
-  export (true lines and text instead of an image); measurement export (CSV); editing inside
-  blocks/cells; copy/paste and mirror.
+  export (true lines and text instead of an image); measurement export (CSV); editing the
+  geometry inside blocks/cells and shared block-definition text; copy/paste and mirror.
 * **v0.4** — WebGL renderer for very large drawings; true linetype scaling; hatch patterns;
   layouts / paper space tabs; markup resize handles and markup list panel.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
   markup review (still file-based, no server).
 
-Deliberately **not** in v0.2: DWG, vector PDF, editing inside blocks.
+Deliberately **not** in v0.2: DWG, vector PDF, editing geometry inside blocks (text inside
+cells and block attributes can be edited since 0.2.2).
 
 ## Known limitations
 

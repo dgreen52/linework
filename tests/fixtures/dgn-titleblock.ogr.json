@@ -1,0 +1,179 @@
+{
+ "features": [
+  {
+   "type": 4,
+   "level": 1,
+   "color": 1,
+   "rgb": "0000ff",
+   "env": [
+    0.0,
+    0.0,
+    90.0,
+    60.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     90.0,
+     0.0
+    ],
+    [
+     90.0,
+     60.0
+    ],
+    [
+     0.0,
+     60.0
+    ],
+    [
+     0.0,
+     0.0
+    ]
+   ]
+  },
+  {
+   "type": 17,
+   "level": 3,
+   "color": 2,
+   "rgb": "00ff00",
+   "env": [
+    5.0,
+    55.0,
+    5.0,
+    55.0
+   ],
+   "geom": "POINT",
+   "text": "LOOSE NOTE",
+   "size": 2.0
+  },
+  {
+   "type": 6,
+   "level": 4,
+   "color": 1,
+   "rgb": "0000ff",
+   "env": [
+    50.0,
+    2.0,
+    89.0,
+    16.0
+   ],
+   "geom": "POLYGON"
+  },
+  {
+   "type": 3,
+   "level": 4,
+   "color": 1,
+   "rgb": "0000ff",
+   "env": [
+    50.0,
+    9.0,
+    79.0,
+    9.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     50.0,
+     9.0
+    ],
+    [
+     79.0,
+     9.0
+    ]
+   ]
+  },
+  {
+   "type": 17,
+   "level": 4,
+   "color": 2,
+   "rgb": "00ff00",
+   "env": [
+    52.0,
+    11.0,
+    52.0,
+    11.0
+   ],
+   "geom": "POINT",
+   "text": "DRAWING TITLE",
+   "size": 2.0
+  },
+  {
+   "type": 17,
+   "level": 4,
+   "color": 2,
+   "rgb": "00ff00",
+   "env": [
+    52.0,
+    4.0,
+    52.0,
+    4.0
+   ],
+   "geom": "POINT",
+   "text": "SHEET 1 OF 2",
+   "size": 1.5
+  },
+  {
+   "type": 17,
+   "level": 4,
+   "color": 2,
+   "rgb": "00ff00",
+   "env": [
+    71.0,
+    4.0,
+    71.0,
+    4.0
+   ],
+   "geom": "POINT",
+   "text": "REV A",
+   "size": 1.5
+  },
+  {
+   "type": 15,
+   "level": 4,
+   "color": 3,
+   "rgb": "ff0000",
+   "env": [
+    81.0,
+    9.0,
+    87.0,
+    15.0
+   ],
+   "geom": "LINESTRING"
+  },
+  {
+   "type": 17,
+   "level": 4,
+   "color": 3,
+   "rgb": "ff0000",
+   "env": [
+    82.5,
+    11.200000000000001,
+    82.5,
+    11.200000000000001
+   ],
+   "geom": "POINT",
+   "text": "OK",
+   "size": 1.6
+  }
+ ],
+ "uor_per_master": 10000,
+ "origin": [
+  0,
+  0
+ ],
+ "master": "m",
+ "sub": "mm",
+ "title": {
+  "texts": [
+   "DRAWING TITLE",
+   "SHEET 1 OF 2",
+   "REV A"
+  ],
+  "stamp_text": "OK",
+  "attributes": "0710341201000200"
+ }
+}

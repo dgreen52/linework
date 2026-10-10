@@ -324,7 +324,7 @@ class Writer {
   /** Cell: the original header (patched) followed by its components; no header -> components only. */
   cell(e, opt) {
     const kids = [];
-    for (const c of e.children || []) kids.push(...this.encode(c, { component: true }));
+    for (const c of e.children || []) kids.push(...this.child(c));
     const src = this.bytes && e.dgn ? this.bytes : null;
     if (!src) { this.notes.cellsFlattened++; return (e.children || []).flatMap((c) => this.encode(c, { component: !!opt.component })); }
     const o = e.dgn[0];
@@ -367,6 +367,34 @@ class Writer {
     hdr[0] = (hdr[0] & 0xc0) | (lv & 63);
     return [hdr, ...kids];
   }
+
+  /**
+   * One component of a cell. Unchanged since the file was read (the same object): its original bytes.
+   * Changed but still one element of the original (e.g. a text typed over): re-encoded, keeping its
+   * graphic group, properties and attribute data. Anything else: encoded afresh.
+   */
+  child(c) {
+    const src = this.bytes;
+    if (src && c && c.dgn && this.pristine && this.pristine.has(c)) return [src.slice(c.dgn[0], c.dgn[1])];
+    const keep = src && c && c.dgn && c.type !== 'cell' ? keepOf(src, c.dgn[0], c.dgn[1]) : {};
+    return this.encode(c, { component: true, ...keep });
+  }
+}
+
+/** Graphic group, properties and attribute data of the single element at o (none if [o, end) is more). */
+function keepOf(b, o, end) {
+  const size = elemSize(b, o);
+  if (end - o !== size) return {};
+  const r = rd(b), keep = { gg: r.u16(o + 28), props: r.u16(o + 32) };
+  const att = o + 32 + 2 * r.u16(o + 30);
+  if (att >= o + 36 && att < o + size) keep.att = Array.from(b.subarray(att, o + size));
+  return keep;
+}
+
+/** Every component object of the cells in `ents` (nested cells too). */
+function cellComponents(ents, set = new Set()) {
+  for (const e of ents) if (e && e.type === 'cell') for (const c of e.children || []) { set.add(c); if (c && c.type === 'cell') cellComponents([c], set); }
+  return set;
 }
 
 // ------------------------------------------------------------------ public API
@@ -425,6 +453,7 @@ function roundTrip(model, { bytes, orig }) {
   const palette = dgnPalette(b);
   const w = new Writer(model, g, palette, notes, { levelOf: (name) => levelFromName(name) ?? 63 });
   w.bytes = b;
+  w.pristine = cellComponents(orig);
   let eod = model.header && model.header.eod != null ? model.header.eod : b.length;
   if (eod > b.length) eod = b.length;
   const head = b.slice(0, eod);
@@ -436,15 +465,11 @@ function roundTrip(model, { bytes, orig }) {
     const cur = model.entities[i] || null, was = orig[i] || null;
     if (cur === was) continue;
     changed++;
-    const keep = {};
+    let keep = {};
     if (was && was.dgn) {
       markDeleted(was.dgn[0], was.dgn[1]);
-      const o = was.dgn[0], size = elemSize(b, o);
-      if (was.dgn[1] - o === size && cur && cur.type !== 'cell') { // single element: keep its graphic group, properties, attributes
-        keep.gg = r.u16(o + 28); keep.props = r.u16(o + 32);
-        const att = o + 32 + 2 * r.u16(o + 30);
-        if (att >= o + 36 && att < o + size) keep.att = Array.from(b.subarray(att, o + size));
-      }
+      // single element: keep its graphic group, properties, attributes
+      if (cur && cur.type !== 'cell') keep = keepOf(b, was.dgn[0], was.dgn[1]);
     }
     if (cur) appended.push(...w.encode(cur, keep));
   }

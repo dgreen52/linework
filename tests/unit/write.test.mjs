@@ -8,12 +8,12 @@ import { join } from 'node:path';
 import { load, bytes, liveItems, compareItems, rng, gdalPython, ogrDump } from './helpers.mjs';
 import { parseDrawing } from '../../src/formats/detect.js';
 import { parseDgn } from '../../src/formats/dgn.js';
-import { buildScene, KIND, FLAG } from '../../src/scene.js';
+import { buildScene, KIND, FLAG, packTexts, unpackTexts } from '../../src/scene.js';
 import { writeDxf, encodeText, mtextTokens, mtextChunks, ellipseParams, nearestAci } from '../../src/formats/dxf-write.js';
 import { writeDgn, dgnPalette, pushVax } from '../../src/formats/dgn-write.js';
 import { createModel, ensureLayer, flatEntities, FG } from '../../src/model.js';
 import { EditDoc } from '../../src/edit/doc.js';
-import { moveEntity, rotateEntity, setText, restyle, insertVertex, deleteVertex, moveGrip, gripsOf, canReshape, segmentsOf } from '../../src/edit/ops.js';
+import { moveEntity, rotateEntity, setText, restyle, insertVertex, deleteVertex, moveGrip, gripsOf, canReshape, segmentsOf, partAt, withPart } from '../../src/edit/ops.js';
 import { liveExtents } from '../../src/edit/live-scene.js';
 
 const DXF_FIXTURES = ['house-plan.dxf', 'bracket.dxf', 'schematic.dxf', 'edge-crlf-cp1252.dxf', 'edge-utf8-bom.dxf', 'edge-entities-only.dxf',
@@ -476,4 +476,106 @@ test('saving warns about items the reader could not load', () => {
   const { model } = load('edge-unknown-entities.dxf');
   const lost = Object.entries(model.stats.notShown).filter(([k]) => !/paper-space/i.test(k)).reduce((s, [, v]) => s + v, 0);
   assert.equal(lost, 6, 'six unsupported entities were not loaded (and cannot be written)');
+});
+
+// ------------------------------------------------------------------ text inside cells / inserts
+/** Elements of a DGN file up to the end-of-design marker: { o, size, type, deleted }. */
+function dgnElements(b) {
+  const out = [];
+  for (let o = 0; o + 4 <= b.length && !(b[o] === 0xff && b[o + 1] === 0xff);) {
+    const size = 4 + 2 * (b[o + 2] | (b[o + 3] << 8));
+    out.push({ o, size, type: b[o + 1] & 0x7f, deleted: !!(b[o + 1] & 0x80) });
+    o += size;
+  }
+  return out;
+}
+const text2d = (b, o) => String.fromCharCode(...b.subarray(o + 60, o + 60 + b[o + 58]));
+const ATT = [0x07, 0x10, 0x34, 0x12, 0x01, 0x00, 0x02, 0x00]; // the attribute data the fixture gives "SHEET 1 OF 2"
+
+test('scene: text inside cells and inserts knows its path; block-definition text is marked shared', () => {
+  const { scene } = load('dgn-titleblock.dgn');
+  const byText = Object.fromEntries(scene.texts.map((t) => [t.s, t.sub]));
+  assert.deepEqual(byText, { 'LOOSE NOTE': '', 'DRAWING TITLE': 'c2', 'SHEET 1 OF 2': 'c3', 'REV A': 'c4', OK: 'c5.c1' });
+  // the paths survive the trip from the worker (packed texts)
+  const moved = unpackTexts(packTexts({ ...scene }));
+  assert.deepEqual(moved.texts.map((x) => x.sub), scene.texts.map((x) => x.sub || ''));
+  const { model, scene: s2 } = load('schematic.dxf');
+  const ins = model.entities.findIndex((e) => e.type === 'insert' && e.attribs && e.attribs.some((a) => !a.invisible && a.text.trim()));
+  assert.ok(ins >= 0, 'schematic has an insert with attributes');
+  const mine = s2.texts.filter((t) => t.ent === ins);
+  assert.ok(mine.some((t) => /^a\d+$/.test(t.sub)), 'attributes are addressable');
+  for (const t of mine) assert.ok(/^a\d+$/.test(t.sub) || t.sub[0] === '#', `"${t.s}": ${t.sub}`);
+});
+
+test('DGN: typing over a text inside a cell rewrites that cell; untouched parts byte-for-byte, the edited text keeps its attribute data', () => {
+  const b = bytes('dgn-titleblock.dgn');
+  const m = parseDgn(b), orig = m.entities.slice();
+  const ci = m.entities.findIndex((e) => e.type === 'cell' && e.name === 'TITLE');
+  const cell = m.entities[ci];
+  assert.equal(partAt(cell, 'c3').text, 'SHEET 1 OF 2');
+  assert.equal(partAt(cell, 'c5.c1').text, 'OK', 'nested cell text');
+  assert.equal(partAt(cell, 'c9'), null);
+  let next = withPart(cell, 'c3', setText(partAt(cell, 'c3'), 'SHEET 2 OF 2'));
+  next = withPart(next, 'c5.c1', setText(partAt(next, 'c5.c1'), 'APPROVED'));
+  assert.equal(cell.children[3].text, 'SHEET 1 OF 2', 'the original model is not touched');
+  assert.equal(next.children[0], cell.children[0], 'untouched parts are shared');
+  m.entities[ci] = next;
+  const w = writeDgn(m, { bytes: b, orig });
+  assert.equal(w.mode, 'round-trip');
+  const out = w.bytes, eod = m.header.eod;
+  // the old cell is flagged deleted in place; nothing else in the original part changed
+  for (const el of dgnElements(b)) {
+    const inCell = el.o >= cell.dgn[0] && el.o < cell.dgn[1];
+    assert.equal(!!(out[el.o + 1] & 0x80), el.deleted || inCell, `element at ${el.o}`);
+  }
+  // untouched components are copied byte-for-byte after the old end of the design
+  const B = Buffer.from(out);
+  for (const k of [0, 1, 2, 4]) {
+    const c = cell.children[k];
+    assert.ok(B.indexOf(Buffer.from(b.subarray(c.dgn[0], c.dgn[1])), eod) >= eod, `component ${k} (${c.type}) copied as-is`);
+  }
+  assert.ok(B.indexOf(Buffer.from(b.subarray(cell.children[5].children[0].dgn[0], cell.children[5].children[0].dgn[1])), eod) >= eod, 'nested circle copied as-is');
+  // the edited text: same level/colour, attribute data and its "attributes present" flag kept
+  const live = dgnElements(out).filter((el) => !el.deleted && el.o >= eod);
+  const sheet = live.find((el) => el.type === 17 && text2d(out, el.o) === 'SHEET 2 OF 2');
+  assert.ok(sheet, 'edited text written');
+  assert.ok(out[sheet.o] & 0x80, 'still a cell component');
+  const att = sheet.o + 32 + 2 * (out[sheet.o + 30] | (out[sheet.o + 31] << 8));
+  assert.deepEqual([...out.subarray(att, sheet.o + sheet.size)], ATT, 'attribute data kept');
+  assert.ok(out[sheet.o + 32] & 0x08, 'attribute flag kept');
+  assert.ok(live.some((el) => el.type === 17 && text2d(out, el.o) === 'APPROVED'));
+  // read back: one TITLE cell with the same structure and the new texts
+  const back = parseDgn(out);
+  const t2 = back.entities.find((e) => e.type === 'cell' && e.name === 'TITLE');
+  assert.deepEqual(t2.children.map((c) => c.type), cell.children.map((c) => c.type));
+  assert.equal(t2.children[5].name, 'STAMP');
+  assert.deepEqual(flatEntities(back.entities).filter((e) => e.type === 'text').map((e) => e.text).sort(),
+    ['APPROVED', 'DRAWING TITLE', 'LOOSE NOTE', 'REV A', 'SHEET 2 OF 2']);
+  writeFileSync(join(TMP, 'titleblock-edited.dgn'), out);
+});
+
+test('GDAL/OGR reads the DGN with edited cell text', { skip: ogrSkip }, () => {
+  const f = join(TMP, 'titleblock-edited.dgn');
+  const b = bytes('dgn-titleblock.dgn');
+  const m = parseDgn(b), orig = m.entities.slice();
+  const ci = m.entities.findIndex((e) => e.type === 'cell' && e.name === 'TITLE');
+  m.entities[ci] = withPart(m.entities[ci], 'c3', setText(partAt(m.entities[ci], 'c3'), 'SHEET 2 OF 2'));
+  writeFileSync(f, writeDgn(m, { bytes: b, orig }).bytes);
+  const r = ogrDump([f])[f];
+  assert.ok(r && !r.error, 'OGR opened it');
+  assert.deepEqual(r.features.filter((x) => x.Type === 17).map((x) => x.Text).sort(), ['DRAWING TITLE', 'LOOSE NOTE', 'OK', 'REV A', 'SHEET 2 OF 2']);
+});
+
+test('DXF: editing one attribute of a block insert changes only that insert, and survives a save', () => {
+  const { model } = load('schematic.dxf');
+  const ins = model.entities.findIndex((e) => e.type === 'insert' && e.attribs && e.attribs.some((a) => !a.invisible && a.text.trim()));
+  const e = model.entities[ins];
+  const k = e.attribs.findIndex((a) => !a.invisible && a.text.trim());
+  const before = e.attribs.map((a) => a.text);
+  model.entities[ins] = withPart(e, 'a' + k, setText(partAt(e, 'a' + k), 'EDITED VALUE'));
+  const back = parseDrawing(new TextEncoder().encode(writeDxf(model).text), 'x.dxf');
+  const e2 = back.entities.filter((x) => x.type === 'insert' && x.block === e.block && x.attribs && x.attribs.length)
+    .find((x) => Math.abs(x.p[0] - e.p[0]) < 1e-6 && Math.abs(x.p[1] - e.p[1]) < 1e-6);
+  assert.ok(e2, 'insert found after the round trip');
+  assert.deepEqual(e2.attribs.map((a) => a.text), before.map((t, j) => (j === k ? 'EDITED VALUE' : t)));
 });

@@ -10,6 +10,7 @@ is saved as <name>.ogr.json for the JavaScript unit tests. No real drawings are 
 import json
 import math
 import os
+import struct
 import sys
 
 from osgeo import gdal, ogr
@@ -67,8 +68,9 @@ def oracle(path, extra):
         env = g.GetEnvelope() if g else None  # (minx, maxx, miny, maxy)
         style = f.GetStyleString() or ""
         rgb = None
-        if "c:#" in style:
-            rgb = style.split("c:#")[1][:6].lower()
+        pen = style.replace("fc:#", "")  # the outline colour (BRUSH fc = fill colour, reported apart)
+        if "c:#" in pen:
+            rgb = pen.split("c:#")[1][:6].lower()
         item = {
             "type": f.GetField("Type"),
             "level": f.GetField("Level"),
@@ -77,6 +79,8 @@ def oracle(path, extra):
             "env": [env[0], env[2], env[1], env[3]] if env else None,
             "geom": g.GetGeometryName() if g else None,
         }
+        if "fc:#" in style:
+            item["fill"] = style.split("fc:#")[1][:6].lower()
         if f.GetField("Text"):
             item["text"] = f.GetField("Text")
             for part in style.split(","):
@@ -195,15 +199,6 @@ def three_d(path):
 
 
 # --------------------------------------------------------------------------- title block (text inside cells)
-def with_attributes(elem, data):
-    """The element with attribute data appended (the header's attribute index already points past the body)."""
-    b = bytearray(elem)
-    b[32] |= 0x08                     # properties: attribute data present (0x0800)
-    words = (len(b) + len(data) - 4) // 2
-    b[2], b[3] = words & 0xFF, words >> 8
-    return bytes(b) + bytes(data)
-
-
 def title_block(path):
     ds, lyr = create(path, ["MASTER_UNIT_NAME=m", "SUB_UNIT_NAME=mm", "SUB_UNITS_PER_MASTER_UNIT=1000",
                             "UOR_PER_SUB_UNIT=10", "ORIGIN=0,0,0"])
@@ -219,15 +214,117 @@ def title_block(path):
         R.as_component(R.multipoint(6, ctx, [(50, 2), (89, 2), (89, 16), (50, 16), (50, 2)], level=4, color=1)),
         R.as_component(R.line3(ctx, (50, 9), (79, 9), level=4, color=1)),
         R.as_component(R.text17(ctx, (52, 11), "DRAWING TITLE", 2.0, level=4, color=2)),
-        R.as_component(with_attributes(R.text17(ctx, (52, 4), "SHEET 1 OF 2", 1.5, level=4, color=2),
-                                       b"\x07\x10\x34\x12\x01\x00\x02\x00")),
+        R.as_component(R.with_attributes(R.text17(ctx, (52, 4), "SHEET 1 OF 2", 1.5, level=4, color=2),
+                                       b"\x03\x10\x34\x12\x01\x00\x02\x00")),  # a user data linkage of 8 bytes
         R.as_component(R.text17(ctx, (71, 4), "REV A", 1.5, just=14, level=4, color=2)),
         R.as_component(R.cell2(ctx, "STAMP", (84, 12), stamp, rng=(81, 9, 87, 15), level=4, color=3)),
     ] + stamp
     R.append_elements(path, [R.cell2(ctx, "TITLE", (50, 2), comps, rng=(50, 2, 89, 16), level=4, color=1)] + comps)
     return {"uor_per_master": 10000, "origin": [0, 0], "master": "m", "sub": "mm",
             "title": {"texts": ["DRAWING TITLE", "SHEET 1 OF 2", "REV A"], "stamp_text": "OK",
-                      "attributes": "07103412010002 00".replace(" ", "")}}
+                      "attributes": "0310341201000200"}}
+
+
+# --------------------------------------------------------------------------- fidelity (what editing must not lose)
+DMRS = bytes([0x00, 0x00, 0x05, 0x00, 0x39, 0x30, 0x00, 0x00])  # a database linkage (entity 5, MSLINK 12345)
+
+
+def fidelity(path):
+    """A wiring-diagram-like sheet with everything a byte-level edit must keep: a title block cell with a
+    text node, an empty text node, a point string, a blank text, a text with an enter-data field, a text
+    with attribute data, a B-spline curve, a filled junction dot and a nested cell, the cell header carrying
+    a database linkage; complex chains with clockwise and counter-clockwise arcs (and one elliptical arc),
+    filled shapes, a top-level text node, a tag value, a reference attachment, a shared cell, a cell with a
+    tag inside, a NUL-padded text, a complex chain whose word count claims the next element, and two colour
+    tables (the second one counts)."""
+    ds, lyr = create(path, ["MASTER_UNIT_NAME=m", "SUB_UNIT_NAME=mm", "SUB_UNITS_PER_MASTER_UNIT=1000",
+                            "UOR_PER_SUB_UNIT=10", "ORIGIN=0,0,0"])
+    add(lyr, wkt_line([(0, 0), (120, 0), (120, 80), (0, 80), (0, 0)]), Level=1, ColorIndex=1)  # sheet border
+    add(lyr, "POINT (5 75)", style='LABEL(t:"WIRING DIAGRAM",s:2g)', Level=2, ColorIndex=2)
+    ds = None
+    ctx = R.Ctx(10000, (0, 0))
+    C = R.as_component
+    els = []
+    # ---- title block cell TBLOCK (level 4)
+    t1 = C(R.text17(ctx, (52, 13), "LINE ONE", 1.0, level=4, color=2))
+    t2 = C(R.text17(ctx, (52, 11.5), "LINE TWO", 1.0, level=4, color=2))
+    node = C(R.text_node7(ctx, (52, 13), [t1, t2], 1.0, 0, 0.5, level=4, color=2))
+    empty = C(R.text_node7(ctx, (80, 5), [], 1.0, 0, 0.5, level=4, color=2))
+    pstr = C(R.point_string22(ctx, [(55, 3), (57, 3), (59, 3)], level=4, color=3))
+    blank = C(R.text17(ctx, (52, 7), "   ", 1.0, level=4, color=2))
+    title = C(R.with_graphic_group(R.text17(ctx, (52, 16), "PUMP STATION 3", 2.0, level=4, color=2), 7))
+    dwg = C(R.text17(ctx, (52, 9), "DWG NO ____", 1.0, edf=bytes([8, 4]), level=4, color=2))  # one field: from character 8, 4 long
+    rev = C(R.with_attributes(R.text17(ctx, (70, 9), "REV 0", 1.0, level=4, color=2), bytes([0x03, 0x10, 0x34, 0x12, 0x01, 0x00, 0x02, 0x00])))
+    spl = [C(x) for x in R.bspline_curve(ctx, [(76, 4), (78, 8), (80, 4), (82, 8)], level=4, color=5)]
+    dot = C(R.with_attributes(R.ellipse15(ctx, (60, 6), 0.4, 0.4, 0, level=4, color=1), R.fill_linkage(1)))
+    stamp = [C(R.ellipse15(ctx, (85, 15), 2.5, 2.5, 0, level=4, color=3)), C(R.text17(ctx, (84, 14.5), "OK", 1.0, level=4, color=3))]
+    stamp_cell = C(R.cell2(ctx, "STAMP", (85, 15), stamp, rng=(82.5, 12.5, 87.5, 17.5), level=4, color=3))
+    frame = C(R.multipoint(6, ctx, [(50, 2), (90, 2), (90, 20), (50, 20), (50, 2)], level=4, color=1))
+    comps = [frame, title, node, t1, t2, empty, pstr, blank, dwg, rev] + spl + [dot, stamp_cell] + stamp
+    els += [R.with_attributes(R.cell2(ctx, "TBLOCK", (50, 2), comps, rng=(50, 2, 90, 20), level=4, color=1), DMRS)] + comps
+    # ---- complex chain with a counter-clockwise and a clockwise arc (level 3)
+    parts = [C(R.multipoint(4, ctx, [(10, 30), (20, 30)], level=3, color=4)),
+             C(R.arc16(ctx, (20, 35), 5, 5, 0, -90, 180, level=3, color=4)),
+             C(R.multipoint(4, ctx, [(20, 40), (10, 40)], level=3, color=4)),
+             C(R.arc16(ctx, (10, 45), 5, 5, 0, -90, -180, level=3, color=4)),
+             C(R.multipoint(4, ctx, [(10, 50), (25, 50)], level=3, color=4))]
+    els += [R.complex_header(12, 3, parts, color=4)] + parts
+    # a chain with an elliptical arc (shown, and written back, as points when reshaped)
+    parts = [C(R.multipoint(4, ctx, [(30, 45), (36, 45)], level=3, color=4)),
+             C(R.arc16(ctx, (36, 47), 4, 2, 90, -90, 180, level=3, color=4)),
+             C(R.multipoint(4, ctx, [(36, 49), (30, 49)], level=3, color=4))]
+    els += [R.complex_header(12, 3, parts, color=4)] + parts
+    # ---- fills (level 6): a terminal (complex shape with an arc), an arrowhead (shape), a junction dot (circle)
+    parts = [C(R.multipoint(4, ctx, [(30, 30), (40, 30)], level=6, color=1)),
+             C(R.arc16(ctx, (40, 32.5), 2.5, 2.5, 0, -90, 180, level=6, color=1)),
+             C(R.multipoint(4, ctx, [(40, 35), (30, 35), (30, 30)], level=6, color=1))]
+    els += [R.with_attributes(R.complex_header(14, 6, parts, color=1), R.fill_linkage(3))] + parts
+    els.append(R.with_attributes(R.multipoint(6, ctx, [(45, 30), (48, 31), (45, 32), (45, 30)], level=6, color=1), R.fill_linkage(1)))
+    els.append(R.with_attributes(R.ellipse15(ctx, (50, 31), 0.5, 0.5, 0, level=6, color=1), R.fill_linkage(1)))
+    # ---- top-level text node (level 7, colour 5: green in the second colour table)
+    n1 = C(R.text17(ctx, (5, 60), "NOTE A", 1.0, level=7, color=5))
+    n2 = C(R.text17(ctx, (5, 58.5), "NOTE B", 1.0, level=7, color=5))
+    els += [R.text_node7(ctx, (5, 60), [n1, n2], 1.0, 0, 0.5, level=7, color=5), n1, n2]
+    # a text stored with NUL padding (GDAL and C strings stop at the first NUL)
+    els.append(R.text17(ctx, (5, 55), "PAD", 1.0, raw=b"PAD\x00\x00\x00", level=7, color=2))
+    # ---- what is not shown: a tag value, a reference attachment, a shared cell (definition + instance), a B-spline curve
+    els.append(R.tag_value37(ctx, (5, 65), "P-101"))
+    els.append(R.reference_attachment("BORDER.DGN"))
+    els += R.shared_cell_definition("SCDEF", [C(R.line3(ctx, (0, 0), (1, 1), level=1, color=1))])
+    els.append(R.raw_element(35, 1, R.rad50("SCDEF") + bytes(40), (ctx.ix(100), ctx.iy(70), ctx.ix(101), ctx.iy(71))))
+    els += R.bspline_curve(ctx, [(95, 40), (100, 45), (105, 40), (110, 45)], level=8, color=1)
+    # ---- a cell holding a tag value (an element type that cannot be moved)
+    bad = [C(R.line3(ctx, (95, 20), (105, 20), level=9, color=1)), C(R.tag_value37(ctx, (95, 21), "X", level=9))]
+    els += [R.cell2(ctx, "TAGGED", (95, 20), bad, rng=(95, 20, 105, 21), level=9, color=1)] + bad
+    # ---- a complex chain whose word count claims the line after it (as some writers leave it)
+    parts = [C(R.multipoint(4, ctx, [(60, 60), (70, 60)], level=10, color=1)), C(R.multipoint(4, ctx, [(70, 60), (70, 70)], level=10, color=1))]
+    after = R.line3(ctx, (75, 60), (85, 60), level=11, color=2)
+    hdr = bytearray(R.complex_header(12, 10, parts, color=1))
+    hdr[36:38] = R.u16(struct.unpack("<H", bytes(hdr[36:38]))[0] + len(after) // 2)
+    els += [bytes(hdr)] + parts + [after]
+    R.append_elements(path, els)
+    # two colour tables after the TCB / seed elements: index 5 is red in the first, green in the second
+    first = [(255, 255, 255), (40, 90, 255), (30, 190, 70), (230, 40, 40), (250, 210, 0), (255, 0, 0), (0, 200, 220)]
+    second = [(255, 255, 255), (40, 90, 255), (30, 190, 70), (230, 40, 40), (250, 210, 0), (0, 200, 0), (0, 200, 220)]
+    R.insert_after_tcb_seed(path, [R.color_table(first), R.color_table(second)])
+    return {"uor_per_master": 10000, "origin": [0, 0], "master": "m", "sub": "mm",
+            "palette5": "00c800", "ref": "BORDER.DGN", "edf": [8, 4],
+            "chain": {"ccw": {"c": [20, 35], "r": 5, "start": -90, "sweep": 180}, "cw": {"c": [10, 45], "r": 5, "start": -90, "sweep": -180}}}
+
+
+# --------------------------------------------------------------------------- 3D rotations written by GDAL
+def three_d_rot(path):
+    """3D file: texts rotated 30 and 90 degrees written by GDAL's own writer (its quaternion convention), a
+    line string with a different Z at every vertex, and a 3D arc rotated 30 degrees (same convention)."""
+    ds, lyr = create(path, ["3D=YES", "MASTER_UNIT_NAME=m", "SUB_UNIT_NAME=mm", "SUB_UNITS_PER_MASTER_UNIT=1000",
+                            "UOR_PER_SUB_UNIT=10", "ORIGIN=0,0,0"])
+    add(lyr, "POINT Z (5 5 0)", 'LABEL(t:"ROT30",s:1g,a:30)', Level=1, ColorIndex=1)
+    add(lyr, "POINT Z (5 15 0)", 'LABEL(t:"ROT90",s:1g,a:90)', Level=1, ColorIndex=1)
+    add(lyr, "LINESTRING Z (0 0 0, 10 0 5, 10 10 10)", Level=2, ColorIndex=3)
+    ds = None
+    ctx = R.Ctx(10000, (0, 0))
+    R.append_elements(path, [R.arc16_3d(ctx, (20, 5), 2, 3, 0, 90, 30, level=3, color=2)])
+    return {"uor_per_master": 10000, "texts": {"ROT30": 30, "ROT90": 90}, "arc": {"c": [20, 5], "z": 2, "r": 3, "start": 0, "sweep": 90, "rot": 30}}
 
 
 def main():
@@ -236,7 +333,9 @@ def main():
     jobs = [(os.path.join(SAMPLES, "site-plan.dgn"), site_plan),
             (os.path.join(FIX, "dgn-default-palette.dgn"), default_palette),
             (os.path.join(FIX, "dgn-3d.dgn"), three_d),
-            (os.path.join(FIX, "dgn-titleblock.dgn"), title_block)]
+            (os.path.join(FIX, "dgn-titleblock.dgn"), title_block),
+            (os.path.join(FIX, "dgn-fidelity.dgn"), fidelity),
+            (os.path.join(FIX, "dgn-3d-rot.dgn"), three_d_rot)]
     only = set(sys.argv[1:])  # e.g. `python tools/make_dgn_fixtures.py dgn-titleblock` rebuilds just that one
     for path, fn in jobs:
         if only and os.path.splitext(os.path.basename(path))[0] not in only:

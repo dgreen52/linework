@@ -1129,16 +1129,16 @@ export function initEdit(app, api) {
   function lostCount(f) {
     const m = model();
     if (!m) return 0;
-    if (m.format === 'DGN' && f === 'DGN') return 0; // round trip keeps every original element
+    if (m.format === 'DGN' && f === 'DGN') return 0; // round trip: items it did not load are kept byte for byte
     let n = 0;
     for (const [k, v] of Object.entries(m.stats.notShown || {})) if (!/paper-space/i.test(k) || f === 'DGN') n += v;
     return n;
   }
   function saveNotes(f) {
     const m = model(), src = m ? m.format : srcFormat(), notes = [];
-    if (src === 'DGN' && f === 'DGN') notes.push('Untouched items stay exactly as they were; edited items are added at the end of the file.');
+    if (src === 'DGN' && f === 'DGN') notes.push('Untouched items stay exactly as they were. Edited, pasted and duplicated items are rebuilt from their original bytes and added at the end of the file; anything that cannot be kept exactly is listed after saving.');
     const np = m ? m.entities.filter((e) => e && e.pasted).length : 0;
-    if (np) notes.push(`${plural(np)} pasted or duplicated${f === 'DGN' ? '; pasted cells get new cell headers' : ''}.`);
+    if (np) notes.push(`${plural(np)} pasted or duplicated${f === 'DGN' ? '; cells pasted from another drawing get new cell headers' : ''}.`);
     if (src === 'DGN' && f === 'DXF') notes.push('Cells are saved as separate items; DGN levels become layers.');
     if (src !== 'DGN' && f === 'DGN') notes.push('Layers become DGN levels 1–63 (DGN v7 has no layer names); blocks are flattened; fills become outlines.');
     if (f === 'DGN') notes.push('Saved DGN files are checked with GDAL’s reader but have not been tested in MicroStation yet.');
@@ -1154,7 +1154,8 @@ export function initEdit(app, api) {
     let blob, notes;
     if (f === 'DGN') {
       const { writeDgn } = await import('../formats/dgn-write.js');
-      const r = writeDgn(m, { bytes: E.doc.bytes, orig: E.doc.orig, extents: ext });
+      let r;
+      try { r = writeDgn(m, { bytes: E.doc.bytes, orig: E.doc.orig, extents: ext, level: E.curLayer }); } catch (err) { toast('Not saved', { kind: 'error', detail: err.message, timeout: 12000 }); return; }
       blob = new Blob([r.bytes], { type: 'application/octet-stream' });
       notes = r.notes;
     } else {

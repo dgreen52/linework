@@ -144,7 +144,7 @@ export function writeDxf(model, opts = {}) {
   const H = () => (handle++).toString(16).toUpperCase();
   const out = [];
   const P = (c, v) => { out.push(String(c), val(c, v)); };
-  const stats = { entities: 0, splines: 0, cellsFlattened: 0, dimsMoved: 0, degenerate: 0 };
+  const stats = { entities: 0, splines: 0, cellsFlattened: 0, dimsMoved: 0, degenerate: 0, fills: 0 };
   const isDgn = model.format === 'DGN';
 
   // ---- names
@@ -201,8 +201,22 @@ export function writeDxf(model, opts = {}) {
     return { va, valignCode };
   };
 
+  /** A DGN fill (shape / ellipse with a fill linkage) as a solid HATCH under its outline. */
+  function dgnFill(e, owner, paper) {
+    let loop = null;
+    if (e.type === 'polyline' && e.closed && e.pts.length >= 6) loop = { pts: e.pts, bulges: e.bulges };
+    else if (e.type === 'circle' && e.r > 0) { const [x, y] = e.c, r = e.r, q = Math.tan(Math.PI / 8); loop = { pts: [x + r, y, x, y + r, x - r, y, x, y - r], bulges: [q, q, q, q] }; }
+    else if (e.type === 'ellipse') {
+      const pts = [];
+      for (let k = 0; k < 72; k++) { const t = (k / 72) * 2 * Math.PI; pts.push(e.c[0] + e.major[0] * Math.cos(t) + e.minor[0] * Math.sin(t), e.c[1] + e.major[1] * Math.cos(t) + e.minor[1] * Math.sin(t)); }
+      loop = { pts, bulges: null };
+    }
+    if (loop) { stats.fills++; entity({ type: 'hatch', layer: e.layer, color: 256, rgb: e.fill, weight: e.weight, solid: true, loops: [loop] }, owner, paper); }
+  }
+
   function entity(e, owner, paper = false) {
     if (!e) return;
+    if (e.fill != null && e.type !== 'hatch') dgnFill(e, owner, paper); // a DGN fill (also on items pasted from a DGN)
     switch (e.type) {
       case 'line': common('LINE', e, owner, paper, 'AcDbLine'); xyz(10, e.a); xyz(11, e.b); break;
       case 'point': common('POINT', e, owner, paper, 'AcDbPoint'); xyz(10, e.p); break;
@@ -519,6 +533,7 @@ export function writeDxf(model, opts = {}) {
   const notes = [];
   if (stats.splines) notes.push(`${stats.splines} curve${stats.splines === 1 ? ' was' : 's were'} saved as polylines (their on-screen approximation).`);
   if (stats.cellsFlattened) notes.push(`${stats.cellsFlattened} cell${stats.cellsFlattened === 1 ? '' : 's'} saved as separate items (DXF has no cells).`);
+  if (stats.fills) notes.push(`${stats.fills} DGN fill${stats.fills === 1 ? ' was' : 's were'} saved as solid hatch${stats.fills === 1 ? '' : 'es'} under the outline.`);
   if (stats.degenerate) notes.push(`${stats.degenerate} zero-size ellipse${stats.degenerate === 1 ? ' was' : 's were'} left out (not valid in DXF).`);
   if (stats.dimsMoved) notes.push(`${stats.dimsMoved} moved dimension${stats.dimsMoved === 1 ? '' : 's'} got a copy of their block.`);
   return { text: out.join('\r\n') + '\r\n', notes, written: stats };

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { load, bytes, liveItems, compareItems, rng, gdalPython, ogrDump } from './helpers.mjs';
 import { parseDrawing } from '../../src/formats/detect.js';
 import { parseDgn } from '../../src/formats/dgn.js';
-import { buildScene, KIND, FLAG, packTexts, unpackTexts } from '../../src/scene.js';
+import { buildScene, KIND, FLAG, packTexts, unpackTexts, bulgeRing } from '../../src/scene.js';
 import { writeDxf, encodeText, mtextTokens, mtextChunks, ellipseParams, nearestAci } from '../../src/formats/dxf-write.js';
 import { writeDgn, dgnPalette, pushVax } from '../../src/formats/dgn-write.js';
 import { createModel, ensureLayer, flatEntities, FG } from '../../src/model.js';
@@ -278,17 +278,13 @@ function expectedDgnItems(model) {
   const bb = (pts) => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (let i = 0; i < pts.length; i += 2) { if (pts[i] !== pts[i]) continue; b[0] = Math.min(b[0], pts[i]); b[1] = Math.min(b[1], pts[i + 1]); b[2] = Math.max(b[2], pts[i]); b[3] = Math.max(b[3], pts[i + 1]); } return b; };
   const s = buildScene(model);
   const [ox, oy] = s.origin;
-  // per entity: bulged polylines become one item (complex chain), fills become one item per ring
+  // per entity: fills become one item per ring; bulged polylines (complex chains with arcs) come back
+  // as the same straight runs and exact arcs
   const byEnt = new Map();
   for (let i = 0; i < s.n; i++) { const k = s.ent[i]; if (!byEnt.has(k)) byEnt.set(k, []); byEnt.get(k).push(i); }
-  for (const [k, ids] of byEnt) {
-    const e = model.entities[k];
+  for (const ids of byEnt.values()) {
     const pts = (i) => { const q = [], o = s.start[i] * 2; if (s.kind[i] === KIND.CONIC) { const c = s.conics, cc = s.start[i] * 8; for (let t = 0; t <= 64; t++) { const a = c[cc + 6] + ((c[cc + 7] - c[cc + 6]) * t) / 64; q.push(c[cc] + c[cc + 2] * Math.cos(a) + c[cc + 4] * Math.sin(a) + ox, c[cc + 1] + c[cc + 3] * Math.cos(a) + c[cc + 5] * Math.sin(a) + oy); } return q; } for (let v = 0; v < s.count[i]; v++) q.push(s.coords[o + 2 * v] + ox, s.coords[o + 2 * v + 1] + oy); return q; };
     const it = (i, b) => ({ kind: 1, layer: s.layers[s.layer[i]].name, color: col(s.color[i]), bbox: b });
-    if (e.type === 'polyline' && e.bulges && (ids.length > 1 || ids.some((i) => s.kind[i] === KIND.CONIC))) {
-      out.push(it(ids[0], bb(ids.flatMap(pts))));
-      continue;
-    }
     for (const i of ids) {
       if (s.flags[i] & (FLAG.FILL | FLAG.PATTERN)) {
         let ring = [];
@@ -382,7 +378,7 @@ function entBox(e) {
   const b = [Infinity, Infinity, -Infinity, -Infinity];
   const add = (x, y) => { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); };
   if (e.type === 'line') { add(...e.a); add(...e.b); }
-  else if (e.type === 'polyline' || e.type === 'spline') for (let i = 0; i < e.pts.length; i += 2) add(e.pts[i], e.pts[i + 1]);
+  else if (e.type === 'polyline' || e.type === 'spline') { const p = e.bulges ? bulgeRing(e.pts, e.bulges) : e.pts; for (let i = 0; i < p.length; i += 2) add(p[i], p[i + 1]); }
   else if (e.type === 'text') add(...e.p);
   else if (e.type === 'circle') { add(e.c[0] - e.r, e.c[1] - e.r); add(e.c[0] + e.r, e.c[1] + e.r); }
   else if (e.type === 'arc' || e.type === 'ellipse') {
@@ -445,7 +441,7 @@ function randomSession(name, seed, steps = 40) {
   return { model, scene, doc, bytes: b };
 }
 
-for (const [name, seeds] of [['house-plan.dxf', [1, 2, 3, 4]], ['schematic.dxf', [5, 6]], ['site-plan.dgn', [7, 8, 9, 10, 11]], ['dgn-3d.dgn', [12]], ['bracket.dxf', [13, 14]]]) {
+for (const [name, seeds] of [['house-plan.dxf', [1, 2, 3, 4]], ['schematic.dxf', [5, 6]], ['site-plan.dgn', [7, 8, 9, 10, 11]], ['dgn-3d.dgn', [12]], ['bracket.dxf', [13, 14]], ['dgn-fidelity.dgn', [15, 16, 17, 18]], ['dgn-3d-rot.dgn', [19]]]) {
   test(`fuzz: random edits on ${name} -> scene, DXF and DGN all match the edited model`, () => {
     for (const seed of seeds) {
       const { model, scene, doc, bytes: b } = randomSession(name, seed);
@@ -456,7 +452,9 @@ for (const [name, seeds] of [['house-plan.dxf', [1, 2, 3, 4]], ['schematic.dxf',
       const ext = liveExtents(scene);
       const dxf = writeDxf(model, { extents: ext });
       const m2 = parseDrawing(enc(dxf.text), 'f.dxf');
-      assert.deepEqual(compareItems(full, liveItems(buildScene(m2)), tolS), [], `seed ${seed}: DXF matches`);
+      // a filled DGN circle (a filled conic) becomes a solid hatch in DXF, read back as a filled polygon
+      const asDxf = full.map((x) => (x.kind === KIND.CONIC && x.flags & FLAG.FILL ? { ...x, kind: KIND.POLY } : x));
+      assert.deepEqual(compareItems(asDxf, liveItems(buildScene(m2)), tolS), [], `seed ${seed}: DXF matches`);
       // DGN
       const w = writeDgn(model, { bytes: b, orig: doc.orig, extents: ext });
       const m3 = parseDgn(w.bytes);
@@ -490,7 +488,7 @@ function dgnElements(b) {
   return out;
 }
 const text2d = (b, o) => String.fromCharCode(...b.subarray(o + 60, o + 60 + b[o + 58]));
-const ATT = [0x07, 0x10, 0x34, 0x12, 0x01, 0x00, 0x02, 0x00]; // the attribute data the fixture gives "SHEET 1 OF 2"
+const ATT = [0x03, 0x10, 0x34, 0x12, 0x01, 0x00, 0x02, 0x00]; // the attribute data the fixture gives "SHEET 1 OF 2" (a user data linkage)
 
 test('scene: text inside cells and inserts knows its path; block-definition text is marked shared', () => {
   const { scene } = load('dgn-titleblock.dgn');
@@ -542,7 +540,7 @@ test('DGN: typing over a text inside a cell rewrites that cell; untouched parts 
   assert.ok(out[sheet.o] & 0x80, 'still a cell component');
   const att = sheet.o + 32 + 2 * (out[sheet.o + 30] | (out[sheet.o + 31] << 8));
   assert.deepEqual([...out.subarray(att, sheet.o + sheet.size)], ATT, 'attribute data kept');
-  assert.ok(out[sheet.o + 32] & 0x08, 'attribute flag kept');
+  assert.ok(out[sheet.o + 33] & 0x08, 'attributes-present flag (properties 0x0800) kept');
   assert.ok(live.some((el) => el.type === 17 && text2d(out, el.o) === 'APPROVED'));
   // read back: one TITLE cell with the same structure and the new texts
   const back = parseDgn(out);

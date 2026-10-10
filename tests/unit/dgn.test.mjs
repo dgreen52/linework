@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { load, fixture, conics, texts, near, bytes } from './helpers.mjs';
 import { parseDgn } from '../../src/formats/dgn.js';
 import { DGN_DEFAULT } from '../../src/palettes.js';
-import { primPoints } from '../../src/scene.js';
+import { primPoints, bulgeRing } from '../../src/scene.js';
 import { flatEntities } from '../../src/model.js';
 
 const oracleOf = (name) => JSON.parse(readFileSync(fixture(name.replace(/\.dgn$/, '.ogr.json')), 'utf8'));
@@ -17,7 +17,7 @@ function entityBBox(e) {
   const b = [Infinity, Infinity, -Infinity, -Infinity];
   const add = (x, y) => { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); };
   if (e.type === 'line') { add(...e.a); add(...e.b); }
-  else if (e.type === 'polyline' || e.type === 'spline') for (let i = 0; i < e.pts.length; i += 2) add(e.pts[i], e.pts[i + 1]);
+  else if (e.type === 'polyline' || e.type === 'spline') { const p = e.bulges ? bulgeRing(e.pts, e.bulges) : e.pts; for (let i = 0; i < p.length; i += 2) add(p[i], p[i + 1]); }
   else if (e.type === 'text') add(...e.p);
   else if (e.type === 'circle') { add(e.c[0] - e.r, e.c[1] - e.r); add(e.c[0] + e.r, e.c[1] + e.r); }
   else if (e.type === 'arc' || e.type === 'ellipse') {

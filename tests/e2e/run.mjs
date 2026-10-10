@@ -1246,7 +1246,8 @@ test('copy / paste: a DGN line into a DXF (m -> mm), placed with a snapped click
   await page.keyboard.press('Control+c');
   const text = await clipText(page);
   assert(text.startsWith('LINEWORK-CLIPBOARD 1\n{'), 'system clipboard: header line + JSON');
-  assert(!/"dgn":/.test(text), 'no DGN byte ranges on the clipboard');
+  const clip = JSON.parse(text.slice(text.indexOf('{')));
+  assert(clip.fid && clip.ents[0].dgn, 'DGN items carry their byte range with the file fingerprint (only the same file uses it)');
   assert(/Copied 1 item/.test(await page.textContent('#toasts')), 'copy toast');
   // another drawing in the same tab: Ctrl+V, the line follows the cursor, a click places it (snapped)
   await openForEdit(page, 'house-plan.dxf');

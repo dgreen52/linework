@@ -1,8 +1,11 @@
 // Copy / paste of drawing items between drawings (and Duplicate inside one). A copy is a
-// self-contained payload: the items, cloned with everything tied to the source file's bytes
-// removed (DGN byte ranges, raw Z, cell ids) and their colours / line weights made explicit, plus
+// self-contained payload: the items, cloned with their colours / line weights made explicit, plus
 // what they depend on (block definitions, line types, text styles, layers), the source format and
-// units, and the items' extents. On the system clipboard it is text/plain: a header line + JSON,
+// units, and the items' extents. Items copied from a DGN file keep their link to that file's bytes
+// (byte range, transform since read, raw Z) with the file's fingerprint (`fid`): pasted into the same
+// file (Duplicate, or the same file in another tab) the DGN writer copies their original bytes;
+// pasted anywhere else the link is dropped and they are converted. On the system clipboard it is
+// text/plain: a header line + JSON,
 // so it travels between tabs and windows with no permission prompt. preparePaste() turns a payload
 // into changes for a target drawing: unit scaling, layers / levels, colours through the target's
 // colour table, line weights, block renames, DXF blocks exploded for DGN v7, Z for 3D DGN files.
@@ -23,12 +26,19 @@ const aciRgb = (c) => (c > 0 && c < 256 && c !== 7 ? ACI[c] : 0xffffff);
 /** Each entity and its parts (cell components, attributes, dimension fallback), depth first. */
 const each = (list, fn) => { for (const e of list) if (e) { fn(e); each(e.children || [], fn); each(e.attribs || [], fn); each(e.fallback || [], fn); } };
 
-/** Copy of an entity without what only makes sense in its source file (byte ranges, raw Z, cell ids). */
-function strip(e, z) {
+/** Link fields that tie an item to its source DGN file's bytes. */
+const LINK = ['dgn', 'xm', 'zr', 'zv'];
+/**
+ * Copy of an entity for a payload. z: raw Z -> master units (3D DGN): every item also gets its Z in
+ * drawing units (`z`, and `zs` per vertex) for other files. keep: keep the link to the source bytes.
+ */
+function strip(e, z, keep = false) {
   const o = { ...e };
-  delete o.dgn; delete o.group; delete o.id; delete o.paper; delete o.pasted;
-  if (o.zr != null) { if (z) o.z = z(o.zr); delete o.zr; }
-  for (const k of ['children', 'attribs', 'fallback']) if (o[k]) o[k] = o[k].map((c) => c && strip(c, z));
+  delete o.group; delete o.id; delete o.paper; delete o.pasted; delete o.ctr;
+  if (o.zr != null && z) o.z = z(o.zr);
+  if (o.zv && z) o.zs = o.zv.map(z);
+  if (!keep) for (const k of LINK) delete o[k];
+  for (const k of ['children', 'attribs', 'fallback']) if (o[k]) o[k] = o[k].map((c) => c && strip(c, z, keep));
   return o;
 }
 
@@ -59,7 +69,8 @@ export function makePayload(model, ids, { ext = [0, 0, 0, 0] } = {}) {
     for (const c of [...(o.children || []), ...(o.attribs || [])]) if (c) explicit(c); // copies made by strip()
   };
   const ents = [];
-  for (const i of ids) { const e = model.entities[i]; if (!e) continue; const o = strip(e, z); explicit(o); ents.push(o); }
+  const fid = dgn && h.fid ? h.fid : undefined;
+  for (const i of ids) { const e = model.entities[i]; if (!e) continue; const o = strip(e, z, !!fid); explicit(o); ents.push(o); }
   // dependencies: blocks (nested and dimension blocks too), layers, line types, text styles
   const blocks = {}, layers = new Map(), ltypes = {}, styles = {};
   const use = (list) => each(list, (e) => {
@@ -71,7 +82,7 @@ export function makePayload(model, ids, { ext = [0, 0, 0, 0] } = {}) {
     if (b && !blocks[k]) { blocks[k] = { ...b, entities: b.entities.map((c) => c && strip(c, z)) }; use(blocks[k].entities); }
   });
   use(ents);
-  return { app: 'Linework', v: 1, format: model.format, units: model.units, dim: h.dimension || 2, ext, ents, blocks, layers: [...layers.values()], ltypes, styles };
+  return { app: 'Linework', v: 1, format: model.format, fid, units: model.units, dim: h.dimension || 2, ext, ents, blocks, layers: [...layers.values()], ltypes, styles };
 }
 
 export const clipText = (p) => CLIP_HEADER + '\n' + JSON.stringify(p);
@@ -106,6 +117,7 @@ function dgnStyle(name, defs) {
  */
 export function preparePaste(P, target, opts = {}) {
   const toDgn = target.format === 'DGN', fromDgn = P.format === 'DGN';
+  const sameFile = !!(P.fid && toDgn && target.header && target.header.fid === P.fid); // the same DGN file: keep the byte links
   const notes = [], changes = [];
   const { k, note } = unitScale(P.units, target.units);
   if (note) notes.push(note);
@@ -147,6 +159,7 @@ export function preparePaste(P, target, opts = {}) {
     if (toDgn) {
       const rgb = o.rgb != null && o.rgb !== FG ? o.rgb & 0xffffff : aciRgb(o.color);
       o.ci = ciOf(rgb, fromDgn ? o.ci : null); o.rgb = pal[o.ci]; o.color = 256;
+      if (o.fill != null) { o.fci = ciOf(o.fill & 0xffffff, fromDgn ? o.fci : null); o.fill = pal[o.fci]; } // DGN fill colour
       if (!fromDgn) { o.weight = lwToWeight(o.lw ?? -1); o.ltype = dgnStyle(o.ltype === 'BYLAYER' || !o.ltype ? (srcL.get(up(e.layer)) || {}).ltype || '' : o.ltype, defs); delete o.style; }
       delete o.lw;
     } else {
@@ -157,10 +170,15 @@ export function preparePaste(P, target, opts = {}) {
       if (o._bl && (o.rgb ?? (o.color === 7 ? FG : ACI[o.color])) === L.color) { o.color = 256; o.rgb = null; }
       if (fromDgn) { const lw = weightToLw(o.weight); if (lw >= 0) o.lw = lw; delete o.weight; delete o.font; delete o.just; }
       else if (o._bw && (L.lw ?? -3) === o.lw) delete o.lw;
-      delete o.ci;
+      delete o.ci; delete o.fci;
     }
-    if (o.z != null) { if (tz) o.zr = Math.round((o.z * k + (th.oz || 0)) * tuor); else if (o.z) flat++; delete o.z; }
-    else if (tz) o.zr = Math.round((th.oz || 0) * tuor);
+    if (sameFile) { delete o.z; delete o.zs; } // raw Z and byte links stay as they are
+    else {
+      for (const key of LINK) delete o[key];
+      if (o.zs) { if (tz) o.zv = o.zs.map((v) => Math.round((v * k + (th.oz || 0)) * tuor)); delete o.zs; }
+      if (o.z != null) { if (tz) o.zr = Math.round((o.z * k + (th.oz || 0)) * tuor); else if (o.z) flat++; delete o.z; }
+      else if (tz) o.zr = Math.round((th.oz || 0) * tuor);
+    }
     delete o._bl; delete o._bw;
     if (o.children) o.children = o.children.map((c) => c && conv(c));
     if (o.attribs) o.attribs = o.attribs.map((c) => c && conv(c));

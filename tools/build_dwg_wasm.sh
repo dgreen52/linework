@@ -90,7 +90,7 @@ autoreconf -f --install --symlink -I m4   # what autogen.sh does, without its ta
 mkdir build-wasm
 cd build-wasm
 # shellcheck disable=SC2086
-emconfigure ../configure CC=emcc CFLAGS="$CFLAGS_WASM" $CONFIGURE_FLAGS || { tail -n 80 config.log; fail "configure failed"; }
+emconfigure ../configure CC=emcc CFLAGS="$CFLAGS_WASM" $CONFIGURE_FLAGS || { sed -n "/checking for suffix of executables/,/Cache variables/p" config.log | head -n 80; fail "configure failed"; }
 grep -q "^#define PACKAGE_VERSION \"$VERSION\"" src/config.h || fail "configure did not take the version string"
 emmake make -j"$JOBS" -C src
 ls src/*.o > /dev/null 2>&1 || fail "no objects in build-wasm/src"

@@ -1,0 +1,55 @@
+# Temporary: finds the Emscripten version whose build of the pinned sources matches the wasm of
+# npm @mlightcad/libredwg-web@0.7.16 (still vendored on this branch). Removed after use.
+name: tmp emsdk probe
+
+on:
+  push:
+    paths:
+      - .github/workflows/tmp-emsdk-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { v: 4.0.0, c: 9853a6bfe637c8f44e9b4162b4a533f28df15c31 }
+          - { v: 4.0.1, c: 9dbdc4b3437750b85d16931c7c801bb71a782122 }
+          - { v: 4.0.2, c: 539e4044b78c3f9ef9c0539b673e48a59ed54803 }
+          - { v: 4.0.3, c: 127ce42cd5f0aabe2d9b5d636041ccef7c66d165 }
+          - { v: 4.0.4, c: 074211759c17c646164d3271ca1d155cc174f78e }
+          - { v: 4.0.5, c: b665079cb9ad9eb1704652f962281a7fa1633e2d }
+          - { v: 4.0.6, c: 24fc909c0da13ef641d5ae75e89b5a97f25e37aa }
+          - { v: 4.0.7, c: c69d433d8509c5c64564c2f0d054bf102a5cf67e }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends autoconf automake libtool pkg-config texinfo
+      - name: Build
+        env:
+          EMSDK_VERSION: ${{ matrix.v }}
+          EMSDK_COMMIT: ${{ matrix.c }}
+          OUT: ${{ runner.temp }}/out
+          INSTALL: '0'
+        run: bash tools/build_dwg_wasm.sh > build.log 2>&1 || { tail -n 60 build.log; exit 1; }
+      - name: Compare with the npm wasm
+        env:
+          OUT: ${{ runner.temp }}/out
+        run: |
+          node -e "
+          const fs = require('fs'), crypto = require('crypto');
+          const secs = (b) => { const o = {}; let p = 8; const leb = () => { let r = 0, s = 0, x; do { x = b[p++]; r += (x & 0x7f) * 2 ** s; s += 7; } while (x & 0x80); return r; };
+            while (p < b.length) { const id = b[p++]; const sz = leb(); o[id] = crypto.createHash('sha256').update(b.subarray(p, p + sz)).digest('hex').slice(0, 16) + ' ' + sz; p += sz; } return o; };
+          const a = fs.readFileSync('vendor/libredwg/libredwg-web.wasm'), b = fs.readFileSync(process.env.OUT + '/libredwg-web.wasm');
+          const A = secs(a), B = secs(b);
+          console.log('npm', a.length, 'build', b.length);
+          for (const id of new Set([...Object.keys(A), ...Object.keys(B)])) console.log('section', id, A[id] === B[id] ? 'SAME' : 'differs', A[id] || '-', '|', B[id] || '-');
+          "

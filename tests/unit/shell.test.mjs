@@ -23,7 +23,9 @@ test('service worker precaches every app module and sample (or caches it on firs
   assert.deepEqual(READER, ['vendor/libredwg/libredwg-web.js', 'vendor/libredwg/libredwg-web.wasm']);
   for (const p of READER) assert.ok(!SHELL.includes(p));
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
-  assert.ok(sw.includes(`const VERSION = 'linework-${pkg.version}'`), 'sw.js VERSION matches package.json');
+  const v = /LINEWORK_VERSION = '([^']+)'/.exec(readFileSync(join(ROOT, 'src/version.js'), 'utf8'))[1];
+  assert.equal(pkg.version, v, 'src/version.js matches package.json');
+  assert.ok(/importScripts\('src\/version\.js'\)/.test(sw), 'sw.js names its cache from src/version.js');
   const rev = /READER_REV = '([^']+)'/.exec(readFileSync(join(ROOT, 'src/formats/dwg.js'), 'utf8'))[1];
   assert.ok(sw.includes(`READER_CACHE = 'linework-reader-libredwg-${rev}'`), 'reader cache name follows READER_REV (bump both together)');
 });

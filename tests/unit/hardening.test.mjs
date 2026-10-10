@@ -172,7 +172,7 @@ test('the version lives in one place (src/version.js): the about line, saved fil
   const sw = readFileSync(join(ROOT, 'sw.js'), 'utf8');
   assert.match(sw, /importScripts\('src\/version\.js'\)/);
   assert.match(sw, /const VERSION = 'linework-' \+ self\.LINEWORK_VERSION;/);
-  assert.ok(!/0\.\d+\.\d+/.test(sw), 'no version number written in sw.js');
+  assert.ok(!/0\.\d+\.\d+/.test(sw.replace(/READER_CACHE = '[^']*'/, '')), 'no app version number written in sw.js (the DWG reader cache name carries its own)');
   assert.ok(!/['"]\d+\.\d+\.\d+['"]/.test(readFileSync(join(ROOT, 'src/config.js'), 'utf8')), 'none in config.js');
   assert.equal(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version, v, 'package.json agrees');
   assert.ok(writeDxf(createModel('DXF'), {}).text.includes('Linework ' + v), 'saved DXF names the version');

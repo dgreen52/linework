@@ -202,7 +202,13 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 }
 .et-hint, .len-box { position: absolute; z-index: 9; padding: 3px 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); font-size: 12px; color: var(--muted); white-space: nowrap; pointer-events: none; }
 .len-box { display: flex; align-items: center; gap: 6px; pointer-events: auto; color: var(--text); }
-.len-box input { width: 7em; min-height: 26px; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg-2); font-variant-numeric: tabular-nums; }
+.len-box { flex-wrap: wrap; max-width: min(360px, calc(100% - 8px)); }
+.len-box input { width: 11em; min-height: 26px; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg-2); font-variant-numeric: tabular-nums; }
+.len-box .len-copy { display: flex; align-items: center; gap: 4px; }
+.len-box .len-copy input { width: auto; min-height: 0; }
+#len-prev { flex-basis: 100%; color: var(--muted); white-space: normal; }
+#len-prev:empty { display: none; }
+#len-prev.bad { color: var(--warn-text); }
 .warn-note { margin: 0; padding: 8px 10px; border-radius: 8px; border-left: 4px solid #f0a500; background: var(--bg-3); font-size: 13px; }
 .save-notes { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .save-notes:empty { display: none; }
@@ -228,6 +234,10 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 .layer .sw.fg { background: linear-gradient(135deg, #fff 50%, #000 50%); }
 .layer .iso { opacity: .55; }
 .layer:hover .iso, .layer .iso:focus-visible { opacity: 1; }
+.layer .lvn { color: var(--muted); }
+.layer .lvin { width: 9em; min-height: 24px; padding: 1px 5px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg-3); }
+.panel-foot { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.panel-foot span { margin-right: auto; }
 
 /* ------------------------------------------------------------------ status bar + toasts */
 .statusbar { display: flex; align-items: center; gap: 14px; padding: 3px 12px; padding-bottom: max(3px, env(safe-area-inset-bottom)); min-height: 28px; background: var(--bg-2); border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }

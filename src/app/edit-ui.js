@@ -20,10 +20,10 @@ export const EDIT_TOOLS = new Set(['eselect', 'eline', 'epoly', 'erect', 'ecircl
 export const EDIT_KEYS = { v: 'eselect', n: 'eline', p: 'epoly', r: 'erect', o: 'ecircle', t: 'etext' };
 export const EDIT_HINTS = {
   eselect: 'Click to select · drag a box (→ inside, ← touching) · drag to move · double-click to edit',
-  eline: 'Click the start, then each next point · type a length + Enter · Enter or Esc to stop',
-  epoly: 'Click points · double-click or Enter to finish · C closes it · Backspace removes the last point',
-  erect: 'Click two opposite corners',
-  ecircle: 'Click the centre, then a point on the circle',
+  eline: 'Click the start, then each next point · type a length, XY=, DL= or DI= + Enter · Enter or Esc to stop',
+  epoly: 'Click points (or type XY=, DL=, DI=) · double-click or Enter to finish · C closes it · Backspace removes the last point',
+  erect: 'Click two opposite corners (or type XY=, DL=)',
+  ecircle: 'Click the centre, then a point on the circle (or type XY=, then the radius)',
   etext: 'Click where the text goes, then type · Enter places it · Esc cancels',
 };
 const VEDIT_HINT = 'Drag a point to move it · right-click a point to delete it · double-click a side to add one · Esc when done';
@@ -54,6 +54,9 @@ export function initEdit(app, api) {
     place: null, // items following the cursor (paste / duplicate): { r, path, label, at }
     text: null, // in-place text editor state
     nudgeAt: 0,
+    last: null, // the last data point (key-ins DL= / DI= start here)
+    aa: 0, // active angle (AA=, radians): new text
+    pick: null, // a tool waiting for a point or an item: { fn(c, sx, sy), hover, hint }
   };
   app.edit = E;
   const scene = () => app.scene;
@@ -68,7 +71,7 @@ export function initEdit(app, api) {
   function reset() {
     E.doc = null; E.ready = false;
     E.sel = new Set(); E.selPath = null; E.hover = -1; E.vedit = -1;
-    E.drag = E.box = E.gdrag = E.draft = E.place = null;
+    E.drag = E.box = E.gdrag = E.draft = E.place = E.pick = E.last = null;
     E.curLayer = null; E.selSum = null; // each drawing gets its own current layer (a visible one)
     E.curColor = isDgn() ? { ci: 0, rgb: 0xffffff } : 'bylayer';
     E.curWeight = isDgn() ? 0 : -1;
@@ -84,6 +87,7 @@ export function initEdit(app, api) {
     if (isDgn()) E.curColor = { ci: 0, rgb: (E.palette || DGN_DEFAULT)[0] ?? 0xffffff };
     fillLayers();
     updateRibbon();
+    if (app.tools) app.tools.selChanged();
     for (const w of E.waiters.splice(0)) w(true);
   }
   function whenReady() {
@@ -378,7 +382,7 @@ export function initEdit(app, api) {
       ctx.strokeRect(x + 0.5, y + 0.5, w, h);
       ctx.setLineDash([]);
     }
-    if (E.cursor && E.cursor.snap && (app.tool !== 'eselect' || E.drag || E.gdrag || E.place)) api.drawSnapGlyph(ctx, E.cursor.sx, E.cursor.sy, E.cursor.snap.kind);
+    if (E.cursor && E.cursor.snap && (app.tool !== 'eselect' || E.drag || E.gdrag || E.place || (E.pick && !E.pick.hover))) api.drawSnapGlyph(ctx, E.cursor.sx, E.cursor.sy, E.cursor.snap.kind);
     ctx.restore();
   }
 
@@ -465,12 +469,14 @@ export function initEdit(app, api) {
     if (E.text) { closeText(true); return; }
     if (!E.ready) { whenReady(); return; }
     if (E.place) { E.place.down = true; return; }
+    if (E.pick) { const c = pointAt(sx, sy, ev, { noSnap: E.pick.hover }); E.last = [c.x, c.y]; E.pick.fn(c, sx, sy); api.invalidate(); return; }
     startLongPress(sx, sy, ev);
     const t = app.tool;
     if (t === 'eselect') return selectDown(sx, sy, ev);
     const c = pointAt(sx, sy, ev, { from: E.draft && E.draft.pts.length ? E.draft.pts.slice(-2) : null });
     E.cursor = c;
     const p = [c.x, c.y];
+    E.last = p;
     if (t === 'etext') { E.pendingText = { at: p, sx, sy }; return; } // opened on release (a press would steal the focus)
     if (t === 'eline') {
       if (!E.draft) { E.draft = { tool: t, pts: p }; api.updateFinishBar(); }
@@ -491,21 +497,22 @@ export function initEdit(app, api) {
     }
     api.invalidate();
   }
-  function addLine(p) {
+  // keyed: a typed (exact) point, accepted at any size above zero; a click must be 2 px away
+  function addLine(p, keyed) {
     const a = E.draft.pts.slice(-2);
-    if (Math.hypot(p[0] - a[0], p[1] - a[1]) * app.view.scale < 2) return;
+    if (Math.hypot(p[0] - a[0], p[1] - a[1]) * (keyed ? 1e9 : app.view.scale) < 2) return;
     commit('Line', [{ i: newIdx(), before: null, after: { ...newProps('LINE'), type: 'line', a, b: p } }]);
     E.draft = { tool: 'eline', pts: p };
     api.updateFinishBar();
   }
-  function completeShape(p) {
-    const d = E.draft;
+  function completeShape(p, keyed) {
+    const d = E.draft, k = keyed ? 1e9 : app.view.scale;
     if (d.tool === 'erect') {
-      if (Math.abs(p[0] - d.pts[0]) * app.view.scale < 2 || Math.abs(p[1] - d.pts[1]) * app.view.scale < 2) return;
+      if (Math.abs(p[0] - d.pts[0]) * k < 2 || Math.abs(p[1] - d.pts[1]) * k < 2) return;
       commit('Rectangle', [{ i: newIdx(), before: null, after: rectEntity(d.pts, p, newProps(isDgn() ? 'SHAPE' : 'LWPOLYLINE')) }]);
     } else {
       const r = Math.hypot(p[0] - d.pts[0], p[1] - d.pts[1]);
-      if (r * app.view.scale < 2) return;
+      if (r * k < 2) return;
       commit('Circle', [{ i: newIdx(), before: null, after: { ...newProps(isDgn() ? 'ELLIPSE' : 'CIRCLE'), type: 'circle', c: d.pts.slice(0, 2), r } }]);
     }
     E.draft = null;
@@ -541,6 +548,13 @@ export function initEdit(app, api) {
     if (E.lp && Math.hypot(sx - E.lp.sx, sy - E.lp.sy) > 8) cancelLongPress();
     E.mouse = ev.pointerType === 'mouse' ? [sx, sy] : null;
     if (E.place) { const c = (E.cursor = pointAt(sx, sy, ev)); E.place.at = [c.x, c.y]; api.invalidate(); return; }
+    if (E.pick) {
+      E.cursor = pointAt(sx, sy, ev, { noSnap: E.pick.hover });
+      if (E.pick.hover) { const h = pickEnt(sx, sy); if (h !== E.hover) { E.hover = h; status(); } }
+      if (E.lenBox) placeLen();
+      api.invalidate();
+      return;
+    }
     const t = app.tool;
     if (t !== 'eselect') {
       E.cursor = pointAt(sx, sy, ev, { from: E.draft && E.draft.pts.length ? E.draft.pts.slice(-2) : null });
@@ -588,9 +602,10 @@ export function initEdit(app, api) {
     cancelLongPress();
     if (E.lpFired) { E.lpFired = false; E.lpUpAt = performance.now(); E.drag = E.box = E.gdrag = null; return; }
     if (E.place) {
-      if (E.place.down) { const c = pointAt(sx, sy, ev); placeAt([c.x, c.y]); }
+      if (E.place.down) { const c = pointAt(sx, sy, ev); placeAt([c.x, c.y]); E.last = [c.x, c.y]; }
       return;
     }
+    if (E.pick) return;
     const t = app.tool;
     if (t === 'etext') {
       const pt = E.pendingText;
@@ -749,6 +764,8 @@ export function initEdit(app, api) {
       { label: 'Rotate 90°', act: () => rotateSel(Math.PI / 2) },
       { label: 'Delete', act: deleteSel },
       ...pastes,
+      { label: 'Select same…', act: () => api.tools('same') },
+      { label: 'Element info', act: () => api.tools('info', true) },
     ]);
     api.invalidate();
     return true;
@@ -888,9 +905,12 @@ export function initEdit(app, api) {
     if (!inEdit() || !E.ready) return false;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const d = E.draft;
-    if (d && (d.tool === 'eline' || d.tool === 'epoly') && /^[0-9.]$/.test(e.key) && !E.lenBox) { openLen(e.key); e.preventDefault(); return true; }
+    // typed key-ins: a number while drawing (a length, a radius); XY= DL= DI= AA= in a draw tool, with a
+    // selection (move, copy, rotate), while placing or picking a point
+    if (!E.lenBox && !E.text && (/^[0-9.]$/.test(e.key) ? d && d.tool !== 'etext' : /^[xda]$/i.test(e.key) && (app.tool !== 'eselect' || E.sel.size || E.place || (E.pick && !E.pick.hover)))) { openLen(e.key); e.preventDefault(); return true; }
     if (e.key === 'Escape') {
       if (closeMenus(true)) return true;
+      if (E.pick) { endPick(); return true; }
       if (cancelDraft()) return true;
       if (E.vedit >= 0) { endVedit(); api.invalidate(); return true; }
       if (app.tool !== 'eselect') { api.setTool('eselect'); return true; } // a draw tool, nothing in progress: back to Select
@@ -918,41 +938,81 @@ export function initEdit(app, api) {
   }
 
   // ---------------------------------------------------------------- typed length (line / polyline)
-  function openLen(first) {
+  /** The length / key-in box: a number while drawing, or XY= DL= DI= AA= (read by src/app/tools-ui.js). */
+  function openLen(first, copy = false) {
     const box = $('#len-box'), inp = $('#inp-len');
+    const len = /^[0-9.]$/.test(first || '') && E.draft && (E.draft.tool === 'eline' || E.draft.tool === 'epoly');
     E.lenBox = true;
     box.hidden = false;
+    $('#len-label').textContent = len ? 'Length' : 'Key-in';
+    inp.inputMode = len ? 'decimal' : 'text';
     $('#len-unit').textContent = scene().units.abbr || '';
+    $('#len-copy').parentElement.hidden = !(app.tool === 'eselect' && E.sel.size && !E.place && !E.pick);
+    $('#len-copy').checked = copy;
+    $('#len-prev').textContent = '';
     inp.value = first || '';
     placeLen();
     inp.focus();
     inp.setSelectionRange(inp.value.length, inp.value.length);
+    api.tools('keyin', inp.value); // (loads the key-in reader while typing)
   }
   function placeLen() {
     const c = E.cursor, box = $('#len-box');
-    if (!c || box.hidden) return;
-    box.style.left = `${Math.min(app.view.w - 170, c.sx + 16)}px`;
-    box.style.top = `${Math.max(4, c.sy - 40)}px`;
+    if (box.hidden) return;
+    const [x, y] = c ? [c.sx, c.sy] : [app.view.w / 2 - 100, 60];
+    box.style.left = `${Math.max(4, Math.min(app.view.w - box.offsetWidth - 8, x + 16))}px`;
+    box.style.top = `${Math.max(4, y - box.offsetHeight - 14)}px`; // above the point: its preview stays in sight
   }
-  function hideLen() { E.lenBox = false; const b = $('#len-box'); if (b) b.hidden = true; }
+  function hideLen() { if (E.lenBox) api.tools('keyin', null); E.lenBox = false; const b = $('#len-box'); if (b) b.hidden = true; }
   function applyLen() {
-    const L = parseFloat($('#inp-len').value.replace(',', '.'));
+    const v = $('#inp-len').value.trim(), copy = $('#len-copy').checked;
     hideLen();
     const d = E.draft, c = E.cursor;
-    if (!d || !c || !(L > 0)) return;
+    const L = /^[0-9]*\.?[0-9]+$/.test(v) ? parseFloat(v) : NaN;
+    // a plain length while drawing a line or polyline: at once; any other key-in: tools-ui.js
+    if (!(d && c && (d.tool === 'eline' || d.tool === 'epoly') && L > 0)) { if (v) api.tools('apply', v, copy); return; }
     const a = d.pts.slice(-2);
     let dx = c.x - a[0], dy = c.y - a[1];
     const n = Math.hypot(dx, dy);
     if (n < 1e-12) { dx = 1; dy = 0; } else { dx /= n; dy /= n; }
     const p = [a[0] + dx * L, a[1] + dy * L];
-    if (d.tool === 'eline') addLine(p); else d.pts.push(p[0], p[1]);
+    E.last = p;
+    if (d.tool === 'eline') addLine(p, true); else d.pts.push(p[0], p[1]);
     api.invalidate();
   }
-  $('#inp-len').addEventListener('keydown', (e) => {
+  $('#len-box').addEventListener('keydown', (e) => { // (the input and the Copy box)
     e.stopPropagation();
     if (e.key === 'Enter') { e.preventDefault(); applyLen(); api.focusStage(); }
     else if (e.key === 'Escape') { e.preventDefault(); hideLen(); api.focusStage(); }
   });
+  $('#inp-len').addEventListener('input', (e) => api.tools('keyin', e.target.value));
+  $('#len-copy').addEventListener('change', () => api.tools('keyin', $('#inp-len').value));
+
+  // ---------------------------------------------------------------- key-in points and picks (for src/app/tools-ui.js)
+  /** Where key-ins DL= and DI= start: the draft's last vertex, else the last data point. */
+  const lastPoint = () => (E.draft && E.draft.pts.length ? E.draft.pts.slice(-2) : E.last);
+  /** A typed data point (XY=, DL=, DI=): like a click there in the draw tool, while placing or picking. */
+  function keyPoint(p) {
+    const t = app.tool, [sx, sy] = W2S(p[0], p[1]);
+    E.cursor = { x: p[0], y: p[1], sx, sy, snap: null };
+    E.last = p.slice();
+    if (E.place) { placeAt(p); return true; }
+    if (E.pick) { E.pick.fn(E.cursor, sx, sy); api.invalidate(); return true; }
+    if (t === 'etext') { openText({ create: true, at: p }); return true; }
+    if (t === 'eline' || t === 'epoly') {
+      if (!E.draft) { E.draft = { tool: t, pts: p.slice() }; api.updateFinishBar(); }
+      else if (t === 'eline') addLine(p, true);
+      else { const q = E.draft.pts.slice(-2); if (q[0] !== p[0] || q[1] !== p[1]) E.draft.pts.push(p[0], p[1]); }
+    } else if (t === 'erect' || t === 'ecircle') {
+      if (!E.draft) E.draft = { tool: t, pts: p.slice(), s0: [sx, sy] }; else completeShape(p, true);
+    } else return false;
+    api.invalidate();
+    return true;
+  }
+  /** Wait for a click: o.fn(cursor, sx, sy); o.hover: the click picks an item (no snaps). */
+  function startPick(o) { cancelDraft(); endVedit(); closeMenus(); E.pick = o; hint(o.hint); api.setCursor(o.hover ? 'pointer' : 'crosshair'); api.invalidate(); }
+  function endPick() { if (!E.pick) return; const o = E.pick; E.pick = null; E.hover = -1; hint(''); api.setCursor('pointer'); if (o.end) o.end(); status(); api.invalidate(); }
+  function setSel(ids) { E.sel = keepVisible(new Set([...ids].filter((i) => entity(i)))); endVedit(); E.selPath = null; status(); updateRibbon(); api.invalidate(); }
 
   // ---------------------------------------------------------------- in-place text editor
   function defaultTextHeight() {
@@ -970,6 +1030,7 @@ export function initEdit(app, api) {
       const h = defaultTextHeight();
       [ax, ay] = W2S(o.at[0], o.at[1]);
       capPx = h * app.view.scale;
+      rot = E.aa || 0;
       E.text = { create: true, at: o.at, h };
     } else {
       const e = entity(o.ent);
@@ -1035,8 +1096,8 @@ export function initEdit(app, api) {
       const multi = v.includes('\n');
       const P = newProps(multi ? 'MTEXT' : 'TEXT');
       const e = multi
-        ? { ...P, type: 'mtext', p: st.at, h: st.h, rot: 0, text: v, attach: 1, width: 0, spacing: 1, wf: 1 }
-        : { ...P, type: 'text', p: st.at, h: st.h, rot: 0, text: v, halign: 0, valign: 0, wf: 1, oblique: 0 };
+        ? { ...P, type: 'mtext', p: st.at, h: st.h, rot: E.aa || 0, text: v, attach: 1, width: 0, spacing: 1, wf: 1 }
+        : { ...P, type: 'text', p: st.at, h: st.h, rot: E.aa || 0, text: v, halign: 0, valign: 0, wf: 1, oblique: 0 };
       const i = newIdx();
       commit('Text', [{ i, before: null, after: e }], [i]);
       return;
@@ -1074,6 +1135,8 @@ export function initEdit(app, api) {
     for (const it of items) {
       const b = document.createElement('button');
       b.type = 'button'; b.setAttribute('role', 'menuitem'); b.textContent = it.label;
+      if (it.disabled) b.disabled = true;
+      if (it.title) b.title = it.title;
       b.addEventListener('click', () => { closeMenus(true); it.act(); });
       m.appendChild(b);
     }
@@ -1081,9 +1144,10 @@ export function initEdit(app, api) {
     m.hidden = false;
     m.style.left = `${Math.max(4, Math.min(app.view.w - m.offsetWidth - 4, sx))}px`;
     m.style.top = `${Math.max(4, Math.min(app.view.h - m.offsetHeight - 4, sy))}px`;
-    m.querySelector('button').focus();
+    const first = () => m.querySelector('button:not(:disabled)') || m.querySelector('button');
+    first().focus();
     // opened by a press on the drawing: the press then focuses the stage, so focus the menu after it
-    setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) m.querySelector('button').focus({ preventScroll: true }); }, 0);
+    setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) first().focus({ preventScroll: true }); }, 0);
   }
   /** Close the context menu and the colour / weight list. refocus: give the focus back (keyboard, a choice made). */
   function closeMenus(refocus = false) {
@@ -1133,7 +1197,7 @@ export function initEdit(app, api) {
     if (e.type === 'polyline' && e.closed) t = 'Closed polyline';
     if (isText(e)) t += ` “${String(e.text).replace(/\n/g, ' ').slice(0, 40)}”`;
     const c = colorInfo(e, fmt());
-    return `${t} · Layer ${e.layer ?? '0'} · ${c.label} · ${weightLabel(e, fmt())}`;
+    return `${t} · Layer ${app.layerLabel(String(e.layer ?? '0'))} · ${c.label} · ${weightLabel(e, fmt())}`;
   }
   /** Summary of a multiple selection (kept until the selection changes: hovering must stay cheap). */
   function selSummary() {
@@ -1142,7 +1206,7 @@ export function initEdit(app, api) {
     let any = null;
     for (const i of E.sel) { const e = entity(i); if (!e) continue; any = any || e; const n = TYPE_NAME[e.type] || e.type; kinds.set(n, (kinds.get(n) || 0) + 1); layers.add(e.layer ?? '0'); ws.add(entWeight(e)); }
     const list = [...kinds].sort((a, b) => b[1] - a[1]).map(([k, v]) => count(v, k.toLowerCase()));
-    const txt = `${E.sel.size} selected · ${list.slice(0, 3).join(', ')}${list.length > 3 ? ', …' : ''} · ${layers.size === 1 ? 'Layer ' + [...layers][0] : count(layers.size, 'layer')}${ws.size === 1 && any ? ' · ' + weightLabel(any, fmt()) : ''}`;
+    const txt = `${E.sel.size} selected · ${list.slice(0, 3).join(', ')}${list.length > 3 ? ', …' : ''} · ${layers.size === 1 ? 'Layer ' + app.layerLabel(String([...layers][0])) : count(layers.size, 'layer')}${ws.size === 1 && any ? ' · ' + weightLabel(any, fmt()) : ''}`;
     E.selSum = { sel: E.sel, size: E.sel.size, txt };
     return txt;
   }
@@ -1153,6 +1217,7 @@ export function initEdit(app, api) {
     else if (E.sel.size > 1) txt = selSummary();
     if (E.hover >= 0 && !E.sel.has(E.hover)) txt = (txt ? txt + '   |   ' : '') + describe(entity(E.hover));
     api.setInfo(txt);
+    if (app.tools) app.tools.selChanged();
   }
   // The Layer, Colour and Weight boxes show the selection's values when there is one (and change
   // only the selection); otherwise the current values that new items get.
@@ -1240,7 +1305,7 @@ export function initEdit(app, api) {
     const sel = $('#sel-elayer');
     const names = layerChoices();
     if (!E.curLayer || !names.includes(E.curLayer)) E.curLayer = defaultLayer(names);
-    sel.innerHTML = names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + '<option value="__new">New layer…</option>';
+    sel.innerHTML = names.map((n) => `<option value="${esc(n)}">${esc(app.layerLabel(n))}</option>`).join('') + '<option value="__new">New layer…</option>';
     sel.value = E.curLayer;
   }
   const hex = (rgb) => '#' + (rgb & 0xffffff).toString(16).padStart(6, '0');
@@ -1485,6 +1550,7 @@ export function initEdit(app, api) {
 
   // ---------------------------------------------------------------- tool changes
   function toolChanged(t) {
+    endPick();
     if (!EDIT_TOOLS.has(t)) {
       closeText(true); cancelDraft(); closeMenus(); hideLen();
       cancelDraft(); // (a placement first, then a draft)
@@ -1540,5 +1606,12 @@ export function initEdit(app, api) {
     get dirty() { return !!(E.doc && E.doc.dirty); },
     get ready() { return E.ready; },
     status,
+    refreshLayers: () => { if (E.ready) { fillLayers(); updateRibbon(); } status(); },
+    openKeyin: (first, copy) => { if (inEdit() && E.ready && !E.text) openLen(first || '', copy); },
+    // internals for the editing tools (src/app/tools-ui.js)
+    x: {
+      entity, commit, pointAt, pickEnt, extOf, selCentre, dupPrep, pasteNow, newIdx, fmt, isDgn, hint, keyPoint, lastPoint,
+      startPick, endPick, setSel, visibleEnts, openMenu, model, placeLen, selPath: () => (E.sel.size ? selPath() : []),
+    },
   };
 }

@@ -14,9 +14,13 @@ export function listedLayers(layers) {
 }
 
 export class LayersPanel {
-  /** onChange(visibleArray) is called after any visibility change. */
-  constructor(onChange) {
+  /**
+   * onChange(visibleArray) is called after any visibility change. opts (DGN level names): label(name) ->
+   * shown name; names('rename', row, level | 'export' | 'clear' | 'import', file).
+   */
+  constructor(onChange, opts = {}) {
     this.onChange = onChange;
+    this.opts = opts;
     this.layers = [];
     this.visible = new Uint8Array(0);
     this.order = [];
@@ -33,15 +37,22 @@ export class LayersPanel {
       this.onChange(this.visible);
     });
     this.list.addEventListener('click', (e) => {
-      const b = e.target.closest('button.iso');
+      const b = e.target.closest('button.iso, button.ren');
       if (!b) return;
-      this.isolate(Number(b.dataset.i));
+      if (b.classList.contains('ren')) this.opts.names('rename', b.closest('.layer'), Number(b.dataset.lv));
+      else this.isolate(Number(b.dataset.i));
     });
+    $('#btn-names-import').addEventListener('click', () => $('#names-input').click());
+    $('#btn-names-export').addEventListener('click', () => this.opts.names('export'));
+    $('#btn-names-clear').addEventListener('click', () => this.opts.names('clear'));
+    $('#names-input').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) this.opts.names('import', f); });
   }
 
-  /** A new drawing: its layers, visibility from the file. */
-  setLayers(layers) {
+  /** A new drawing: its layers, visibility from the file. dgn: levels (they can be given names). */
+  setLayers(layers, dgn = false) {
     this.layers = layers;
+    this.dgn = dgn;
+    $('#level-names').hidden = !dgn;
     this.visible = new Uint8Array(layers.length);
     layers.forEach((l, i) => { this.visible[i] = l.visible ? 1 : 0; });
     this.filter.value = '';
@@ -77,8 +88,12 @@ export class LayersPanel {
       const l = layers[i];
       const sw = l.color === FG ? '<span class="sw fg" title="White on dark, black on paper"></span>'
         : `<span class="sw" style="background:#${(l.color & 0xffffff).toString(16).padStart(6, '0')}"></span>`;
-      rows.push(`<li class="layer${this.visible[i] ? '' : ' off'}" data-name="${esc(l.name.toLowerCase())}">
-        <label><input type="checkbox" data-i="${i}" ${this.visible[i] ? 'checked' : ''}>${sw}<span class="lname" title="${esc(l.name)}">${esc(l.name)}</span><span class="ln-count" data-i="${i}">${l.count}</span></label>
+      const label = this.opts.label ? this.opts.label(l.name) : l.name;
+      const lv = this.dgn && /^Level (\d+)$/.exec(l.name);
+      const named = label !== l.name ? `${esc(l.name)} <span class="lvn">${esc(label.slice(l.name.length + 3))}</span>` : esc(l.name);
+      rows.push(`<li class="layer${this.visible[i] ? '' : ' off'}" data-name="${esc(label.toLowerCase())}">
+        <label><input type="checkbox" data-i="${i}" ${this.visible[i] ? 'checked' : ''}>${sw}<span class="lname" title="${esc(label)}">${named}</span><span class="ln-count" data-i="${i}">${l.count}</span></label>
+        ${lv ? `<button type="button" class="btn icon sm iso ren" data-lv="${lv[1]}" title="Name this level (kept in this browser, not in the file)" aria-label="Name ${esc(l.name)}"><svg class="ic" aria-hidden="true"><use href="#i-pen"/></svg></button>` : ''}
         <button type="button" class="btn icon sm iso" data-i="${i}" title="Show only this layer" aria-label="Show only ${esc(l.name)}"><svg class="ic" aria-hidden="true"><use href="#i-target"/></svg></button>
       </li>`);
     }

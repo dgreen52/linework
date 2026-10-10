@@ -2101,6 +2101,387 @@ test('version, help, kept markups: about shows src/version.js; help lists Ctrl+A
   await close(page);
 });
 
+// ------------------------------------------------------------------ v0.4: editing tools (DGN first: the synthetic wiring sheet)
+const WIRE = 'dgn-wiring.dgn';
+const findN = (page) => page.textContent('#find-n');
+const toolsReady = (page) => page.waitForFunction(() => !!window.__linework.tools);
+/** OK in a tool dialog; the change follows the dialog's close event. */
+async function okDialog(page) { await page.click('#tool-ok'); await page.waitForFunction(() => !document.querySelector('dialog[open]')); await settle(page); }
+/** Read a saved DGN in the page (the app's own reader): its texts and its bytes. */
+async function savedDgn(page, dl, name) {
+  const out = join(OUT, name);
+  await dl.saveAs(out);
+  return readFileSync(out);
+}
+/** The original file's elements (up to the end-of-design marker) are byte-identical in `nb`. */
+function originalsIdentical(orig, nb) {
+  let eod = 0;
+  for (let o = 0; o + 2 <= orig.length;) { if (orig[o] === 0xff && orig[o + 1] === 0xff) { eod = o; break; } o += 4 + 2 * orig.readUInt16LE(o + 2); }
+  return eod > 0 && nb.subarray(0, eod).equals(orig.subarray(0, eod));
+}
+/** Original elements outside `ranges` are byte-identical (inside, only the deleted bit may differ). */
+function originalsKeptExcept(orig, nb, ranges) {
+  for (let o = 0; o + 2 <= orig.length;) {
+    if (orig[o] === 0xff && orig[o + 1] === 0xff) return true;
+    const size = 4 + 2 * orig.readUInt16LE(o + 2);
+    const inside = ranges.some(([s, e]) => o >= s && o < e);
+    for (let k = 0; k < size; k++) if (nb[o + k] !== orig[o + k] && !(inside && k === 1 && nb[o + 1] === (orig[o + 1] | 0x80))) return false;
+    o += size;
+  }
+  return false;
+}
+
+test('find (Ctrl+F) in any mode: count, Enter / Shift+Enter / F3, zoom + highlight, whole word, match case, visible levels, text inside cells; replace and replace all in Edit (one undo step); the saved DGN keeps every other byte', async () => {
+  const page = await newPage();
+  await openFixture(page, WIRE);
+  await clearToasts(page);
+  await page.keyboard.press('Control+f');
+  await page.waitForSelector('.findbar:not([hidden]) #find-q');
+  eq(await page.evaluate(() => document.activeElement.id), 'find-q', 'the find box has the focus');
+  assert(await page.isHidden('#find-rep'), 'no Replace outside Edit');
+  await page.keyboard.type('W101');
+  eq(await findN(page), '4 matches', 'W101 also in W1010, in a cell and in a note');
+  const s0 = await ED.scale(page);
+  await page.keyboard.press('Enter');
+  eq(await findN(page), '1 of 4', 'Enter: the first match');
+  const cur = await page.evaluate(() => { const a = window.__linework, t = a.tools.find; return t.k; });
+  eq(cur, 0, 'current match');
+  const hitPx = await page.evaluate(() => {
+    const a = window.__linework, s = a.scene, h = s.texts.filter((t) => !t.dead && t.s === 'W101' && t.sub)[0];
+    const [x0, y0] = a.view.toScreen(h.bbox[0], h.bbox[3]), [x1, y1] = a.view.toScreen(h.bbox[2], h.bbox[1]);
+    return { x0, y0, x1, y1, w: a.view.w, h: a.view.h, cap: Math.hypot(h.m[2], h.m[3]) * a.view.scale };
+  });
+  assert((await ED.scale(page)) > s0 * 2, 'zoomed in to the match');
+  assert(hitPx.x0 > 0 && hitPx.x1 < hitPx.w && hitPx.y0 > 0 && hitPx.y1 < hitPx.h && hitPx.cap > 15, 'the match is on screen and readable: ' + JSON.stringify(hitPx));
+  await shot(page, 'find-dark-1440');
+  await page.keyboard.press('Shift+Enter');
+  eq(await findN(page), '4 of 4', 'Shift+Enter: previous (wraps)');
+  await page.keyboard.press('F3');
+  eq(await findN(page), '1 of 4', 'F3: next');
+  await page.click('.findbar [data-o="wholeWord"]');
+  assert(/of 3$|^3 matches$/.test(await findN(page)), 'whole word: 3, got ' + (await findN(page)));
+  // visible levels only: hide level 20 (the note) in the Layers panel
+  const toggle20 = () => page.evaluate(() => { const li = [...document.querySelectorAll('#layer-list .layer')].find((l) => l.dataset.name === 'level 20'); li.querySelector('input').click(); });
+  await toggle20();
+  assert(/of 2$|^2 matches$/.test(await findN(page)), 'a hidden level is not searched: ' + (await findN(page)));
+  await page.click('.findbar [data-o="vis"]');
+  assert(/of 3$|^3 matches$/.test(await findN(page)), 'Visible off: every level: ' + (await findN(page)));
+  await page.click('.findbar [data-o="vis"]');
+  await toggle20();
+  await page.fill('#find-q', 'W104');
+  eq(await findN(page), '1 match', 'case is ignored by default');
+  await page.click('.findbar [data-o="matchCase"]');
+  eq(await findN(page), 'No matches', 'match case');
+  await page.click('.findbar [data-o="matchCase"]');
+  await page.click('#find-q');
+  await page.keyboard.press('Escape');
+  assert(await page.isHidden('.findbar'), 'Esc closes the find bar');
+  // ---- Edit mode: replace
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await page.click('#tab-edit');
+  await page.click('[data-action="e-tools"]');
+  await page.click('#ctx-menu button:has-text("Find and replace")');
+  await page.waitForSelector('#find-rep:not([hidden])');
+  await page.fill('#find-q', 'W101');
+  eq(await findN(page), '3 matches', 'the options are kept (whole word)');
+  await page.fill('#find-r', 'W201');
+  const before = await page.evaluate(() => window.__linework.edit.doc.model.entities.map((e) => e && e.dgn && e.dgn.slice()));
+  await page.click('#find-one');
+  eq(await findN(page), '1 of 3', 'the first Replace shows the first match');
+  const sel = await ED.sel(page);
+  eq(sel.length, 1, 'in Edit the match is selected');
+  await page.click('#find-one');
+  eq(await findN(page), '1 of 2', 'replaced; on to the next one');
+  const marker = await page.evaluate(() => window.__linework.edit.doc.model.entities.find((e) => e && e.name === 'MARKER').children[1].text);
+  eq(marker, 'W201', 'the text inside the cell was replaced');
+  await page.click('#find-all');
+  eq(await findN(page), 'No matches', 'replace all');
+  await page.waitForSelector('.toast:has-text("Replaced 2 texts")');
+  const texts = () => page.evaluate(() => window.__linework.scene.texts.filter((t) => !t.dead).map((t) => t.s).filter((s) => /W[12]01/.test(s)).sort());
+  eq(JSON.stringify(await texts()), JSON.stringify(['NOTE: W201 FEEDS RELAY K1', 'W1010', 'W201', 'W201']), 'drawn texts');
+  await page.click('#btn-eundo');
+  eq(JSON.stringify(await texts()), JSON.stringify(['NOTE: W101 FEEDS RELAY K1', 'W101', 'W1010', 'W201']), 'one undo step undoes the whole Replace all');
+  await settle(page);
+  eq(await findN(page), '2 matches', 'the hits follow the undo');
+  await page.click('#btn-eredo');
+  await shot(page, 'find-replace-dark-1440');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  const nb = await savedDgn(page, dl, 'wiring-replaced.dgn');
+  const orig = readFileSync(FIX(WIRE));
+  const changed = await page.evaluate((b4) => window.__linework.edit.doc.model.entities.map((e, i) => (e && b4[i] && e !== window.__linework.edit.doc.orig[i] ? b4[i] : null)).filter(Boolean), before);
+  eq(changed.length, 3, 'three items changed');
+  assert(originalsKeptExcept(orig, nb, changed), 'every other element byte-identical; the edited ones flagged deleted');
+  await page.setInputFiles('#file-input', join(OUT, 'wiring-replaced.dgn'));
+  await page.waitForFunction(() => window.__linework.doc.name === 'wiring-replaced.dgn');
+  eq(JSON.stringify(await texts()), JSON.stringify(['NOTE: W201 FEEDS RELAY K1', 'W1010', 'W201', 'W201']), 'reopened');
+  await close(page);
+  // 390 px: the find bar fits the phone
+  const ph = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } });
+  await openFixture(ph, WIRE);
+  await clearToasts(ph);
+  await ph.click('[data-action="find"]');
+  await ph.fill('#find-q', 'TB1');
+  await ph.click('#find-next');
+  eq(await findN(ph), '1 of 3', 'the Find button and the arrows (touch)');
+  const r = await ph.evaluate(() => { const b = document.querySelector('.findbar').getBoundingClientRect(); return [b.left, b.right, window.innerWidth]; });
+  assert(r[0] >= 0 && r[1] <= r[2], 'the find bar fits at 390 px: ' + r);
+  await shot(ph, 'find-dark-390');
+  await close(ph);
+});
+
+test('key-ins: XY= DL= DI= in the draw tools (preview first, Esc cancels, errors stay open), a typed radius; move / copy / rotate the selection by typed values; AA= for new text', async () => {
+  const page = await newPage();
+  await openForEdit(page, WIRE);
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, false);
+  await zoomTo(page, 0, 0, 200, 120);
+  const n0 = await entCount(page);
+  const keyin = async (text, opts = {}) => {
+    await page.keyboard.type(text.slice(0, 1));
+    await page.waitForSelector('#len-box:not([hidden])');
+    await page.keyboard.type(text.slice(1));
+    await page.waitForFunction((t) => document.querySelector('#len-prev').textContent !== '' && document.querySelector('#inp-len').value === t, text);
+    const prev = await page.textContent('#len-prev');
+    if (opts.copy) await page.check('#len-copy');
+    if (opts.shot) await shot(page, opts.shot);
+    await page.keyboard.press(opts.key || 'Enter');
+    await settle(page);
+    return prev;
+  };
+  // line: XY= starts it, DL= and DI= continue from the last point
+  await page.keyboard.press('n');
+  let prev = await keyin('xy=10,10');
+  assert(/Point X 10\.00\s+Y 10\.00 m/.test(prev), 'the preview names the point: ' + prev);
+  eq(await page.evaluate(() => window.__linework.edit.draft && window.__linework.edit.draft.pts.join()), '10,10', 'the line starts there');
+  prev = await keyin('dl=20,0', { shot: 'keyin-preview-dark-1440' });
+  assert(/20\.00 m from the last point/.test(prev), prev);
+  let L = await ED.last(page);
+  eq(JSON.stringify([L.a, L.b]), JSON.stringify([[10, 10], [30, 10]]), 'DL=20,0 from the last point');
+  await keyin('di=10,90');
+  L = await ED.last(page);
+  assert(nearPt(L.a, [30, 10], 1e-9) && nearPt(L.b, [30, 20], 1e-9), 'DI=10,90: up from the last point: ' + JSON.stringify(L));
+  eq(await entCount(page), n0 + 2, 'two lines');
+  await keyin('dl=5,5', { key: 'Escape' });
+  eq(await entCount(page), n0 + 2, 'Esc cancels a key-in');
+  assert(await page.isHidden('#len-box'), 'the box is closed');
+  await keyin('xy=abc');
+  assert(await page.isVisible('#len-box'), 'a key-in with a mistake stays open');
+  assert(await page.evaluate(() => document.querySelector('#len-prev').classList.contains('bad')), 'and says what is wrong');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape'); // end the line chain
+  // circle: centre by XY=, a typed radius
+  await page.keyboard.press('o');
+  await keyin('xy=50,50');
+  prev = await keyin('5');
+  assert(/Radius 5\.00 m/.test(prev), prev);
+  const C = await ED.last(page);
+  eq(C.type, 'circle'); assert(nearPt(C.c, [50, 50], 1e-9) && Math.abs(C.r - 5) < 1e-9, 'circle at 50,50 with radius 5');
+  // move, copy and rotate the selection
+  await page.keyboard.press('Escape');
+  await clickWorld(page, 75, 95);
+  const wi = (await ED.sel(page))[0];
+  const w0 = await ED.ent(page, wi);
+  eq(w0.type + ' ' + w0.a[1], 'line 95', 'a wire is selected');
+  prev = await keyin('dl=0,5');
+  assert(/Move 1 item by ΔX 0\.00\s+ΔY 5\.00 m/.test(prev), prev);
+  let w1 = await ED.ent(page, wi);
+  assert(nearPt(w1.a, [30, 100], 1e-9) && nearPt(w1.b, [120, 100], 1e-9), 'moved up by 5');
+  const n1 = await entCount(page);
+  await keyin('di=10,90', { copy: true });
+  eq(await entCount(page), n1 + 1, 'Copy: a copy, the original stays');
+  const cp = await ED.last(page);
+  assert(nearPt(cp.a, [30, 110], 1e-9), 'the copy is 10 up');
+  await clickWorld(page, 75, 100);
+  await keyin('aa=90');
+  w1 = await ED.ent(page, wi);
+  assert(nearPt(w1.a, [75, 55], 1e-9) && nearPt(w1.b, [75, 145], 1e-9), 'rotated 90° about its centre: ' + JSON.stringify([w1.a, w1.b]));
+  await page.keyboard.press('Control+z');
+  w1 = await ED.ent(page, wi);
+  assert(nearPt(w1.a, [30, 100], 1e-9), 'one undo step');
+  // the menu opens the box ready for a value
+  await page.click('[data-action="e-tools"]');
+  await page.click('#ctx-menu button:has-text("Move by a distance")');
+  eq(await page.inputValue('#inp-len'), 'DL=', 'Move by a distance: DL= typed for you');
+  await page.keyboard.press('Escape');
+  // AA= then text: placed at the active angle; XY= places text
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('t');
+  await keyin('aa=45');
+  await keyin('xy=5,115');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await page.keyboard.type('KEYED');
+  await page.keyboard.press('Enter');
+  const T = await ED.last(page);
+  eq(T.text, 'KEYED');
+  assert(nearPt(T.p, [5, 115], 1e-9) && Math.abs(T.rot - Math.PI / 4) < 1e-12, 'text at XY= and at the active angle');
+  await close(page);
+});
+
+test('mirror, scale and array from Edit › More (one undo step each), mirror about a picked point; select same; match attributes; element info (I)', async () => {
+  const page = await newPage();
+  await openForEdit(page, WIRE);
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, false);
+  await zoomTo(page, 0, 0, 200, 120);
+  const more = async (label) => { await page.click('[data-action="e-tools"]'); await page.click(`#ctx-menu button:has-text("${label}")`); };
+  const idxOf = (pred) => page.evaluate((p) => window.__linework.edit.doc.model.entities.findIndex(new Function('e', 'return e && ' + p)), pred);
+  // mirror the ground bus and its GND label (left <-> right about their centre); the text stays readable
+  await clickWorld(page, 60, 40);
+  await clickWorld(page, 16, 42.5, 0, 0);
+  await page.keyboard.down('Shift'); await clickWorld(page, 60, 40); await page.keyboard.up('Shift');
+  const gnd = await idxOf("e.text === 'GND'");
+  eq((await ED.sel(page)).length, 2, 'bus + label selected');
+  const t0 = await ED.ent(page, gnd);
+  await more('Mirror left ↔ right');
+  const t1 = await ED.ent(page, gnd);
+  assert(t1.p[0] > 175 && Math.abs(t1.p[1] - t0.p[1]) < 1e-9, 'the label moved to the mirrored side: ' + t1.p);
+  assert(Math.abs(t1.rot) < 1e-12 && !t1.mirrorY, 'not reversed');
+  await page.click('#btn-eundo');
+  eq(JSON.stringify((await ED.ent(page, gnd)).p), JSON.stringify(t0.p), 'one undo step');
+  // mirror about a picked point: up <-> down about y = 60
+  await more('Mirror about a point');
+  await page.waitForFunction(() => /mirror about/.test(document.querySelector('#tool-hint').textContent));
+  await clickWorld(page, 100, 60);
+  await page.click('#ctx-menu button:has-text("Mirror up ↕ down here")');
+  const t2 = await ED.ent(page, gnd);
+  assert(Math.abs(t2.p[1] - (120 - t0.p[1] - 1.6)) < 0.3 && Math.abs(t2.p[0] - t0.p[0]) < 1e-9, 'its box mirrored about y = 60: ' + t2.p);
+  await page.click('#btn-eundo');
+  // scale the title block cell (x 2 about its centre)
+  await page.keyboard.press('Escape');
+  await clickWorld(page, 198, 10);
+  const tb = await idxOf("e.name === 'TBLOCK'");
+  eq(JSON.stringify(await ED.sel(page)), JSON.stringify([tb]), 'title block selected');
+  await more('Scale');
+  await page.waitForSelector('dialog[open] input[name="f"]');
+  await page.fill('dialog[open] input[name="f"]', '0');
+  assert(await page.isDisabled('#tool-ok'), 'a factor of 0 is refused');
+  await page.fill('dialog[open] input[name="f"]', '2');
+  await okDialog(page);
+  const c1 = await ED.ent(page, tb);
+  assert(Math.abs(Math.hypot(c1.mv[0], c1.mv[1]) - 2) < 1e-9, 'scaled ×2');
+  await page.click('#btn-eundo');
+  // array: three copies of a wire label, 3 m apart downwards
+  await page.keyboard.press('Escape');
+  await clickWorld(page, 62, 87);
+  eq((await ED.ent(page, (await ED.sel(page))[0])).text, 'W102', 'label selected');
+  const n0 = await entCount(page);
+  await more('Array');
+  await page.fill('dialog[open] input[name="n"]', '3');
+  await page.fill('dialog[open] input[name="dx"]', '0');
+  await page.fill('dialog[open] input[name="dy"]', '-3');
+  await shot(page, 'array-dialog-dark-1440');
+  await okDialog(page);
+  eq(await entCount(page), n0 + 3, 'three copies');
+  eq((await ED.sel(page)).length, 3, 'the copies are selected');
+  const ys = await page.evaluate(() => window.__linework.edit.doc.model.entities.filter((e) => e && e.text === 'W102').map((e) => e.p[1]).sort((a, b) => a - b));
+  eq(JSON.stringify(ys.map((y) => +y.toFixed(9))), JSON.stringify([77, 80, 83, 86]), 'at the offset');
+  await page.click('#btn-eundo');
+  eq(await entCount(page), n0, 'one undo step');
+  // select same: level of a wire -> the 5 wires; + colour + weight -> the 4 green ones
+  await page.keyboard.press('Escape');
+  await clickWorld(page, 75, 85);
+  await more('Select same');
+  await page.waitForSelector('dialog[open] select[name="v-layer"]');
+  eq(await page.textContent('#tool-note'), '5 items match', 'live count');
+  await page.check('dialog[open] input[name="on-color"]');
+  await page.check('dialog[open] input[name="on-weight"]');
+  eq(await page.textContent('#tool-note'), '4 items match');
+  await shot(page, 'select-same-dark-1440');
+  await okDialog(page);
+  eq((await ED.sel(page)).length, 4, 'selected');
+  // from the lists, without a selection
+  await page.keyboard.press('Escape');
+  await more('Select same');
+  await page.uncheck('dialog[open] input[name="on-layer"]');
+  await page.check('dialog[open] input[name="on-type"]');
+  await page.selectOption('dialog[open] select[name="v-type"]', 'CELL');
+  if (process.env.DBG) console.log(await page.evaluate(() => [...document.querySelector('dialog[open] select[name="v-type"]').options].map((o) => o.value + '=' + o.textContent).join(' | ') + ' sel=' + window.__linework.edit.sel.size + ' val=' + document.querySelector('dialog[open] select[name="v-type"]').value));
+  eq(await page.textContent('#tool-note'), '5 items match', 'every cell');
+  await okDialog(page);
+  eq((await ED.sel(page)).length, 5);
+  // match attributes: the blue weight-1 wire takes the green wire's symbology
+  await page.keyboard.press('Escape');
+  const blue = await idxOf('e.type === "line" && e.ci === 1');
+  await more('Match attributes');
+  await clickWorld(page, 75, 85);
+  await page.waitForFunction(() => /Click items to give them/.test(document.querySelector('#tool-hint').textContent));
+  await clickWorld(page, 75, 65);
+  const b1 = await ED.ent(page, blue);
+  eq(`${b1.ci} ${b1.weight} ${b1.layer}`, '2 2 Level 5', 'matched');
+  await page.keyboard.press('Escape');
+  assert(!(await page.evaluate(() => window.__linework.edit.pick)), 'Esc ends Match');
+  // element info: I with a selection
+  await clickWorld(page, 75, 65);
+  await page.keyboard.press('i');
+  await page.waitForSelector('.info-card:not([hidden])');
+  const info = await page.textContent('.info-card');
+  for (const s of ['Selected item', 'Line (type 3)', 'Level 5', 'Weight2', 'File offset', 'rebuilt from those bytes (edited)', 'Length90.00 m']) assert(info.replace(/\s+/g, '').includes(s.replace(/\s+/g, '')), `info shows ${s}: ${info}`);
+  await clickWorld(page, 198, 10);
+  await page.waitForFunction(() => /TBLOCK/.test(document.querySelector('.info-card').textContent));
+  assert(/4 components/.test(await page.textContent('.info-card')), 'cell components');
+  await shot(page, 'info-card-dark-1440');
+  // outside Edit: the item under the cursor
+  await page.keyboard.press('h');
+  await page.mouse.move(...(await client(page, 75, 55)));
+  await page.waitForFunction(() => /Under the cursor/.test(document.querySelector('.info-card').textContent));
+  await page.keyboard.press('i');
+  assert(await page.isHidden('.info-card'), 'I hides it again');
+  await close(page);
+});
+
+test('level names (DGN): name a level in the Layers panel, import a names file, names in the Level box and the status bar, kept per drawing after a reload, export; the DGN bytes never change', async () => {
+  const page = await newPage();
+  await openFixture(page, WIRE);
+  await clearToasts(page);
+  assert(await page.isVisible('#level-names'), 'DGN: the level names row');
+  const rowOf = (lv) => page.locator(`#layer-list .layer:has(button.ren[data-lv="${lv}"])`);
+  await rowOf(5).locator('button.ren').click();
+  await page.waitForSelector('#layer-list input.lvin');
+  await page.keyboard.type('Wires');
+  await page.keyboard.press('Enter');
+  assert(/Level 5\s*Wires/.test(await rowOf(5).textContent()), 'named in the panel');
+  await page.setInputFiles('#names-input', { name: 'levels.csv', mimeType: 'text/csv', buffer: Buffer.from('level,name\n10,Labels\n12,"Terminals, TB1"\n99,Bad\n') });
+  await page.waitForSelector('.toast:has-text("Imported 2 level names")');
+  assert(/Level 12\s*Terminals, TB1/.test(await rowOf(12).textContent()), 'imported');
+  await page.fill('#layer-filter', 'termin');
+  eq(await page.locator('#layer-list .layer:not([hidden])').count(), 1, 'the filter finds level names');
+  await page.fill('#layer-filter', '');
+  await shot(page, 'level-names-dark-1440');
+  // status bar on hover, Level box in Edit
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  const at = await client(page, ...(await textAt(page, 'W102')));
+  await page.mouse.move(at[0], at[1]);
+  await page.waitForFunction(() => /Level 10 · Labels/.test(document.querySelector('#st-info').textContent));
+  await page.click('#tab-edit');
+  const opts = await page.$$eval('#sel-elayer option', (os) => os.map((o) => o.textContent));
+  assert(opts.includes('Level 10 · Labels') && opts.includes('Level 5 · Wires'), 'the Level box shows names: ' + opts.join(' | '));
+  // export
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-names-export')]);
+  eq(dl.suggestedFilename(), 'dgn-wiring-levels.csv');
+  const csv = readFileSync(await dl.path(), 'utf8');
+  assert(csv.includes('5,Wires') && csv.includes('10,Labels') && csv.includes('12,"Terminals, TB1"'), csv);
+  // names never touch the file: saving without edits gives the original bytes
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  const nb = await savedDgn(page, dl2, 'wiring-names.dgn');
+  assert(nb.equals(readFileSync(FIX(WIRE))), 'the saved DGN is the original, byte for byte');
+  // kept per drawing name: a reload brings them back; another drawing has none
+  await page.reload();
+  await page.waitForFunction(() => !!window.__linework);
+  await openFixture(page, WIRE);
+  assert(/Level 5\s*Wires/.test(await rowOf(5).textContent()), 'kept after a reload');
+  await openFixture(page, 'site-plan.dgn');
+  eq(await page.locator('#layer-list .lvn').count(), 0, 'another drawing: no names');
+  await openFixture(page, 'house-plan.dxf');
+  assert(await page.isHidden('#level-names'), 'DXF: layers have names already');
+  await openFixture(page, WIRE);
+  await page.click('#btn-names-clear');
+  await page.waitForSelector('.toast:has-text("Level names cleared")');
+  eq(await page.locator('#layer-list .lvn').count(), 0, 'Clear');
+  await page.click('.toast button:has-text("Undo")');
+  assert(/Level 5\s*Wires/.test(await rowOf(5).textContent()), 'Clear can be undone');
+  await close(page);
+});
+
 // ------------------------------------------------------------------ run
 let failed = 0;
 for (const t of tests) {

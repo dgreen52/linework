@@ -327,6 +327,57 @@ def three_d_rot(path):
     return {"uor_per_master": 10000, "texts": {"ROT30": 30, "ROT90": 90}, "arc": {"c": [20, 5], "z": 2, "r": 3, "start": 0, "sweep": 90, "rot": 30}}
 
 
+# --------------------------------------------------------------------------- wiring schematic (find / replace, key-ins, attributes)
+def wiring(path):
+    """An invented control-panel wiring sheet: terminal cells with labels, wires on one level in two
+    symbologies, wire labels (one lowercase, one a longer number that contains another), a label inside a
+    marker cell, a note, a relay coil, a ground bus and a title block cell. Levels 1, 4, 5, 6, 10, 12, 20, 30."""
+    ds, lyr = create(path, ["MASTER_UNIT_NAME=m", "SUB_UNIT_NAME=mm", "SUB_UNITS_PER_MASTER_UNIT=1000",
+                            "UOR_PER_SUB_UNIT=10", "ORIGIN=0,0,0"])
+    add(lyr, wkt_line([(0, 0), (200, 0), (200, 120), (0, 120), (0, 0)]), Level=1, ColorIndex=1)  # sheet border
+    ds = None
+    ctx = R.Ctx(10000, (0, 0))
+    C = R.as_component
+    els = []
+    # terminal block TB1: three TERM cells (level 12), a frame and a label each
+    for n, y in enumerate([95, 85, 75], start=1):
+        comps = [C(R.multipoint(6, ctx, [(20, y - 2.5), (30, y - 2.5), (30, y + 2.5), (20, y + 2.5), (20, y - 2.5)], level=12, color=1)),
+                 C(R.text17(ctx, (21, y - 1), "TB1-%d" % n, 2.0, level=12, color=2))]
+        els += [R.cell2(ctx, "TERM", (20, y - 2.5), comps, rng=(20, y - 2.5, 30, y + 2.5), level=12, color=1)] + comps
+    # wires (level 5): three green weight 2, one blue weight 1, one green weight 2
+    for y in (95, 85, 75):
+        els.append(R.line3(ctx, (30, y), (120, y), level=5, color=2, weight=2))
+    els.append(R.line3(ctx, (30, 65), (120, 65), level=5, color=1, weight=1))
+    els.append(R.line3(ctx, (30, 55), (120, 55), level=5, color=2, weight=2))
+    # wire labels (level 10)
+    for s, y in (("W101", 96), ("W102", 86), ("W103", 76), ("W1010", 66), ("w104", 56)):
+        els.append(R.text17(ctx, (60, y), s, 2.0, level=10, color=3))
+    # a wire marker cell (level 12) holding the label W101 again
+    comps = [C(R.multipoint(6, ctx, [(124, 98), (136, 98), (136, 102), (124, 102), (124, 98)], level=12, color=1)),
+             C(R.text17(ctx, (125, 99), "W101", 2.0, level=12, color=3))]
+    els += [R.cell2(ctx, "MARKER", (124, 98), comps, rng=(124, 98, 136, 102), level=12, color=1)] + comps
+    # relay coil K1 (level 30)
+    els.append(R.ellipse15(ctx, (150, 95), 5, 5, 0, level=30, color=4))
+    els.append(R.text17(ctx, (148, 94), "K1", 2.0, level=30, color=4))
+    # ground bus (level 6) and its labels (level 10)
+    els.append(R.multipoint(4, ctx, [(10, 40), (100, 40), (190, 40)], level=6, color=5, weight=3))
+    els.append(R.text17(ctx, (15, 41.5), "GND", 2.0, level=10, color=3))
+    els.append(R.text17(ctx, (150, 41.5), "GND BUS", 2.0, level=10, color=3))
+    # a note (level 20)
+    els.append(R.text17(ctx, (10, 25), "NOTE: W101 FEEDS RELAY K1", 2.0, level=20, color=0))
+    # title block cell (level 4)
+    comps = [C(R.multipoint(6, ctx, [(140, 2), (198, 2), (198, 20), (140, 20), (140, 2)], level=4, color=1)),
+             C(R.text17(ctx, (142, 14), "CONTROL PANEL WIRING", 2.5, level=4, color=0)),
+             C(R.text17(ctx, (142, 8), "SHEET 1 OF 1", 1.5, level=4, color=0)),
+             C(R.text17(ctx, (180, 8), "REV B", 1.5, just=14, level=4, color=0))]
+    els += [R.cell2(ctx, "TBLOCK", (140, 2), comps, rng=(140, 2, 198, 20), level=4, color=1)] + comps
+    R.append_elements(path, els)
+    palette = [(255, 255, 255), (40, 90, 255), (30, 190, 70), (250, 210, 0), (230, 40, 40), (200, 60, 200)]
+    R.insert_after_tcb_seed(path, [R.color_table(palette, background=(0, 0, 0))])
+    return {"uor_per_master": 10000, "origin": [0, 0], "master": "m", "sub": "mm",
+            "levels": [1, 4, 5, 6, 10, 12, 20, 30], "labels": ["W101", "W102", "W103", "W1010", "w104"]}
+
+
 def main():
     os.makedirs(SAMPLES, exist_ok=True)
     os.makedirs(FIX, exist_ok=True)
@@ -335,7 +386,8 @@ def main():
             (os.path.join(FIX, "dgn-3d.dgn"), three_d),
             (os.path.join(FIX, "dgn-titleblock.dgn"), title_block),
             (os.path.join(FIX, "dgn-fidelity.dgn"), fidelity),
-            (os.path.join(FIX, "dgn-3d-rot.dgn"), three_d_rot)]
+            (os.path.join(FIX, "dgn-3d-rot.dgn"), three_d_rot),
+            (os.path.join(FIX, "dgn-wiring.dgn"), wiring)]
     only = set(sys.argv[1:])  # e.g. `python tools/make_dgn_fixtures.py dgn-titleblock` rebuilds just that one
     for path, fn in jobs:
         if only and os.path.splitext(os.path.basename(path))[0] not in only:

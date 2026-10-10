@@ -53,8 +53,8 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/view/renderer2d.js` | Canvas2D renderer (interface designed so WebGL can replace it). |
 | `src/tools/snap.js`, `measure.js` | Snaps and measurement maths (pure, unit tested). |
 | `src/markup/*` | Markup model, sidecar format (see MARKUP_FORMAT.md), history, drawing. |
-| `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings). |
-| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. |
+| `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings); v0.4 editing tools, pure and unit tested: `find.js` (find / replace text, also in cells), `keyin.js` (XY= DL= DI= AA= key-ins), `xform.js` (mirror, scale, array), `attrs.js` (select same, match attributes, element info), `levels.js` (DGN level-name files). |
+| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. `src/app/tools-ui.js` is the UI of the editing tools (find bar, key-in preview, More menu, dialogs, info card, level names); it is imported on first use (`app.loadTools`), so it costs nothing at startup — keep new big UI lazy like it. |
 | `src/worker.js` | Parse worker. |
 | `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump the version in `src/version.js`** (the one place it lives; the about line, saved files and the cache name read it). The DWG reader has its own cache (`READER_CACHE`). |
 | `tools/` | Fixture generators (`dwg-r2000.mjs` = test-only DWG writer), DWG reader vendoring/build, palette extraction, icon rendering, static server, `make_dist.mjs`. |
@@ -82,4 +82,7 @@ that looks wrong before reporting.
   for float precision; markups and measurements are stored in absolute drawing coordinates.
 * Colours: `FG` (ACI 7) means white on dark / black on paper; never hard-code white.
 * Keep UI text plain and short, with tooltips and keyboard shortcuts listed in the help sheet.
+* Every drawing change goes through the Edit controller's `commit` (one undo step, DGN bytes kept):
+  build changes with the pure functions of `src/edit/` (e.g. `setText` / `withPart` for text, never a
+  re-encode). DGN level names are display-only (browser storage per drawing name), never written.
 * Commit messages end with the `Co-Authored-By` trailer the owner asks for.

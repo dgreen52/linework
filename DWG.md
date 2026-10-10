@@ -75,7 +75,7 @@ the artifact `libredwg-wasm`; `tools/vendor_libredwg.mjs` checks that build and 
 | Submodule | `jsmn` commit `85695f3d5903b1cd5b4030efe50db3b4f5f3c928` (as pinned by that commit) |
 | Upstream base | descends from LibreDWG release `0.13.4` (commit `e3774bd4020fcfebb68150361db74b8b34d170fe`) via upstream commit `6d6a33987a1a97095b069c799c3d8a793320f812`; the binary reports `LibreDWG 0.13.4.197_0d4f` (197 commits after 0.13.4, clean tree) |
 | Toolchain | Emscripten SDK `4.0.6` (emsdk commit `24fc909c0da13ef641d5ae75e89b5a97f25e37aa`; emcc `1ddaae4d2d6dfbb678ecc193bc988820d1fc4633`), Ubuntu 24.04 runner (autoconf 2.71, automake 1.16.5, libtool 2.4.7) |
-| Build | https://github.com/dgreen52/linework/actions/runs/38036898443 — `libredwg-web.wasm` 9,389,632 bytes, SHA-256 `93281952e1edb1d83195de6f4079433c2b8135e52813eee898d43d96458727dc`; `libredwg-web.js` 111,545 bytes, `4432a43f3477bbc8015ca1d001a595d91db2feb216efd8abd1cad380d67856cc`. An earlier run on another runner produced the same bytes. |
+| Build | https://github.com/dgreen52/linework/actions/runs/38036898443 — `libredwg-web.wasm` 9,389,632 bytes, SHA-256 `93281952e1edb1d83195de6f4079433c2b8135e52813eee898d43d96458727dc`; `libredwg-web.js` 111,545 bytes, `4432a43f3477bbc8015ca1d001a595d91db2feb216efd8abd1cad380d67856cc`. Two other runs on other runners (38036162649, 38038100405) produced the same bytes. |
 
 Build flags: the npm package's own (its `package.json` scripts: `--enable-release --enable-debug
 --disable-write …`, `-O2 -lembind -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc
@@ -90,8 +90,9 @@ upstream `0.13.4` as the only tag and fixed in `.tarball-version` before `autore
 rewrites tracked files such as `src/config.h.in`, the likely source of the npm binary's `_dirty`.
 
 **Updating the reader:** change the pins at the top of `tools/build_dwg_wasm.sh` and push (the
-workflow runs when the script or the workflow changes; once the workflow is on `main` it can also
-be started from the Actions tab), download the `libredwg-wasm` artifact, run
+workflow runs when the script or the workflow changes; it can also be started by hand — the
+Actions tab offers that once the workflow is on `main`, the REST API's workflow dispatch works for
+any branch), download the `libredwg-wasm` artifact, run
 `node tools/vendor_libredwg.mjs <unpacked artifact>`, set `WASM_SIZE` and bump `READER_REV`
 (`src/formats/dwg.js`) together with `READER_CACHE` (`sw.js`), then run the unit and e2e tests.
 

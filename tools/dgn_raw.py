@@ -138,13 +138,15 @@ def ellipse15(ctx, c, r1, r2, rot_deg, level=1, color=0, **kw):
     return header(15, level, len(body), rng, color=color, **kw) + body
 
 
-def text17(ctx, p, s, height, rot_deg=0.0, width=None, font=1, just=2, level=1, color=0, **kw):
+def text17(ctx, p, s, height, rot_deg=0.0, width=None, font=1, just=2, level=1, color=0, raw=None, edf=b"", **kw):
+    """Text element. raw: the stored characters as bytes (default: s in ASCII); edf: enter-data field
+    descriptors stored after the characters (their count goes in the byte after the length)."""
     width = height if width is None else width
-    raw = s.encode("ascii")
+    raw = s.encode("ascii") if raw is None else raw
     hm = int(round(height * ctx.uor * 1000 / 6))
     lm = int(round(width * ctx.uor * 1000 / 6))
     body = (bytes([font, just]) + i32(lm) + i32(hm) + i32(int(round(rot_deg * 360000)))
-            + i32(ctx.ix(p[0])) + i32(ctx.iy(p[1])) + bytes([len(raw), 0]) + raw)
+            + i32(ctx.ix(p[0])) + i32(ctx.iy(p[1])) + bytes([len(raw), len(edf) // 2]) + raw + edf)
     if len(body) % 2:
         body += b"\x00"
     L = len(s) * width
@@ -226,3 +228,107 @@ def insert_after_tcb_seed(path, elems, after_count=3):
         o += 4 + 2 * wtf
     with open(path, "wb") as fh:
         fh.write(data[:o] + b"".join(elems) + data[o:])
+
+
+# --------------------------------------------------------------------------- more element kinds
+FILL_LINKAGE = bytes([0x07, 0x10, 0x41, 0x00, 0x02, 0x08, 0x01, 0x00])  # + fill colour + 7 zero bytes (as GDAL writes it)
+
+
+def fill_linkage(color):
+    """Shape fill linkage (user data linkage 0x0041), 16 bytes, fill colour at byte 8."""
+    return FILL_LINKAGE + bytes([color & 0xFF]) + b"\x00" * 7
+
+
+def with_attributes(elem, data):
+    """The element with attribute data appended: the properties word (bytes 32-33) gets "attributes
+    present" (0x0800, i.e. byte 33 bit 0x08); the header's attribute index already points past the
+    body. For a complex header (cell, text node, complex chain / shape) the word count at 36 grows too."""
+    b = bytearray(elem)
+    b[33] |= 0x08
+    words = (len(b) + len(data) - 4) // 2
+    b[2], b[3] = words & 0xFF, words >> 8
+    if (b[1] & 0x7F) in (2, 7, 12, 14):
+        tot = struct.unpack("<H", bytes(b[36:38]))[0] + len(data) // 2
+        b[36:38] = u16(tot)
+    return bytes(b) + bytes(data)
+
+
+def with_graphic_group(elem, gg):
+    b = bytearray(elem)
+    b[28:30] = u16(gg)
+    return bytes(b)
+
+
+def point_string22(ctx, pts, level=1, color=0, **kw):
+    """Point string (22): same vertex layout as a line string."""
+    p = [(ctx.ix(x), ctx.iy(y)) for x, y in pts]
+    body = u16(len(p)) + b"".join(i32(v) for q in p for v in q)
+    return header(22, level, len(body), _rng_pts(p), color=color, **kw) + body
+
+
+def bspline_curve(ctx, poles, level=1, color=0):
+    """B-spline curve: header (27: description words, order, pole / knot counts) + poles (21) + knots (26), as components."""
+    p = [(ctx.ix(x), ctx.iy(y)) for x, y in poles]
+    pole_body = u16(len(p)) + b"".join(i32(v) for q in p for v in q)
+    pole = as_component(header(21, level, len(pole_body), _rng_pts(p), color=color) + pole_body)
+    knot_body = u16(0) + i32(0) + i32(1 << 30)
+    knot = as_component(header(26, level, len(knot_body), (0, 0, 0, 0), color=color) + knot_body)
+    desc = (len(pole) + len(knot)) // 2
+    hdr_body = i32(desc) + bytes([1, 0]) + u16(len(p)) + u16(2) + b"\x00\x00"
+    return [header(27, level, len(hdr_body), _rng_pts(p), color=color) + hdr_body, pole, knot]
+
+
+def raw_element(etype, level, body, rng=(0, 0, 0, 0), color=0, **kw):
+    if len(body) % 2:
+        body += b"\x00"
+    return header(etype, level, len(body), rng, color=color, **kw) + body
+
+
+def tag_value37(ctx, p, value, level=1):
+    """A tag value element (37): synthetic set / index / type and a string value at 154 (the offsets GDAL reads)."""
+    body = bytearray(154 - 36)
+    body[68 - 36:72 - 36] = struct.pack("<I", 7)          # tag set
+    body[72 - 36:74 - 36] = u16(1)                          # tag index
+    body[74 - 36:76 - 36] = u16(1)                          # type: string
+    body[150 - 36:152 - 36] = u16(len(value) + 1)
+    body += value.encode("ascii") + b"\x00"
+    q = (ctx.ix(p[0]), ctx.iy(p[1]))
+    return raw_element(37, level, bytes(body), q + q)
+
+
+def reference_attachment(name, number=1):
+    """Reference file attachment (type 5 group data, level 9): file number, then the file name (length + characters)."""
+    body = u16(number) + bytes([len(name)]) + name.encode("ascii").ljust(65, b"\x00") + b"\x00" * 20
+    return raw_element(5, 9, body)
+
+
+def shared_cell_definition(name, components):
+    """Shared cell definition (34): a word count at byte 36 like a cell, then the name; components follow."""
+    after = rad50(name) + b"\x00" * 8
+    comp_words = sum(len(c) for c in components) // 2
+    body = u16(comp_words + len(after) // 2) + after
+    return [raw_element(34, 0, body)] + list(components)
+
+
+def header3d(etype, level, body_len, rng, zr, color=0, **kw):
+    """Element header with a Z range."""
+    b = bytearray(header(etype, level, body_len, rng, color=color, **kw))
+    b[12:16] = _range_word(zr[0])
+    b[24:28] = _range_word(zr[1])
+    return bytes(b)
+
+
+def arc16_3d(ctx, c, z, r, start_deg, sweep_deg, rot_deg=0.0, level=1, color=0, **kw):
+    """3D arc: rotation as a quaternion with GDAL's convention (+a about Z = (cos a/2, 0, 0, -sin a/2))."""
+    sweep = int(round(abs(sweep_deg) * 360000))
+    sw = bytearray(i32(sweep))
+    if sweep_deg < 0:
+        sw[1] |= 0x80
+    a = math.radians(rot_deg)
+    quat = [math.cos(-a / 2), 0.0, 0.0, math.sin(-a / 2)]
+    body = (i32(int(round(start_deg * 360000))) + bytes(sw) + vax_d(r * ctx.uor) + vax_d(r * ctx.uor)
+            + b"".join(i32(int(q * 2147483647)) for q in quat)
+            + vax_d(ctx.dx(c[0])) + vax_d(ctx.dy(c[1])) + vax_d(z * ctx.uor))
+    rng = (ctx.ix(c[0] - r), ctx.iy(c[1] - r), ctx.ix(c[0] + r), ctx.iy(c[1] + r))
+    zr = int(round(z * ctx.uor))
+    return header3d(16, level, len(body), rng, (zr, zr), color=color, **kw) + body

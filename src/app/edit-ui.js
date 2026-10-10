@@ -1386,7 +1386,7 @@ export function initEdit(app, api) {
   function lostCount(f) {
     const m = model();
     if (!m) return 0;
-    if (m.format === 'DGN' && f === 'DGN') return 0; // round trip keeps every original element
+    if (m.format === 'DGN' && f === 'DGN') return 0; // round trip: items it did not load are kept byte for byte
     let n = 0;
     for (const [k, v] of Object.entries(m.stats.notShown || {})) if (!/paper-space/i.test(k) || f === 'DGN') n += v;
     return n;
@@ -1394,9 +1394,9 @@ export function initEdit(app, api) {
   function saveNotes(f) {
     const m = model(), src = m ? m.format : srcFormat(), notes = [];
     if (src === 'DWG') notes.push('Opened from a DWG. Linework does not write DWG: save a DXF copy (recommended) or DGN v7. DWG-only data (layouts, dimension styles) is not kept.');
-    if (src === 'DGN' && f === 'DGN') notes.push('Untouched items stay exactly as they were; edited items are added at the end of the file.');
+    if (src === 'DGN' && f === 'DGN') notes.push('Untouched items stay exactly as they were. Edited, pasted and duplicated items are rebuilt from their original bytes and added at the end of the file; anything that cannot be kept exactly is listed after saving.');
     const np = m ? m.entities.filter((e) => e && e.pasted).length : 0;
-    if (np) notes.push(`${plural(np)} pasted or duplicated${f === 'DGN' ? '; pasted cells get new cell headers' : ''}.`);
+    if (np) notes.push(`${plural(np)} pasted or duplicated${f === 'DGN' ? '; cells pasted from another drawing get new cell headers' : ''}.`);
     if (src === 'DGN' && f === 'DXF') notes.push('Cells are saved as separate items; DGN levels become layers.');
     if (src !== 'DGN' && f === 'DGN') notes.push('Layers become DGN levels 1–63 (DGN v7 has no layer names); blocks are flattened; fills become outlines.');
     if (f === 'DGN') notes.push('Saved DGN files are checked with GDAL’s reader but have not been tested in MicroStation yet.');
@@ -1420,12 +1420,12 @@ export function initEdit(app, api) {
     f = f || srcFormat();
     name = name || defaultName(f);
     let blob, notes;
+    const m = model();
     try {
-      const m = model();
       const { writeDxf, writeDgn } = await loadWriters();
       const ext = liveExtents(scene()) || undefined;
       if (f === 'DGN') {
-        const r = writeDgn(m, { bytes: E.doc.bytes, orig: E.doc.orig, extents: ext });
+        const r = writeDgn(m, { bytes: E.doc.bytes, orig: E.doc.orig, extents: ext, level: E.curLayer });
         blob = new Blob([r.bytes], { type: 'application/octet-stream' });
         notes = r.notes;
       } else {

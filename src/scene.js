@@ -31,6 +31,22 @@ function aciRgb(aci) {
   return ACI[aci];
 }
 
+/** Closed outline of a polyline with bulges as points (arcs at 5 degree steps), e.g. for a fill. */
+export function bulgeRing(pts, bulges) {
+  if (!bulges) return pts;
+  const out = [], n = pts.length / 2;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n, x1 = pts[2 * i], y1 = pts[2 * i + 1];
+    out.push(x1, y1);
+    const arc = bulgeToArc(x1, y1, pts[2 * j], pts[2 * j + 1], bulges[i]);
+    if (arc) {
+      const k = Math.max(4, Math.ceil(Math.abs(arc.sweep) / (Math.PI / 36)));
+      for (let s = 1; s < k; s++) { const t = arc.a0 + (arc.sweep * s) / k; out.push(arc.cx + arc.r * Math.cos(t), arc.cy + arc.r * Math.sin(t)); }
+    }
+  }
+  return out;
+}
+
 /** Convert a DXF LTYPE pattern (drawing units) to a screen-pixel dash array. */
 export function dashFromPattern(pattern) {
   if (!pattern || !pattern.length) return null;
@@ -97,10 +113,10 @@ export class Builder {
     this.count.push(1);
     this.coords.push(x, y);
   }
-  conic(cx, cy, ux, uy, vx, vy, t0, t1, full, a) {
+  conic(cx, cy, ux, uy, vx, vy, t0, t1, full, a, extra = 0) {
     const v = [cx, cy, ux, uy, vx, vy, t0, t1];
     for (const x of v) if (!(Math.abs(x) < 1e15)) { this.invalid++; return; }
-    this.base(KIND.CONIC, full ? FLAG.FULL | FLAG.CLOSED : 0, a);
+    this.base(KIND.CONIC, (full ? FLAG.FULL | FLAG.CLOSED : 0) | extra, a);
     this.start.push(this.conics.length / 8);
     this.count.push(1);
     this.conics.push(cx, cy, ux, uy, vx, vy, t0, t1);
@@ -214,17 +230,20 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}
   };
   const compose = (M, xf) => (xf ? (M ? mul(M, xf) : xf) : M);
 
-  function emitConic(M, cx, cy, ux, uy, vx, vy, t0, t1, full, a) {
+  function emitConic(M, cx, cy, ux, uy, vx, vy, t0, t1, full, a, extra = 0) {
     if (M) {
       const c = apply(M, cx, cy), u = applyVec(M, ux, uy), v = applyVec(M, vx, vy);
       cx = c[0]; cy = c[1]; ux = u[0]; uy = u[1]; vx = v[0]; vy = v[1];
     }
-    B.conic(cx, cy, ux, uy, vx, vy, t0, t1, full, a);
+    B.conic(cx, cy, ux, uy, vx, vy, t0, t1, full, a, extra);
   }
+  /** DGN fill (shape, complex shape, ellipse with a fill linkage): a filled item in the fill colour, under the outline. */
+  const fillAttrs = (e, a) => ({ ...a, color: e.fill });
 
   function emitPolyline(e, M, a) {
     const pts = e.pts, n = pts.length / 2;
     if (n < 1) return;
+    if (e.fill != null && e.closed && n > 2) B.poly(xform(M, bulgeRing(pts, e.bulges)), FLAG.FILL | FLAG.CLOSED, fillAttrs(e, a));
     if (!e.bulges) {
       let p = pts;
       if (e.closed && n > 2 && p[0] === p[2 * n - 2] && p[1] === p[2 * n - 1]) p = p.slice(0, -2);
@@ -346,6 +365,7 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}
         B.poly(xform(M, e.pts), FLAG.CURVEPTS | (e.closed ? FLAG.CLOSED : 0), a);
         break;
       case 'circle':
+        if (e.r > 0 && e.fill != null) emitConic(M, e.c[0], e.c[1], e.r, 0, 0, e.r, 0, TAU, true, fillAttrs(e, a), FLAG.FILL);
         if (e.r > 0) emitConic(M, e.c[0], e.c[1], e.r, 0, 0, e.r, 0, TAU, true, a);
         else { const p = M ? apply(M, e.c[0], e.c[1]) : e.c; B.point(p[0], p[1], a); }
         break;
@@ -360,6 +380,7 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}
         let t0 = e.t0, t1 = e.t1;
         const full = Math.abs(t1 - t0) >= TAU - 1e-9 || (t0 === 0 && t1 === 0);
         if (full) { t0 = 0; t1 = TAU; } else while (t1 <= t0) t1 += TAU;
+        if (full && e.fill != null) emitConic(M, e.c[0], e.c[1], e.major[0], e.major[1], e.minor[0], e.minor[1], t0, t1, full, fillAttrs(e, a), FLAG.FILL);
         emitConic(M, e.c[0], e.c[1], e.major[0], e.major[1], e.minor[0], e.minor[1], t0, t1, full, a);
         break;
       }
@@ -375,22 +396,7 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}
         break;
       }
       case 'hatch': {
-        const rings = e.loops.map((L) => {
-          if (!L.bulges) return L.pts;
-          const out = [];
-          const n = L.pts.length / 2;
-          for (let i = 0; i < n; i++) {
-            const j = (i + 1) % n;
-            const x1 = L.pts[2 * i], y1 = L.pts[2 * i + 1];
-            out.push(x1, y1);
-            const arc = bulgeToArc(x1, y1, L.pts[2 * j], L.pts[2 * j + 1], L.bulges[i]);
-            if (arc) {
-              const k = Math.max(4, Math.ceil(Math.abs(arc.sweep) / (Math.PI / 36)));
-              for (let s = 1; s < k; s++) { const t = arc.a0 + (arc.sweep * s) / k; out.push(arc.cx + arc.r * Math.cos(t), arc.cy + arc.r * Math.sin(t)); }
-            }
-          }
-          return out;
-        }).filter((r) => r.length >= 6);
+        const rings = e.loops.map((L) => bulgeRing(L.pts, L.bulges)).filter((r) => r.length >= 6);
         // solid: filled; pattern: filled with a screen-space line pattern (v0.1 approximation)
         const all = [];
         rings.forEach((r, i) => { if (i) all.push(NaN, NaN); for (const v of xform(M, r)) all.push(v); });

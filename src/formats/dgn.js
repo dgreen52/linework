@@ -8,7 +8,7 @@ import { tessCatmullRom } from '../geom.js';
 
 const D2R = Math.PI / 180;
 
-const TYPE_NAMES = {
+export const TYPE_NAMES = {
   1: 'CELL_LIBRARY', 2: 'CELL', 3: 'LINE', 4: 'LINE_STRING', 5: 'GROUP_DATA', 6: 'SHAPE', 7: 'TEXT_NODE',
   8: 'DIGITIZER_SETUP', 9: 'TCB', 10: 'LEVEL_SYMBOLOGY', 11: 'CURVE', 12: 'COMPLEX_CHAIN', 14: 'COMPLEX_SHAPE',
   15: 'ELLIPSE', 16: 'ARC', 17: 'TEXT', 18: 'SURFACE', 19: 'SOLID', 21: 'BSPLINE_POLE', 22: 'POINT_STRING',
@@ -16,8 +16,27 @@ const TYPE_NAMES = {
   28: 'BSPLINE_WEIGHTS', 33: 'DIMENSION', 34: 'SHARED_CELL_DEFN', 35: 'SHARED_CELL', 37: 'TAG_VALUE',
   66: 'APPLICATION', 87: 'RASTER_HEADER', 88: 'RASTER_COMPONENT', 90: 'RASTER_REFERENCE',
 };
-// non-graphic / bookkeeping elements: ignored silently
-const SILENT = new Set([1, 5, 8, 9, 10, 26, 28, 34, 37, 66]);
+// non-graphic / bookkeeping elements: nothing to show (settings, tables, B-spline knots and weights)
+const SILENT = new Set([1, 8, 9, 10, 26, 28, 34, 66]);
+
+// ---- how complex elements group the elements that follow them (shared with dgn-write.js)
+// Cells (2) and shared cell definitions (34): a word count at byte 36 (words after byte 38, the header's
+// own included), components carry the complex bit. Text nodes (7), complex chains / shapes (12 / 14) and
+// surfaces / solids (18 / 19) also have the number of components at byte 38; that count decides (as in
+// dgnlib: some writers store a different word count). B-spline curve (27) / surface (24) headers are
+// followed by their poles, knots, weights and boundaries.
+const COUNTED = new Set([7, 12, 14, 18, 19]);
+const BSPLINE_PARTS = { 27: new Set([21, 26, 28]), 24: new Set([21, 25, 26, 28]) };
+export const isContainer = (type) => type === 2 || type === 34 || COUNTED.has(type) || !!BSPLINE_PARTS[type];
+/** Grouping of the complex header at o: { end (claimed, exclusive), left (components to come; -1 = no count), kinds }. */
+export function groupOf(b, o, type) {
+  const words = b[o + 36] | (b[o + 37] << 8);
+  if (BSPLINE_PARTS[type]) return { end: Infinity, left: -1, kinds: BSPLINE_PARTS[type] };
+  if (COUNTED.has(type)) return { end: Infinity, left: b[o + 38] | (b[o + 39] << 8), kinds: null };
+  return { end: o + 38 + 2 * words, left: -1, kinds: null };
+}
+/** Does the open group g end before the element at o (type, complex bit)? g: { end, left, seen, kinds } */
+export const groupEnds = (g, o, type, comp) => !comp || o >= g.end || (g.left >= 0 && g.seen >= g.left) || (g.kinds && !g.kinds.has(type));
 
 // Screen-pixel dash patterns for the 8 standard DGN line styles.
 export const DGN_STYLES = [
@@ -33,6 +52,66 @@ export function isOleCompound(b) {
   return b.length >= 8 && b[0] === 0xd0 && b[1] === 0xcf && b[2] === 0x11 && b[3] === 0xe0 && b[4] === 0xa1 && b[5] === 0xb1;
 }
 
+/** Fingerprint of a file's bytes (length + FNV-1a): copies can tell they come from the same file. */
+export function fingerprint(b) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < b.length; i++) h = Math.imul(h ^ b[i], 0x01000193);
+  return b.length.toString(36) + '-' + (h >>> 0).toString(36);
+}
+
+/**
+ * 3D rotation matrix (rows, 3x3) of an ISFF quaternion (w, x, y, z as int32, 1.0 = 2^31), with the
+ * convention of dgnlib's DGNQuaternionToMatrix: the transpose of the usual (Hamilton) matrix, so a
+ * rotation of +a about Z is stored as (cos a/2, 0, 0, -sin a/2), as GDAL's writer does.
+ */
+export function quatToMatrix(w, x, y, z) {
+  return [
+    w * w + x * x - y * y - z * z, 2 * (z * w + x * y), 2 * (x * z - y * w),
+    2 * (x * y - z * w), w * w - x * x + y * y - z * z, 2 * (x * w + y * z),
+    2 * (x * z + y * w), 2 * (y * z - x * w), w * w - x * x - y * y + z * z,
+  ];
+}
+
+/** Colour index of the fill linkage (user data linkage 0x0041) in the attribute data [p, end), or -1. */
+export function fillLinkage(b, p, end) {
+  while (p + 4 <= end) {
+    let size;
+    if (b[p] === 0 && (b[p + 1] === 0 || b[p + 1] === 0x80)) size = 8; // DMRS database linkage
+    else if (b[p + 1] & 0x10) size = Math.min(512, b[p] * 2 + 2); // user data linkage
+    else break;
+    if (size <= 4 || p + size > end) break;
+    if ((b[p + 2] | (b[p + 3] << 8)) === 0x41 && size >= 9) return b[p + 8];
+    p += size;
+  }
+  return -1;
+}
+
+/** cp1252 decoding of text bytes, up to the first NUL (as GDAL / C strings read them). */
+let CP = null;
+function cp1252(bytes) {
+  let n = bytes.indexOf(0);
+  if (n < 0) n = bytes.length;
+  const s = bytes.subarray ? bytes.subarray(0, n) : Uint8Array.from(bytes.slice(0, n));
+  try { CP = CP || new TextDecoder('windows-1252'); return CP.decode(s); } catch { return String.fromCharCode(...s); }
+}
+/**
+ * DGN text bytes -> string. 8-bit text is cp1252. 16-bit text (0xFF 0xFD, then 16-bit words) is turned
+ * into bytes the way dgnlib does (a word below 256 is one byte, others two: high, low); those bytes are
+ * UTF-8 when they form valid UTF-8 (this app writes characters outside cp1252 that way, and GDAL then
+ * reads the same string), else cp1252; words of older 16-bit text that is neither are UTF-16 code units.
+ */
+export function decodeDgnText(bytes) {
+  if (!(bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfd)) return cp1252(bytes);
+  const words = [];
+  for (let k = 2; k + 1 < bytes.length; k += 2) { const w = bytes[k] | (bytes[k + 1] << 8); if (!w) break; words.push(w); }
+  const raw = [];
+  for (const w of words) if (w < 256) raw.push(w); else raw.push(w >> 8, w & 255);
+  const u8 = Uint8Array.from(raw);
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(u8); } catch { /* not UTF-8 */ }
+  if (words.every((w) => w < 256)) return cp1252(u8);
+  return String.fromCharCode(...words);
+}
+
 export function parseDgn(input, { onProgress } = {}) {
   const b = input instanceof Uint8Array ? input : new Uint8Array(input);
   if (isOleCompound(b)) {
@@ -41,7 +120,6 @@ export function parseDgn(input, { onProgress } = {}) {
   if (!isDgnV7(b)) throw new FormatError('not-dgn', 'This is not a DGN v7 design file (the header was not recognised).');
   const len = b.length;
   const u16 = (o) => b[o] | (b[o + 1] << 8);
-  const i16 = (o) => (u16(o) << 16) >> 16;
   const i32 = (o) => b[o + 2] | (b[o + 3] << 8) | (b[o] << 16) | (b[o + 1] << 24);
   const vaxD = (o) => {
     const hi = ((u16(o) << 16) | u16(o + 2)) >>> 0, lo = ((u16(o + 4) << 16) | u16(o + 6)) >>> 0;
@@ -65,7 +143,7 @@ export function parseDgn(input, { onProgress } = {}) {
   const masterName = ascii(1120, 2).trim(), subName = ascii(1122, 2).trim();
   const ox = vaxD(1240) / uorPerMaster, oy = vaxD(1248) / uorPerMaster;
   model.units = unitsFromLabel(masterName);
-  model.header = { dimension: dim, masterUnit: masterName, subUnit: subName, subPerMaster, uorPerSub, origin: [ox, oy], oz: vaxD(1256) / uorPerMaster };
+  model.header = { dimension: dim, masterUnit: masterName, subUnit: subName, subPerMaster, uorPerSub, origin: [ox, oy], oz: vaxD(1256) / uorPerMaster, fid: fingerprint(b) };
   if (dim === 3) warn(model, '3D design file: shown in top (plan) view.');
   // Saved views (TCB bytes 46 + 118 * view): flags word (0x80 = view open), then a 64-bit level mask
   // (bit n-1 = level n). The first open view (else view 1) decides which levels start visible, the way
@@ -78,8 +156,9 @@ export function parseDgn(input, { onProgress } = {}) {
   const X = (raw) => raw * scale - ox;
   const Y = (raw) => raw * scale - oy;
   const P = dim === 3 ? 12 : 8; // bytes per vertex
+  const joinTol = Math.max(2 * scale, 1e-9); // complex chain parts meet within 2 UOR
 
-  // ---- pre-scan for a colour table (type 5, level 1) anywhere in the file
+  // ---- pre-scan for a colour table (type 5, level 1); with several, the last one wins (as in GDAL)
   let palette = DGN_DEFAULT;
   for (let o = 0; o + 4 <= len;) {
     if (b[o] === 0xff && b[o + 1] === 0xff) break;
@@ -97,15 +176,13 @@ export function parseDgn(input, { onProgress } = {}) {
   const usedLevels = new Set();
   const cells = [];
   model.cells = cells;
-  const stack = []; // open complex groups: {type, end, ...}
+  const stack = []; // open complex groups: { type, start, end, left, seen, parts, ... }
 
-  const quatMatrix = (o) => { // 4 x int32 quaternion -> 3x3 rotation (rows)
-    const w = i32(o) / 2147483648, x = i32(o + 4) / 2147483648, y = i32(o + 8) / 2147483648, z = i32(o + 12) / 2147483648;
-    return [
-      1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
-      2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
-      2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y),
-    ];
+  const quatMatrix = (o) => quatToMatrix(i32(o) / 2147483648, i32(o + 4) / 2147483648, i32(o + 8) / 2147483648, i32(o + 12) / 2147483648);
+  const fillOf = (o, size) => {
+    const att = o + 32 + 2 * u16(o + 30);
+    if (att < o + 36 || att >= o + size) return -1;
+    return fillLinkage(b, att, o + size);
   };
 
   // Every entity keeps `dgn: [start, end)` = the byte range of its element(s) in the file, plus
@@ -126,6 +203,11 @@ export function parseDgn(input, { onProgress } = {}) {
     };
     const cell = enclosingCell();
     if (cell) e.group = cell.id;
+    else if (top && top.rng) e.ctr = top.rng; // a part of a top-level text node / surface: saved with it
+    if (type === 6 || type === 14 || type === 15) {
+      const f = fillOf(o, size);
+      if (f >= 0) { e.fill = palette[f]; e.fci = f; }
+    }
     return e;
   };
   const enclosingCell = () => { for (let k = stack.length - 1; k >= 0; k--) if (stack[k].type === 2) return stack[k].cell; return null; };
@@ -141,6 +223,7 @@ export function parseDgn(input, { onProgress } = {}) {
     }
     return out;
   };
+  const readZs = (o, n) => { const out = []; for (let i = 0; i < n; i++) out.push(i32(o + 38 + i * P + 8)); return out; };
 
   const emit = (e) => {
     const top = stack[stack.length - 1];
@@ -148,39 +231,104 @@ export function parseDgn(input, { onProgress } = {}) {
     place(e);
   };
 
-  const closeGroups = (o) => {
-    while (stack.length && stack[stack.length - 1].end <= o) finishGroup(stack.pop());
+  const finishGroup = (g, end) => {
+    g.end = end;
+    if (g.rng) g.rng[1] = end;
+    if (g.cell) g.cell.dgn[1] = end;
+    if (g.type === 14 || g.type === 12) joinChain(g, end);
   };
-  const finishGroup = (g) => {
-    if (g.type !== 14 && g.type !== 12) return;
-    const pts = [];
+  /**
+   * Complex chain / shape -> one polyline. Circular arcs become bulges (exact, and written back as
+   * arcs); other curved parts are approximated by points (`tess`). Parts run head to tail; one stored
+   * the other way round is turned.
+   */
+  const joinChain = (g, end) => {
+    const pts = [], into = [], zs = [], z3 = dim === 3; // into[k]: bulge of the segment that ends at vertex k
+    let lastExact = true; // the last vertex is a stored one (not computed from an arc)
+    let curved = false, tess = false;
+    const near = (x, y) => Math.abs(pts[pts.length - 2] - x) <= joinTol && Math.abs(pts[pts.length - 1] - y) <= joinTol;
     for (const part of g.parts) {
-      const seg = partPoints(part);
-      for (let k = pts.length && seg.length >= 2 && near(pts, seg) ? 2 : 0; k < seg.length; k++) pts.push(seg[k]);
+      const s = partRun(part);
+      if (!s || s.pts.length < 2) continue;
+      if (s.tess) tess = true;
+      const n = s.pts.length / 2;
+      if (pts.length && !near(s.pts[0], s.pts[1]) && near(s.pts[2 * n - 2], s.pts[2 * n - 1])) reverseRun(s);
+      const k0 = pts.length && near(s.pts[0], s.pts[1]) ? 1 : 0; // shared vertex: keep the one already there
+      if (k0 && !lastExact && !s.arc) { pts[pts.length - 2] = s.pts[0]; pts[pts.length - 1] = s.pts[1]; } // ... unless a stored one is at hand
+      lastExact = !s.arc;
+      for (let k = k0; k < n; k++) {
+        const bk = k ? s.bul[k - 1] || 0 : 0; // a gap between parts is a straight segment
+        if (bk) curved = true;
+        into.push(bk);
+        pts.push(s.pts[2 * k], s.pts[2 * k + 1]);
+        if (z3) zs.push(s.z[k] ?? s.z[0] ?? 0);
+      }
     }
     const closed = g.type === 14;
-    if (closed && pts.length >= 4 && near(pts, pts.slice(0, 2))) pts.length -= 2;
-    if (pts.length >= 4) place({ ...g.props, type: 'polyline', pts, bulges: null, closed, dgn: [g.start, g.end] });
-  };
-  const near = (pts, seg) => Math.abs(pts[pts.length - 2] - seg[0]) < 1e-9 && Math.abs(pts[pts.length - 1] - seg[1]) < 1e-9;
-  const partPoints = (e) => {
-    if (e.type === 'line') return [...e.a, ...e.b];
-    if (e.type === 'polyline' || e.type === 'spline') return e.pts;
-    if (e.type === 'arc' || e.type === 'ellipse') {
-      const out = [];
-      const mx = e.type === 'arc' ? e.r : e.major[0], my = e.type === 'arc' ? 0 : e.major[1];
-      const nx = e.type === 'arc' ? 0 : e.minor[0], ny = e.type === 'arc' ? e.r : e.minor[1];
-      const t0 = e.type === 'arc' ? e.a0 : e.t0, t1 = e.type === 'arc' ? e.a1 : e.t1;
-      let sw = t1 - t0; if (sw <= 0) sw += Math.PI * 2;
-      const n = Math.max(8, Math.ceil(sw / (Math.PI / 36)));
-      const fwd = !e.reversed;
-      for (let i = 0; i <= n; i++) {
-        const t = fwd ? t0 + (sw * i) / n : t1 - (sw * i) / n;
-        out.push(e.c[0] + mx * Math.cos(t) + nx * Math.sin(t), e.c[1] + my * Math.cos(t) + ny * Math.sin(t));
-      }
-      return out;
+    let closing = 0;
+    if (closed && pts.length >= 6 && Math.abs(pts[0] - pts[pts.length - 2]) <= joinTol && Math.abs(pts[1] - pts[pts.length - 1]) <= joinTol) {
+      if (lastExact && g.parts.length && partRun(g.parts[0]).arc) { pts[0] = pts[pts.length - 2]; pts[1] = pts[pts.length - 1]; }
+      pts.length -= 2;
+      closing = into.pop();
+      if (z3) zs.length -= 1;
     }
-    return [];
+    if (pts.length < 4) return;
+    const bulges = into.slice(1);
+    bulges.push(closed ? closing : 0);
+    const e = { ...g.props, type: 'polyline', pts, bulges: curved ? bulges : null, closed, dgn: [g.start, end] };
+    if (z3) { e.zv = zs; e.zr = zs[0]; }
+    if (tess) e.tess = 1;
+    place(e);
+  };
+  const reverseRun = (s) => {
+    const n = s.pts.length / 2, p = [], bl = [];
+    for (let k = n - 1; k >= 0; k--) p.push(s.pts[2 * k], s.pts[2 * k + 1]);
+    for (let k = n - 2; k >= 0; k--) bl.push(-(s.bul[k] || 0));
+    s.pts = p; s.bul = bl; s.z = s.z.slice().reverse();
+  };
+  /** One part of a complex chain as a run: { pts, bul (per segment), z (raw, per vertex), tess }. */
+  const partRun = (e) => {
+    const z = e.zv ? e.zv.slice() : [e.zr ?? 0];
+    if (e.type === 'line') return { pts: [...e.a, ...e.b], bul: [0], z };
+    if (e.type === 'polyline') {
+      const p = e.closed ? [...e.pts, e.pts[0], e.pts[1]] : e.pts;
+      if (e.closed && e.zv) z.push(e.zv[0]);
+      return { pts: p, bul: [], z };
+    }
+    if (e.type === 'spline') return { pts: e.pts, bul: [], z, tess: true };
+    let C = null; // circular arc in plan: centre, radius, start angle, signed sweep
+    if (e.type === 'arc') C = { c: e.c, r: e.r, a: e.reversed ? e.a1 : e.a0, sw: (e.a1 - e.a0) * (e.reversed ? -1 : 1) };
+    else if (e.type === 'ellipse') {
+      const [ux, uy] = e.major, [vx, vy] = e.minor, r = Math.hypot(ux, uy), cr = ux * vy - uy * vx;
+      if (r > 0 && Math.abs(Math.hypot(vx, vy) - r) <= 1e-9 * r && Math.abs(ux * vx + uy * vy) <= 1e-9 * r * r) {
+        const dir = cr > 0 ? 1 : -1, a = Math.atan2(uy, ux);
+        const t0 = e.reversed ? e.t1 : e.t0, sw = (e.t1 - e.t0) * (e.reversed ? -1 : 1);
+        C = { c: e.c, r, a: a + dir * t0, sw: dir * sw };
+      }
+    }
+    if (C && Math.abs(C.sw) > 1e-12) {
+      const k = Math.abs(C.sw) > Math.PI + 1e-9 ? 2 : 1; // bulges stay finite: split sweeps over 180 degrees
+      const pts = [], bul = [];
+      for (let i = 0; i <= k; i++) { const t = C.a + (C.sw * i) / k; pts.push(C.c[0] + C.r * Math.cos(t), C.c[1] + C.r * Math.sin(t)); }
+      for (let i = 0; i < k; i++) bul.push(Math.tan(C.sw / k / 4));
+      return { pts, bul, z, arc: true };
+    }
+    if (e.type === 'arc' || e.type === 'ellipse') return { pts: arcPoints(e), bul: [], z, tess: true, arc: true };
+    return null;
+  };
+  const arcPoints = (e) => {
+    const out = [];
+    const mx = e.type === 'arc' ? e.r : e.major[0], my = e.type === 'arc' ? 0 : e.major[1];
+    const nx = e.type === 'arc' ? 0 : e.minor[0], ny = e.type === 'arc' ? e.r : e.minor[1];
+    const t0 = e.type === 'arc' ? e.a0 : e.t0, t1 = e.type === 'arc' ? e.a1 : e.t1;
+    let sw = t1 - t0; if (sw <= 0) sw += Math.PI * 2;
+    const n = Math.max(8, Math.ceil(sw / (Math.PI / 36)));
+    const fwd = !e.reversed;
+    for (let i = 0; i <= n; i++) {
+      const t = fwd ? t0 + (sw * i) / n : t1 - (sw * i) / n;
+      out.push(e.c[0] + mx * Math.cos(t) + nx * Math.sin(t), e.c[1] + my * Math.cos(t) + ny * Math.sin(t));
+    }
+    return out;
   };
 
   // ellipse / arc helper: centre, axes (master units), rotation (rad) or 3D matrix, parametric start/sweep (rad)
@@ -199,17 +347,6 @@ export function parseDgn(input, { onProgress } = {}) {
     return { ...props, type: 'ellipse', c: [cx, cy], major: [mx, my], minor: [nx, ny], t0: full ? 0 : t0, t1: full ? Math.PI * 2 : t1, reversed };
   };
 
-  const decodeText = (o, n) => {
-    if (n >= 2 && b[o] === 0xff && b[o + 1] === 0xfd) { // 16-bit text
-      let s = '';
-      for (let k = 2; k + 1 < n; k += 2) s += String.fromCharCode(b[o + k] | (b[o + k + 1] << 8));
-      return s;
-    }
-    let s = '';
-    for (let k = 0; k < n && o + k < len; k++) s += String.fromCharCode(b[o + k]);
-    try { return new TextDecoder('windows-1252').decode(b.subarray(o, Math.min(len, o + n))); } catch { return s; }
-  };
-
   const total = len;
   let nextReport = 0;
   let o = 0;
@@ -217,14 +354,17 @@ export function parseDgn(input, { onProgress } = {}) {
   model.header.eod = len;
   while (o + 4 <= len) {
     if (b[o] === 0xff && b[o + 1] === 0xff) { model.header.eod = o; break; }
+    if (!(b[o] | b[o + 1] | b[o + 2] | b[o + 3])) { model.header.eod = o; break; } // zero padding and no end marker: the design ends here
     const size = 4 + 2 * u16(o + 2);
     if (o + size > len) { model.header.eod = o; model.header.truncated = true; warn(model, 'The file ended in the middle of an element; showing what was read.'); break; }
     if (onProgress && o >= nextReport) { onProgress(o / total); nextReport = o + total / 50; }
-    closeGroups(o);
     const type = b[o + 1] & 0x7f;
     const deleted = !!(b[o + 1] & 0x80);
     const isComponent = !!(b[o] & 0x80);
-    if (stack.length && !isComponent) while (stack.length) finishGroup(stack.pop());
+    // groups end at the first element that is not one of their components (the range a group covers is
+    // where reading it actually stopped, never just what its word count claims)
+    while (stack.length && groupEnds(stack[stack.length - 1], o, type, isComponent)) finishGroup(stack.pop(), o);
+    if (stack.length) stack[stack.length - 1].seen++;
     elementCount++;
     if (deleted) { o += size; continue; }
     try {
@@ -235,13 +375,28 @@ export function parseDgn(input, { onProgress } = {}) {
     o += size;
   }
   if (model.header.eod === len && o + 2 <= len && b[o] === 0xff && b[o + 1] === 0xff) model.header.eod = o; // marker in the last bytes
-  while (stack.length) finishGroup(stack.pop());
+  while (stack.length) finishGroup(stack.pop(), Math.min(o, len));
+
+  function open(o, type, extra) {
+    const g = { type, start: o, seen: 0, parts: [], ...groupOf(b, o, type), ...extra };
+    stack.push(g);
+    return g;
+  }
 
   function handle(o, type, size) {
     const name = TYPE_NAMES[type] || 'TYPE_' + type;
     if (type === 9 && o === 0) return;
-    if (!isGraphic(type)) return;
-    if (size < 36) return;
+    if (stack.some((g) => g.skip)) { if (isContainer(type)) open(o, type, { skip: true }); return; } // inside a shared cell definition / B-spline
+    if (type === 5) { // group data: colour tables, named views (silent); reference file attachments (reported)
+      if ((b[o] & 0x3f) === 9) {
+        const ref = refName(o, size);
+        (model.header.refs || (model.header.refs = [])).push(ref);
+        notShown(model, 'Reference file attachment' + (ref ? ` (${ref})` : ''));
+      }
+      return;
+    }
+    if (SILENT.has(type)) { if (type === 34) open(o, type, { skip: true }); return; }
+    if (size < 36) { notShown(model, name + ' (invalid)'); return; }
     countType(model, name);
     switch (type) {
       case 3: { // line
@@ -249,7 +404,7 @@ export function parseDgn(input, { onProgress } = {}) {
         e.type = 'line';
         e.a = [X(i32(o + 36)), Y(i32(o + 40))];
         e.b = dim === 3 ? [X(i32(o + 48)), Y(i32(o + 52))] : [X(i32(o + 44)), Y(i32(o + 48))];
-        if (dim === 3) e.zr = i32(o + 44); // raw Z (UOR), kept for saving
+        if (dim === 3) { e.zr = i32(o + 44); e.zv = [e.zr, i32(o + 56)]; } // raw Z (UOR), kept for saving
         emit(e);
         return;
       }
@@ -257,39 +412,48 @@ export function parseDgn(input, { onProgress } = {}) {
         const e = base(o, type, size);
         const pts = readVerts(o, u16(o + 36), size);
         if (pts.length < 4) { notShown(model, name + ' (degenerate)'); return; }
-        if (dim === 3) e.zr = i32(o + 46);
+        if (dim === 3) { e.zv = readZs(o, pts.length / 2); e.zr = e.zv[0]; }
         if (type === 11) {
           e.type = 'spline';
           e.closed = false;
           e.pts = curvePoints(pts);
+          delete e.zv; // the drawn points are not the stored vertices
         } else {
           e.type = 'polyline';
           e.pts = pts;
           e.bulges = null;
           e.closed = type === 6;
-          if (e.closed && pts.length >= 4 && pts[0] === pts[pts.length - 2] && pts[1] === pts[pts.length - 1]) e.pts = pts.slice(0, -2);
+          if (e.closed && pts.length >= 6 && pts[0] === pts[pts.length - 2] && pts[1] === pts[pts.length - 1]) {
+            e.pts = pts.slice(0, -2);
+            if (e.zv) e.zv = e.zv.slice(0, -1);
+          }
         }
         emit(e);
         return;
       }
       case 12: case 14: { // complex chain / shape header
-        const tot = u16(o + 36);
-        const g = { type, start: o, end: o + 38 + tot * 2, parts: [], props: base(o, type, size) };
-        stack.push(g);
+        open(o, type, { props: base(o, type, size) });
         return;
       }
-      case 7: { // text node header: components carry the text
-        const tot = u16(o + 36);
-        stack.push({ type, end: o + 38 + tot * 2, parts: [] });
+      case 7: case 18: case 19: { // text node header (components carry the text); surface / solid
+        const top = !enclosingCell();
+        open(o, type, top ? { rng: [o, o + size] } : {});
+        if (type !== 7) notShown(model, name + ' (shown as its boundary elements)');
+        return;
+      }
+      case 24: case 27: { // B-spline surface / curve: header + poles, knots, weights (one item)
+        notShown(model, name);
+        open(o, type, { skip: true });
         return;
       }
       case 2: { // cell header
-        const tot = u16(o + 36);
         const id = cells.length;
         const r50 = (v) => { const a = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ$.?0123456789'; return a[Math.floor(v / 1600) % 40] + a[Math.floor(v / 40) % 40] + a[v % 40]; };
-        const end = o + 38 + tot * 2;
         const cell = { ...base(o, type, size), type: 'cell', id, name: (r50(u16(o + 38)) + r50(u16(o + 40))).trim(), level: b[o] & 0x3f, children: [] };
-        cell.dgn = [o, end];
+        delete cell.ctr;
+        place(cell);
+        const g = open(o, type, { id, cell });
+        cell.dgn = [o, g.end];
         if (dim === 2) {
           const t = [i32(o + 68) / 214748, i32(o + 72) / 214748, i32(o + 76) / 214748, i32(o + 80) / 214748];
           cell.trans = t;
@@ -304,8 +468,6 @@ export function parseDgn(input, { onProgress } = {}) {
           cell.zr = i32(o + 120);
         }
         cells.push(cell);
-        place(cell);
-        stack.push({ type, end, parts: [], id, cell });
         return;
       }
       case 15: case 16: { // ellipse, arc
@@ -346,7 +508,7 @@ export function parseDgn(input, { onProgress } = {}) {
         }
         e.h = Math.abs(hm) || 1;
         e.wf = hm ? Math.abs(lm / hm) || 1 : 1;
-        e.text = decodeText(to, Math.min(n, size - (to - o)));
+        e.text = decodeDgnText(b.subarray(to, Math.min(len, to + Math.min(n, size - (to - o)))));
         e.halign = 0; e.valign = 0; e.oblique = 0;
         e.font = b[o + 36];
         e.just = b[o + 37];
@@ -359,9 +521,15 @@ export function parseDgn(input, { onProgress } = {}) {
     }
   }
 
-  function isGraphic(type) {
-    if (SILENT.has(type)) return false;
-    return true;
+  /** File name of a reference file attachment (type 5, level 9): a length byte + characters at 38 when they look like a name. */
+  function refName(o, size) {
+    const good = (p, n) => n > 0 && p + n <= o + size && [...b.subarray(p, p + n)].every((c) => c >= 32 && c < 127);
+    if (good(o + 39, b[o + 38])) return ascii(o + 39, b[o + 38]).trim();
+    for (let p = o + 36; p + 1 < o + size; p++) { // otherwise: the first length-prefixed name with a dot
+      const n = b[p];
+      if (n >= 3 && good(p + 1, n)) { const s = ascii(p + 1, n); if (/\w\.\w/.test(s)) return s.trim(); }
+    }
+    return '';
   }
 
   // levels -> layers (numeric order)

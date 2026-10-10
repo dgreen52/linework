@@ -1,0 +1,90 @@
+{
+ "features": [
+  {
+   "type": 17,
+   "level": 1,
+   "color": 1,
+   "rgb": "0000ff",
+   "env": [
+    5.0,
+    5.0,
+    5.0,
+    5.0
+   ],
+   "geom": "POINT",
+   "text": "ROT30",
+   "size": 1.0
+  },
+  {
+   "type": 17,
+   "level": 1,
+   "color": 1,
+   "rgb": "0000ff",
+   "env": [
+    5.0,
+    15.0,
+    5.0,
+    15.0
+   ],
+   "geom": "POINT",
+   "text": "ROT90",
+   "size": 1.0
+  },
+  {
+   "type": 4,
+   "level": 2,
+   "color": 3,
+   "rgb": "ff0000",
+   "env": [
+    0.0,
+    0.0,
+    10.0,
+    10.0
+   ],
+   "geom": "LINESTRING",
+   "points": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     10.0,
+     0.0
+    ],
+    [
+     10.0,
+     10.0
+    ]
+   ]
+  },
+  {
+   "type": 16,
+   "level": 3,
+   "color": 2,
+   "rgb": "00ff00",
+   "env": [
+    20.0,
+    5.0,
+    23.0,
+    8.0
+   ],
+   "geom": "LINESTRING"
+  }
+ ],
+ "uor_per_master": 10000,
+ "texts": {
+  "ROT30": 30,
+  "ROT90": 90
+ },
+ "arc": {
+  "c": [
+   20,
+   5
+  ],
+  "z": 2,
+  "r": 3,
+  "start": 0,
+  "sweep": 90,
+  "rot": 30
+ }
+}

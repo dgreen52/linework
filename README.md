@@ -143,10 +143,11 @@ edited; markups stay separate.
   to add one. Circles and arcs get a centre and a radius handle; ellipses a centre and an axis
   handle. **Blocks (INSERTs) and DGN cells** move, rotate, restyle and delete as a whole.
   **Text inside them can be retyped**: double-click a title-block field or a label in a cell
-  (nested cells too) or a block's attribute, and only that text changes. Saving a DGN rewrites
-  that one cell: its other parts are copied byte-for-byte and the edited text keeps its
-  attribute data. Text that lives in a DXF block definition is shared by every copy of the
-  block, so it stays locked for now (Linework says so).
+  (nested cells too) or a block's attribute, and only that text changes. Saving a DGN rebuilds
+  that one cell from its original bytes: only the text element is replaced (same header, graphic
+  group, enter-data fields and attribute data), and the word counts of its text node and cell
+  are fixed; everything else in the cell is kept byte-for-byte. Text that lives in a DXF block
+  definition is shared by every copy of the block, so it stays locked for now (Linework says so).
 * **Draw** lines (click points; type a length + `Enter` for an exact length), polylines
   (`Enter`/double-click finishes, `C` closes), rectangles, circles and text. New items go on the
   **current layer** (Layer box; "New layer…" creates one with a colour; it starts on a visible
@@ -178,16 +179,17 @@ edited; markups stay separate.
     ACI, others are true colour; an item that was ByLayer is ByLayer again when the target layer
     has the same colour. Line weights travel too (DGN weight ↔ DXF lineweight, see below).
   * Blocks and cells: DXF blocks (nested, dimension blocks too), line types and text styles come
-    along; a block name that exists with other content gets a new name (`NAME_2`, `*D5`). A pasted
-    DGN cell stays a cell: it gets a new cell header (name, transform, range) and its text can
-    still be retyped. DXF blocks pasted into a DGN are exploded into separate items (DGN v7 has no
-    blocks; the toast says so).
+    along; a block name that exists with other content gets a new name (`NAME_2`, `*D5`). A DGN
+    cell pasted into another DGN stays a cell: it gets a new cell header (name, transform, range)
+    and its text can still be retyped. Pasted into the same DGN file (also in another tab), items
+    are copies of their original bytes, moved. DXF blocks pasted into a DGN are exploded into
+    separate items (DGN v7 has no blocks; the toast says so).
   * 3D DGN files: Z is kept between 3D files (converted for the other file's units and origin);
     pasting into a 2D drawing flattens it to Z = 0, with a note.
 * **Duplicate** (`Ctrl+D`, ribbon, menu): like a paste of the selection in the same drawing.
   **`Ctrl`+drag** (`Alt`+drag on a Mac) leaves the originals and drops a copy where you release.
-  Copies are new items: in a DGN round trip they are added at the end of the file and the
-  originals' bytes are untouched.
+  Copies are new items: in a DGN round trip they are copies of the originals' bytes (moved),
+  added at the end of the file; the originals' bytes are untouched.
 * **Undo/redo**: one history for drawing edits and markups — `Ctrl+Z` always undoes the last
   thing you did. "• unsaved" next to the file name shows there are edits to save; the browser
   asks before leaving the page while it is shown.
@@ -206,10 +208,23 @@ How saving works:
 * **DGN v7, drawing opened from a DGN**: a round trip that keeps the original file. Untouched
   elements stay byte-for-byte at the same place (header, colour table, levels, cells, attribute
   data, elements this app cannot show). Edited or deleted elements get their *deleted* flag set
-  in place, and the new versions are appended before the end-of-design marker (cells keep their
-  header, with an updated origin, transform, range, colour and weight; a single edited element
-  keeps its attribute data). Pasted and duplicated items are appended the same way; pasted cells
-  get a new type-2 cell header (2D or 3D layout).
+  in place, and the new versions are appended before the end-of-design marker. An edited item
+  is rebuilt **from its original bytes**, never re-encoded from what the app shows: a move or
+  rotate transforms the coordinates of every element of the item (cell header origin and
+  transform, text nodes, point strings, B-spline poles, arcs, texts...), a colour / level /
+  weight change patches each element's symbology (and a cell's level mask), a retyped text is
+  spliced in with its old header, enter-data fields and attribute data, and the word counts and
+  ranges of the text node / cell / complex chain around it are fixed. Text node headers, empty
+  placeholder nodes, blank texts, point strings, B-splines, linkages, graphic groups and fills
+  all survive. Duplicates and pastes of items from the same file are copies of their original
+  bytes; items pasted from another file get new elements (cells a new type-2 header, 2D or 3D
+  layout; arcs in complex chains stay arcs). Only what cannot be rebuilt that way (a reshaped
+  complex chain with elliptical arcs, a cell holding an element type that cannot be moved such
+  as a tag) is written from the app's model, and the save notes list it.
+* **Never written wrong**: coordinates outside the 32-bit grid (or text too large for it) are
+  never clamped — the save stops with a message saying how many items are out of range (round
+  trip and new files); a complex chain longer than a 16-bit word count allows is split into
+  several chains; a cell that cannot fit is refused with a message.
 * **Line weights**: DXF lineweights (group 370, on items and layers; ByLayer / ByBlock / default)
   are kept exactly. Between formats: DGN weight *n* = DXF lineweight 0.13, 0.18, 0.25, 0.35, 0.50,
   0.70, 1.00, 1.40, 2.00, 2.11 mm for *n* = 1–10 (11 and above: 2.11 mm; weight 0 = default);
@@ -217,7 +232,11 @@ How saving works:
 * **DGN v7, drawing opened from a DXF**: a new 2D design file started from GDAL's seed file;
   working units are chosen so coordinates fit the 32-bit grid, layers become levels 1–63 (more
   than 63 are merged into level 63, with a note), colours go into a colour table, blocks are
-  flattened, fills become outlines, text uses font 0.
+  flattened, DXF fills become outlines (DGN fills pasted in stay fills), text uses font 0, arcs
+  keep their direction (clockwise bulges are clockwise arcs), and saved view 1 shows the drawing.
+* Text: cp1252 text is 8-bit; text with other characters (Ω, CJK) is written as DGN 16-bit text
+  holding UTF-8 the way GDAL unpacks it, so GDAL and Linework read the same string (older CAD
+  programs may show other characters; the save notes say so).
 * **Drawing opened from a DWG**: Linework does not write DWG. **Save** writes DXF and **Save
   as…** offers DXF (default) or DGN v7; the dialog says so first, and DWG-only data (layouts,
   dimension styles, extended data) is not carried over.
@@ -234,19 +253,19 @@ How saving works:
 | Lines, polylines | LINE, LWPOLYLINE, POLYLINE (2D, with exact bulge arcs), 3DFACE, polyface/polygon mesh edges | Same entities as DXF (LINE, LWPOLYLINE, 2D/3D POLYLINE, polyface/polygon mesh, 3DFACE) | Line (3), line string (4), shape (6) |
 | Circles, arcs, ellipses | CIRCLE, ARC, ELLIPSE (incl. partial), exact at every zoom | CIRCLE, ARC, ELLIPSE | Ellipse (15), arc (16), incl. rotated/elliptical and clockwise |
 | Curves | SPLINE (NURBS via de Boor, or fit points), HELIX | SPLINE (control or fit points, weights) | Curve (11) |
-| Complex | — | — | Complex chain (12) and complex shape (14) joined into one item |
+| Complex | — | — | Complex chain (12) and complex shape (14) joined into one item; circular arcs in them stay exact arcs |
 | Text | TEXT (12 alignments, fit/aligned, width factor, oblique, mirrored), MTEXT (plain text, `\P` paragraphs, wrapping, attachment), ATTRIB/ATTDEF, `%%c %%d %%p`, `\U+xxxx`, cp1252/UTF-8 | TEXT, MTEXT, ATTRIB/ATTDEF as for DXF; code-page text (pre-2007) and Unicode (2007+) | Text (17), text node (7), 16-bit text |
 | Blocks / cells | INSERT with position/scale (incl. negative = mirrored)/rotation, MINSERT arrays, nested blocks, BYBLOCK colour & linetype, attributes | INSERT, MINSERT, nested blocks, attributes, anonymous blocks; tables (ACAD_TABLE) via their block | Cell header (2): components shown where they are placed; the cell transform is read and reported |
 | Dimensions, leaders | DIMENSION via its block (fallback drawing when the block is missing), LEADER with arrowhead | All dimension types via their block (same fallback), LEADER | — |
-| Fills | SOLID, TRACE, HATCH (solid fill; pattern hatches as a light screen pattern) | SOLID, TRACE, HATCH (polyline and edge boundaries, pattern data kept for saving) | — |
+| Fills | SOLID, TRACE, HATCH (solid fill; pattern hatches as a light screen pattern) | SOLID, TRACE, HATCH (polyline and edge boundaries, pattern data kept for saving) | Fill colour linkage on shapes, complex shapes and ellipses (junction dots, arrowheads); saved as solid HATCH in DXF |
 | Points | POINT | POINT | — |
 | Layers / levels | LAYER table: colour (ACI and true colour), on/off, frozen, linetype, lineweight | LAYER table: colour (index; true colour from 2004), on/off, frozen, linetype | Levels 1–63 (swatch = most common colour); levels off in the saved open view start hidden |
 | Line weights | Lineweight (370) on items and layers, ByLayer / ByBlock / default, drawn and saved | Not read yet (drawn at the default weight) | Weight 0–31, drawn and saved |
 | Colours | ACI 256-colour table, true colour (420) | Colour index; true colour (2004+) | Colour table element (type 5) or the default DGN palette |
 | Line types | LTYPE dash patterns (shown at screen scale) | LTYPE dash patterns | Line styles 0–7 |
 | Units | `$INSUNITS` | `INSUNITS` | Master/sub units and UORs from the TCB, global origin |
-| Other | OCS/extrusion (e.g. mirrored arcs), paper space shown if model space is empty, `$EXTMIN/$EXTMAX`, CRLF/LF, padded group codes, missing HEADER/TABLES sections, truncated files | OCS/extrusion, paper space as for DXF, damaged files (shows what LibreDWG could read), 120 MB size limit, 2-minute read limit | Deleted elements skipped, 2D and 3D files, truncated files |
-| Skipped (reported as "not shown") | 3DSOLID, REGION, BODY, MESH, IMAGE, WIPEOUT, OLE, XREFs, proxy/custom entities | Same as DXF, plus MLINE, MULTILEADER, TOLERANCE, RAY/XLINE, SHAPE | Shared cells, B-splines (21/24–28), raster, dimensions (33) |
+| Other | OCS/extrusion (e.g. mirrored arcs), paper space shown if model space is empty, `$EXTMIN/$EXTMAX`, CRLF/LF, padded group codes, missing HEADER/TABLES sections, truncated files | OCS/extrusion, paper space as for DXF, damaged files (shows what LibreDWG could read), 120 MB size limit, 2-minute read limit | Deleted elements skipped, 2D and 3D files (Z of every vertex kept), truncated files, several colour tables (the last counts, as in GDAL), files without an end-of-design marker |
+| Skipped (reported as "not shown") | 3DSOLID, REGION, BODY, MESH, IMAGE, WIPEOUT, OLE, XREFs, proxy/custom entities | Same as DXF, plus MLINE, MULTILEADER, TOLERANCE, RAY/XLINE, SHAPE | Shared cells, B-splines (21/24–28, one item each), point strings, tag values, reference file attachments (with their file names), raster, dimensions (33) — all kept when the DGN is saved as DGN |
 | Not supported yet | Binary DXF | R12 and older DWG; writing DWG | DGN v8 |
 | **Save** | **DXF** R2000 (AC1015), pure ASCII; layers, line types, lineweights, text styles, blocks and attributes kept; DGN drawings saved as DXF get layers "Level N", cells as separate items | Saved as **DXF** (default) or **DGN v7** — Linework does not write DWG | **DGN v7**: a DGN you opened keeps every untouched element byte-for-byte (edits appended, originals flagged deleted); any other drawing becomes a new 2D DGN from GDAL's seed file (layers → levels 1–63, colour table, blocks flattened) |
 
@@ -304,7 +323,7 @@ the first frame, so opening a large file never blocks the page.
 ## Tests
 
 ```bash
-npm test                                  # 151 Node unit tests (node --test, no dependencies)
+npm test                                  # 156 Node unit tests (node --test, no dependencies)
 NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 27 Playwright end-to-end tests
 ```
 
@@ -326,6 +345,14 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   rebuild, and saved DXF/DGN read back equal to the edited drawing; edit operations (move,
   rotate, mirror, OCS baking, handles, add/delete points, text, layer/colour), undo/redo
   invariants (undoing everything restores the original objects), window vs crossing selection.
+* DGN fidelity (`fidelity.test.mjs`, synthetic `dgn-fidelity.dgn` / `dgn-3d-rot.dgn`): editing a
+  cell (retype, delete a text, move, rotate, restyle, duplicate) keeps its text node, empty node,
+  point string, blank text, B-spline, enter-data field, linkages and graphic group byte for byte
+  (only coordinates, symbology, the edited text and word counts change), top-level text nodes,
+  arcs in complex chains (clockwise too), fills, a word count that claims the next element,
+  32-bit range errors, 16-bit word count limits, 3D quaternions (a text GDAL wrote at +30° reads
+  +30°), Z per vertex, two colour tables, 16-bit text read back by GDAL, "not shown" reports
+  (tags, reference files, shared cells, B-splines once); all written files read back by GDAL/OGR.
 * Copy / paste, duplicate, line weights: clipboard payload round trip; source byte ranges and raw
   Z stripped; colours made explicit; unit scaling; layer / level rules; block dependencies and
   renames on a name clash; DGN → DGN (same and other units, origins and colour tables; cells with
@@ -434,16 +461,20 @@ Editing and saving (v0.2):
 * Blocks (INSERTs) and DGN cells can be moved, rotated, restyled and deleted, but not edited
   inside. Moving a dimension gives it its own copy of its block in the saved DXF.
 * Copy / paste: DXF blocks pasted into a DGN are exploded; DGN cells pasted into a DXF stay cells
-  in Linework but are saved as separate items (DXF has no cells). A pasted DGN cell gets a new
-  header with class 0 and no attribute data of its own (its components keep theirs). Hatch pattern
+  in Linework but are saved as separate items (DXF has no cells). A DGN cell pasted into another
+  DGN gets a new header with class 0 and no attribute data of its own (its components keep
+  theirs); pasted or duplicated in its own file it is a copy of its original bytes. Hatch pattern
   scales are not changed when a paste is scaled between units.
 * The DXF writer writes the drawing model, not the original file: non-graphical data (layouts,
   dimension styles, extended data, plot settings, groups) is not carried over (lineweights are:
   see *Line weights* above). TEXT/MTEXT that you did not edit is written exactly as stored; edited MTEXT
   loses its inline formatting (fonts, colours, stacking).
-* DGN: layer names do not exist in DGN v7 (DXF layers become numbered levels); fills are written
-  as outlines; curves as line strings; an edited text in a text node becomes a plain text
-  element; edited items in 3D files are written at the Z of the original element (new items at
-  Z = 0). Text longer than DGN v7 allows (255 bytes) is shortened, with a note.
+* DGN: layer names do not exist in DGN v7 (DXF layers become numbered levels); DXF fills are
+  written as outlines; DGN curves pasted into another file are written as line strings (in their
+  own file they are copied byte for byte); new items in 3D files get Z = 0 (or the Z of the
+  original vertices when an item is reshaped). Text longer than DGN v7 allows (255 bytes) is
+  shortened, with a note. Retyping a text with enter-data fields keeps the field descriptors as
+  they were (a space is added at the end when needed to keep them aligned; the note says so).
+  3D rotations (text, arcs, ellipses) follow GDAL's dgnlib quaternion convention.
 * Splines can be moved, rotated and deleted but not reshaped; zero-size ellipses are left out of
   a saved DXF (they are not valid DXF).

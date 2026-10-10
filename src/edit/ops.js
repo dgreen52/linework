@@ -34,13 +34,16 @@ export function bakeOcs(e) {
 
 /**
  * Apply an affine transform M to an entity (move, rotate, uniform scale; reflections are
- * handled). Returns a new entity. `baking` is internal (OCS to plan).
+ * handled). Returns a new entity. `baking` is internal (OCS to plan). An item read from a DGN file
+ * (`dgn` byte range) keeps the total transform since it was read in `xm`: the DGN writer applies it
+ * to the item's original bytes.
  */
 export function transformEntity(e, M, baking = false) {
   if (!e) return e;
   if (e.xf && !baking && e.type !== 'dimension') e = bakeOcs(e);
   const d = det(M), s = scaleOf(M), flip = d < 0;
   const o = { ...e };
+  if (e.dgn) o.xm = e.xm ? mul(M, e.xm) : M.slice();
   switch (e.type) {
     case 'line': o.a = apply(M, ...e.a); o.b = apply(M, ...e.b); break;
     case 'point': o.p = apply(M, ...e.p); break;
@@ -203,6 +206,7 @@ export function insertVertex(e, i, x, y) {
   }
   const o = { ...e, type: 'polyline', pts, bulges, closed: v.closed };
   delete o.a; delete o.b;
+  if (e.zv) { const n = e.zv.length, z = e.zv.slice(); z.splice(i + 1, 0, Math.round((e.zv[i] + e.zv[(i + 1) % n]) / 2)); o.zv = z; } // 3D DGN: Z per vertex
   if (e.type === 'line') o.src = 'LWPOLYLINE';
   return o;
 }
@@ -218,7 +222,9 @@ export function deleteVertex(e, k) {
   let bulges = v.bulges ? v.bulges.slice() : null;
   if (bulges) { bulges.splice(k, 1); if (k > 0 && k - 1 < bulges.length) bulges[k - 1] = 0; }
   if (e.type === 'line') return null;
-  return { ...e, pts, bulges: bulges && bulges.some((b) => b) ? bulges : null };
+  const o = { ...e, pts, bulges: bulges && bulges.some((b) => b) ? bulges : null };
+  if (e.zv) { o.zv = e.zv.slice(); o.zv.splice(k, 1); }
+  return o;
 }
 
 // ------------------------------------------------------------------ text and style

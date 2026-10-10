@@ -82,16 +82,29 @@ test('clipboard payload: text round trip, header line, foreign text ignored', ()
   assert.deepEqual(P.ext.map((v) => +v.toFixed(6)), extOf(scene, ids).map((v) => +v.toFixed(6)));
 });
 
-test('copy strips what belongs to the source file: DGN byte ranges (cells and nested parts), raw Z, cell ids', () => {
-  const { P } = copy('dgn-titleblock.dgn');
+test('copy keeps the link to the source DGN bytes only with the file fingerprint; a paste into another file drops it', () => {
+  const { P, model: src } = copy('dgn-titleblock.dgn');
   const text = JSON.stringify(P);
-  for (const k of ['dgn', 'zr', 'group', 'id']) assert.ok(!has(P, k), `no "${k}" anywhere`);
+  for (const k of ['group', 'id', 'ctr']) assert.ok(!has(P, k), `no "${k}" anywhere`);
+  assert.equal(P.fid, src.header.fid, 'fingerprint of the source file');
   const title = P.ents.find((e) => e.type === 'cell' && e.name === 'TITLE');
   assert.equal(title.children[5].name, 'STAMP', 'nested cell kept');
+  assert.deepEqual(title.dgn, src.entities.find((e) => e.name === 'TITLE').dgn, 'byte range kept (same-file pastes copy those bytes)');
   assert.ok(text.length < 20000);
+  // another file: no byte ranges, no transforms since read, no raw Z of the source
+  const t = pasteInto('site-plan.dgn', P);
+  for (const k of ['dgn', 'xm', 'zr', 'zv', 'z', 'zs']) assert.ok(!has(t.r.ents, k), `pasted into another file: no "${k}"`);
+  // the same file: kept
+  const same = pasteInto('dgn-titleblock.dgn', P);
+  assert.ok(same.r.ents.every((e) => e.dgn), 'pasted into the same file: byte ranges kept');
+  // DXF copies carry no fingerprint and no ranges
+  const { P: X } = copy('house-plan.dxf');
+  assert.ok(X.fid === undefined && !has(X, 'dgn'));
+  // 3D: raw Z stays for the same file, Z in master units (also per vertex) travels to other files
   const { P: P3 } = copy('dgn-3d.dgn');
-  assert.ok(!has(P3, 'zr') && P3.ents.every((e) => typeof e.z === 'number'), '3D: raw Z becomes Z in master units');
+  assert.ok(P3.ents.every((e) => typeof e.z === 'number' && e.zr != null), '3D: Z in master units + raw Z');
   assert.ok(P3.ents.some((e) => e.z !== 0), 'the fixture has non-zero Z');
+  assert.deepEqual(P3.ents[0].zs, [0, 5, 10], 'Z of every vertex (master units)');
   // the source model is never modified
   const { model } = load('dgn-titleblock.dgn');
   makePayload(model, [0, 1, 2], {});
@@ -382,7 +395,7 @@ test('DXF -> DXF colours: ByLayer comes back when the target layer looks the sam
 });
 
 // ------------------------------------------------------------------ duplicate
-test('duplicate (DGN): line, line string, text, cell -> new elements appended; originals untouched; cells get new headers', () => {
+test('duplicate (DGN): line, line string, text, cell -> copies of their original bytes, moved; originals untouched', () => {
   const { model, scene } = load('site-plan.dgn');
   const b = bytes('site-plan.dgn');
   const doc = new EditDoc(model, scene, { bytes: b });
@@ -392,16 +405,27 @@ test('duplicate (DGN): line, line string, text, cell -> new elements appended; o
   assert.equal(r.notes.length, 0);
   r.ents.forEach((e, j) => {
     const o = model.entities[pick[j]];
-    assert.ok(e !== o && !e.dgn && e.layer === o.layer && e.ci === o.ci && e.rgb === o.rgb && (e.weight | 0) === (o.weight | 0), 'same look, no source bytes');
+    assert.ok(e !== o && e.layer === o.layer && e.ci === o.ci && e.rgb === o.rgb && (e.weight | 0) === (o.weight | 0), 'same look');
+    assert.deepEqual(e.dgn, o.dgn, 'linked to the original bytes');
   });
   const i0 = doc.nextIndex();
   doc.commit('Duplicate', r.ents.map((e, k) => ({ i: i0 + k, before: null, after: moveEntity(e, 5, 5) })));
   const w = roundTrip({ model, doc, b });
+  assert.equal(w.notes.length, 0, 'nothing re-encoded');
   const back = parseDgn(w.bytes);
   assert.equal(back.entities.length, model.entities.length);
   assert.equal(back.entities.filter((e) => e.type === 'cell' && e.name === 'TREE').length, 5, 'four trees + the duplicate');
   const tol = (x) => 1e-3 * Math.max(1, ...x.bbox.map(Math.abs));
   assert.deepEqual(compareItems(liveItems(buildScene(model)), liveItems(buildScene(back)), tol), []);
+  // each copy is its original element(s) with only coordinates and ranges changed: same size, header
+  // words, graphic group, properties, symbology, cell name
+  const copies = back.entities.slice(-4);
+  pick.forEach((p, j) => {
+    const o = model.entities[p].dgn, c = copies[j].dgn;
+    assert.equal(c[1] - c[0], o[1] - o[0], 'same size');
+    for (const k of [0, 1, 2, 3, 28, 29, 30, 31, 32, 33, 34, 35]) assert.equal(w.bytes[c[0] + k], b[o[0] + k], `byte ${k}`);
+    if (copies[j].type === 'cell') for (let k = 38; k < 52; k++) assert.equal(w.bytes[c[0] + k], b[o[0] + k], 'cell name, class, levels');
+  });
   if (!ogrSkip) { const f = join(TMP, 'dgn-dup.dgn'); writeFileSync(f, w.bytes); ogrAgrees(f, back); }
 });
 

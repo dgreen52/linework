@@ -30,12 +30,21 @@ def dump(path):
                     if v is not None:
                         item[k] = v
             style = f.GetStyleString() or ""
-            if "c:#" in style:
-                item["rgb"] = style.split("c:#")[1][:6].lower()
+            pen = style.replace("fc:#", "")  # BRUSH fc = the fill colour, reported as "fill"
+            if "c:#" in pen:
+                item["rgb"] = pen.split("c:#")[1][:6].lower()
+            if "fc:#" in style:
+                item["fill"] = style.split("fc:#")[1][:6].lower()
             if "w:" in style:
                 item["w"] = style.split("w:")[1].split(",")[0].split(")")[0]
+            if style:
+                item["style"] = style
             if g and g.GetGeometryName() in ("LINESTRING", "POINT"):
                 item["points"] = [[g.GetX(i), g.GetY(i)] for i in range(g.GetPointCount())]
+                if g.GetCoordinateDimension() == 3:
+                    item["z"] = [g.GetZ(i) for i in range(g.GetPointCount())]
+            elif g and g.GetGeometryName() in ("MULTILINESTRING", "POLYGON"):
+                item["parts"] = [[[p.GetX(i), p.GetY(i)] for i in range(p.GetPointCount())] for p in (g.GetGeometryRef(k) for k in range(g.GetGeometryCount()))]
             feats.append(item)
     return {"features": feats}
 

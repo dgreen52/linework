@@ -28,11 +28,12 @@ LIBREDWG_BASE_TAG="${LIBREDWG_BASE_TAG:-0.13.4}"                                
 LIBREDWG_BASE_COMMIT="${LIBREDWG_BASE_COMMIT:-e3774bd4020fcfebb68150361db74b8b34d170fe}"
 
 # ------------------------------------------------------------------ build flags
-# Same as the npm package's build (bindings/javascript/package.json of libredwg-web) except: no
-# --enable-debug (stable classes only; it would also drop -O2), -sDYNAMIC_EXECUTION=0 (no eval /
-# new Function in the glue: the CSP allows only 'wasm-unsafe-eval'), 64 MiB initial memory instead
-# of 1 GiB (phones and tablets), no --emit-tsd.
-CONFIGURE_FLAGS="--enable-release --disable-docs --disable-write --disable-python --disable-bindings --disable-shared --disable-json"
+# Same as the npm package's build (bindings/javascript/package.json of libredwg-web) except:
+# -sDYNAMIC_EXECUTION=0 (no eval / new Function in the glue: the CSP allows only 'wasm-unsafe-eval'),
+# 64 MiB initial memory instead of 1 GiB (phones and tablets), no --emit-tsd. --enable-debug stays:
+# the fork's sources only compile with LibreDWG's DEBUG_CLASSES (e.g. ARCALIGNEDTEXT); with it,
+# configure drops -O2 from the C flags (as in the npm build; the link step still optimises, -O2).
+CONFIGURE_FLAGS="--enable-release --enable-debug --disable-docs --disable-write --disable-python --disable-bindings --disable-shared --disable-json"
 CFLAGS_WASM="-O2 -sUSE_ZLIB=1 -DNDEBUG"
 LINK_FLAGS="-O2 -lembind -std=c++17 -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc -sEXPORT_ES6=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule -sEXPORTED_RUNTIME_METHODS=FS,ENV,ccall,cwrap,UTF8ToString,stringToNewUTF8,setValue"
 

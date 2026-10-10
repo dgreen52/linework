@@ -88,11 +88,11 @@ Built from pinned sources by \`tools/build_dwg_wasm.sh\` and installed unchanged
 | Built on | ${built} |
 | Memory | initial ${mem.initial} pages (${mem.initial / 16} MiB), grows on demand up to ${mem.maximum} pages (${mem.maximum / 16384} GiB) |
 
-Differences from the npm package's own build (the scripts in its \`package.json\`): no \`--enable-debug\`
-(only LibreDWG's stable classes, and the C code is optimised with \`-O2\`), \`-sDYNAMIC_EXECUTION=0\`
-(the glue never generates code at run time, so the Content-Security-Policy needs only
-\`'wasm-unsafe-eval'\`), 64 MiB initial memory instead of 1 GiB (phones and tablets), no TypeScript
-declarations.
+Differences from the npm package's own build (the scripts in its \`package.json\`):
+\`-sDYNAMIC_EXECUTION=0\` (the glue never generates code at run time, so the Content-Security-Policy
+needs only \`'wasm-unsafe-eval'\`), 64 MiB initial memory instead of 1 GiB (phones and tablets), no
+TypeScript declarations. Same configure options (with \`--enable-debug\`, which these sources need;
+it makes configure drop \`-O2\` from the C flags, as in the npm build).
 
 | File | Bytes | SHA-256 |
 |---|---|---|

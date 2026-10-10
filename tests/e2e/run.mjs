@@ -3,7 +3,7 @@
 //   NODE_PATH=<a node_modules folder that has playwright> node tests/e2e/run.mjs [filter]
 // Screenshots + perf.json are written to tests/e2e/out/. Only SYNTHETIC fixtures are used.
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { startServer } from '../../tools/serve.mjs';
@@ -91,6 +91,16 @@ async function pixelAt(page, x, y) {
   }, [x, y]);
 }
 
+/** Files reached from `entry` through static import / export-from statements (dynamic import() excluded). */
+function staticGraph(entry, seen = new Set()) {
+  if (seen.has(entry)) return seen;
+  seen.add(entry);
+  const src = readFileSync(join(ROOT, entry), 'utf8');
+  const re = /^\s*(?:import|export)\s[^;'"`]*?from\s*['"]([^'"]+)['"]|^\s*import\s*['"]([^'"]+)['"]/gm;
+  for (const m of src.matchAll(re)) staticGraph(posix.normalize(posix.join(posix.dirname(entry), m[1] || m[2])), seen);
+  return seen;
+}
+
 // ------------------------------------------------------------------ tests
 test('empty state, privacy promise, app shell size', async () => {
   const page = await newPage();
@@ -99,20 +109,25 @@ test('empty state, privacy promise, app shell size', async () => {
   assert(/never leave this device/i.test(promise), 'privacy promise shown');
   eq(await page.locator('.sample').count(), 5, 'sample buttons');
   await shot(page, 'empty-dark-1440');
-  // transferred size of the app shell (everything the SW precaches except samples)
+  // Size budgets (gzip). 1) Startup: what a first visit needs before a drawing can open: index.html,
+  // app.css, the module graph statically imported by src/app.js and the parse worker's graph.
+  // 2) Offline: everything the service worker precaches except the samples (adds the lazily
+  // imported writers, icons, manifest).
+  const gz = (p) => gzipSync(readFileSync(join(ROOT, p)), { level: 9 }).length;
+  const startup = new Set(['index.html', 'app.css', ...staticGraph('src/app.js'), ...staticGraph('src/worker.js')]);
+  assert(startup.has('src/scene.js') && startup.has('src/app/edit-ui.js') && startup.has('src/formats/dxf.js'), 'static import graph found: ' + [...startup].join(' '));
+  assert(!startup.has('src/formats/dxf-write.js') && !startup.has('src/formats/dgn-write.js'), 'writers are not loaded at startup');
+  let startGz = 0;
+  for (const p of startup) startGz += gz(p);
   const sw = readFileSync(join(ROOT, 'sw.js'), 'utf8');
   const list = sw.slice(sw.indexOf('const SHELL = ['), sw.indexOf('];', sw.indexOf('const SHELL = [')));
   const shell = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]).filter((p) => p !== './' && !p.startsWith('samples/'));
-  let raw = 0, gz = 0, codeGz = 0;
-  for (const p of shell) {
-    const b = readFileSync(join(ROOT, p));
-    raw += b.length;
-    const z = gzipSync(b, { level: 9 }).length;
-    gz += z;
-    if (!p.startsWith('icons/')) codeGz += z;
-  }
-  perf.appShell = { files: shell.length, rawKB: +(raw / 1024).toFixed(1), gzipKB: +(gz / 1024).toFixed(1), codeGzipKB: +(codeGz / 1024).toFixed(1) };
-  assert(gz < 150 * 1024, `app shell gzip ${gz} < 150 KB`);
+  for (const p of startup) assert(shell.includes(p), `startup file ${p} is precached`);
+  let raw = 0, offGz = 0;
+  for (const p of shell) { raw += readFileSync(join(ROOT, p)).length; offGz += gz(p); }
+  perf.appShell = { startupFiles: startup.size, startupGzipKB: +(startGz / 1024).toFixed(1), offlineFiles: shell.length, offlineRawKB: +(raw / 1024).toFixed(1), offlineGzipKB: +(offGz / 1024).toFixed(1) };
+  assert(startGz < 150 * 1024, `startup code gzip ${startGz} < 150 KB`);
+  assert(offGz < 220 * 1024, `offline app shell gzip ${offGz} < 220 KB`);
   // first open timing
   const nav = await page.evaluate(() => { const n = performance.getEntriesByType('navigation')[0]; return { domContentLoaded: n.domContentLoadedEventEnd, load: n.loadEventEnd }; });
   perf.firstOpen = { domContentLoadedMs: Math.round(nav.domContentLoaded), loadMs: Math.round(nav.load) };
@@ -1131,9 +1146,9 @@ test('edit: DGN drawing — cells move as one, colours come from the file colour
   assert(Math.abs(Math.atan2(c2.mv[1], c2.mv[0]) - Math.PI / 2) < 1e-9, 'rotated 90 degrees as a whole');
   await page.click('#btn-ecolor');
   const labels = await page.$$eval('#color-pop button', (bs) => bs.map((b) => b.textContent.trim()));
-  eq(labels.length, 16, 'DGN: 16 entries of the file colour table');
-  assert(labels[3] === 'Colour 3', 'labelled by colour index');
-  await page.click('#color-pop button:has-text("Colour 3")');
+  eq(labels.length, 256, 'DGN: the whole colour table of the file');
+  assert(labels[3] === 'Colour 3' && labels[255] === 'Colour 255', 'labelled by colour index');
+  await page.click('#color-pop button[title="Colour 3"]');
   const c3 = await ED.ent(page, cell.i);
   assert(c3.children.every((k) => k.ci === 3), 'components recoloured with table entry 3');
   const on = await page.evaluate((k) => { const a = window.__linework, s = a.scene, it = a.edit.doc.items(k); const p = it.prims[0], o = s.start[p] * 2; return [s.coords[o] + s.origin[0], s.coords[o + 1] + s.origin[1]]; }, cell.i);
@@ -1449,7 +1464,10 @@ test('line weight: ribbon Weight changes the selection (DXF lineweight, DGN weig
   await settle(page);
   const v1 = await strokeWidthAt(page, 30, 12);
   assert(v1 >= v0 + 3, `DGN: drawn thicker: ${v0} px -> ${v1} px`);
-  // new items get the current weight
+  // changing the selection's weight leaves the weight for new items alone; without a selection it sets it
+  eq((await page.textContent('#eweight-label')).trim(), '0', 'deselected: the Weight box shows the current weight again');
+  await page.click('#btn-eweight');
+  await page.click('#color-pop button:text-is("6")');
   await page.click('[data-tool="eline"]');
   await clickWorld(page, 12, 30); await clickWorld(page, 25, 30); await page.keyboard.press('Escape');
   eq((await ED.last(page)).weight, 6, 'a new line has the current weight');
@@ -1510,6 +1528,429 @@ test('copy / paste / duplicate at 390 px with touch: ribbon buttons, tap to plac
   assert(layout[1] <= 390, 'no horizontal overflow at 390px');
   await page.tap('#btn-eweight');
   await shot(page, 'edit-weight-menu-dark-390');
+  await close(page);
+});
+
+// ------------------------------------------------------------------ UI fixes and hardening
+/** A screen point over empty drawing space (the Select tool's hover finds nothing there). */
+async function emptySpot(page) {
+  const box = await stageBox(page);
+  for (const [fx, fy] of [[0.5, 0.06], [0.04, 0.5], [0.96, 0.5], [0.5, 0.94], [0.1, 0.1], [0.9, 0.9], [0.1, 0.9], [0.9, 0.1]]) {
+    const p = [box.x + box.w * fx, box.y + box.h * fy];
+    await page.mouse.move(p[0], p[1]);
+    if (await page.evaluate(() => window.__linework.edit.hover === -1)) return p;
+  }
+  throw new Error('no empty spot');
+}
+const toastTexts = (page) => page.evaluate(() => [...document.querySelectorAll('#toasts .toast')].map((t) => t.textContent.replace(/\s+/g, ' ').trim()));
+
+test('edit keys and menus: the Edit tab starts Select; desktop right-click menu; keys after a layer checkbox; Ctrl+D / Ctrl+A kept from the browser; Esc in a draw tool; C in a short polyline', async () => {
+  const page = await newPage();
+  await openFixture(page, 'house-plan.dxf');
+  await clearToasts(page);
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  const prevented = await page.evaluate(() => ['d', 'a'].map((key) => { const e = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true }); document.body.dispatchEvent(e); return e.defaultPrevented; }));
+  eq(JSON.stringify(prevented), '[true,true]', 'Ctrl+D (bookmark) and Ctrl+A (select the page) never reach the browser');
+  await page.click('#tab-edit');
+  eq(await page.evaluate(() => window.__linework.tool), 'eselect', 'the Edit tab starts the Select tool');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 500, 5000, 4000, 8000);
+  // right-click on an item: the menu opens (and stays open)
+  const p = await client(page, 2300, 6600);
+  await page.mouse.click(p[0], p[1], { button: 'right' });
+  await settle(page);
+  assert(await page.isVisible('#ctx-menu'), 'right-click menu is shown');
+  eq(JSON.stringify(await ED.sel(page)), '[33]', 'the item under the cursor is selected');
+  await shot(page, 'edit-context-menu-dark-1440');
+  const n0 = await entCount(page);
+  await page.click('#ctx-menu button:has-text("Delete")');
+  eq(await entCount(page), n0 - 1, 'Delete from the menu');
+  assert(await page.isHidden('#ctx-menu'), 'the menu closes');
+  await page.keyboard.press('Control+z');
+  eq(await entCount(page), n0, 'undone');
+  // keyboard in the menu: arrow keys move, Esc closes
+  await page.mouse.click(p[0], p[1], { button: 'right' });
+  await settle(page);
+  eq(await page.evaluate(() => document.activeElement.textContent), 'Edit…', 'the menu has the keyboard focus');
+  await page.keyboard.press('ArrowDown');
+  eq(await page.evaluate(() => document.activeElement.textContent), 'Copy', 'ArrowDown moves to the next item');
+  await page.keyboard.press('Escape');
+  assert(await page.isHidden('#ctx-menu'), 'Esc closes the menu');
+  // right-click on empty space after a copy: Paste here
+  await page.mouse.click(p[0], p[1]);
+  await page.keyboard.press('Control+c');
+  const e = await emptySpot(page);
+  await page.mouse.click(e[0], e[1], { button: 'right' });
+  await settle(page);
+  assert(await page.isVisible('#ctx-menu button:has-text("Paste here")'), 'Paste here on empty space');
+  await page.click('#ctx-menu button:has-text("Paste here")');
+  eq(await entCount(page), n0 + 1, 'pasted where clicked');
+  // single-key shortcuts still work after clicking a layer checkbox; Space toggles the checkbox
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = false; });
+  const walls = await page.evaluate(() => window.__linework.scene.layers.findIndex((l) => l.name === 'WALLS'));
+  const cb = `#layer-list input[data-i="${walls}"]`;
+  await page.click(cb);
+  const off = await page.evaluate((s) => !document.querySelector(s).checked, cb);
+  assert(off, 'the click switched the layer off');
+  await page.keyboard.press('Space');
+  assert(await page.evaluate((s) => document.querySelector(s).checked, cb), 'Space toggles the focused checkbox (no pan)');
+  eq(await page.evaluate(() => document.activeElement.type), 'checkbox', 'focus is still on the checkbox');
+  await page.keyboard.press('n');
+  eq(await page.evaluate(() => window.__linework.tool), 'eline', 'N after a checkbox picks the Line tool');
+  // Esc in a draw tool with nothing in progress: back to Select (not out of Edit)
+  await page.keyboard.press('Escape');
+  eq(await page.evaluate(() => window.__linework.tool), 'eselect', 'Esc in Line: back to Select');
+  // C in a polyline with fewer than 3 points: nothing is lost, no markup cloud
+  await page.click('#btn-close-layers');
+  await page.keyboard.press('p');
+  await clickWorld(page, 1000, 6000); await clickWorld(page, 2000, 6000);
+  await page.keyboard.press('c');
+  eq(await page.evaluate(() => window.__linework.tool), 'epoly', 'C does not switch to the markup cloud');
+  assert(await page.evaluate(() => !!window.__linework.edit.draft && window.__linework.edit.draft.pts.length === 4), 'the polyline being drawn is kept');
+  await clickWorld(page, 1500, 7000);
+  await page.keyboard.press('c');
+  const pl = await ED.last(page);
+  eq(pl.type, 'polyline'); eq(pl.closed, true); eq(pl.pts.length, 6, 'C closes it once it has 3 points');
+  await close(page);
+});
+
+test('hidden layers: Ctrl+A, box and click skip them; new items on a hidden level offer "Show"; the default layer is a visible one; DGN Level box without "0"; Layers panel follows edits', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'edge-first-layer-off.dxf');
+  eq(await page.inputValue('#sel-elayer'), 'B-SHOWN', 'the current layer starts on a visible layer');
+  await openForEdit(page, 'site-plan.dgn');
+  const opts = await page.$$eval('#sel-elayer option', (os) => os.map((o) => o.value));
+  assert(!opts.includes('0') && opts.includes('Level 2'), 'DGN Level box: levels only, no "0": ' + opts.join(','));
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = false; });
+  await zoomTo(page, 10, 5, 50, 35);
+  const lv2 = await page.evaluate(() => window.__linework.scene.layers.findIndex((l) => l.name === 'Level 2'));
+  const onL2 = () => page.evaluate(() => window.__linework.edit.doc.model.entities.filter((x) => x && x.layer === 'Level 2').length);
+  const selOnL2 = () => page.evaluate(() => { const E = window.__linework.edit; return [...E.sel].filter((i) => E.doc.model.entities[i].layer === 'Level 2').length; });
+  // a selected item disappears from the selection when its level is hidden
+  await clickWorld(page, 30, 12);
+  eq(await selOnL2(), 1, 'a Level 2 item selected');
+  await page.click(`#layer-list input[data-i="${lv2}"]`);
+  eq((await ED.sel(page)).length, 0, 'hiding its level drops it from the selection');
+  const n2 = await onL2();
+  assert(n2 > 0, 'Level 2 has items');
+  await page.keyboard.press('Control+a');
+  assert((await ED.sel(page)).length > 5 && (await selOnL2()) === 0, 'Ctrl+A selects what can be seen, nothing on the hidden level');
+  await page.keyboard.press('Delete');
+  eq(await onL2(), n2, 'so Delete leaves the hidden items alone');
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => window.__linework.fit());
+  await settle(page);
+  const box = await stageBox(page);
+  await dragScreen(page, [box.x + 4, box.y + 4], [box.x + box.w - 4, box.y + box.h - 4]);
+  assert((await ED.sel(page)).length > 5 && (await selOnL2()) === 0, 'a box around everything skips the hidden level');
+  await page.keyboard.press('Escape');
+  await zoomTo(page, 10, 5, 50, 35);
+  await clickWorld(page, 30, 12);
+  eq(await selOnL2(), 0, 'a hidden item cannot be clicked');
+  // the Layers panel follows edits (counts), undo and redo
+  const countL2 = () => page.evaluate((i) => Number(document.querySelector(`#layer-list .ln-count[data-i="${i}"]`).textContent), lv2);
+  const c0 = await countL2();
+  // drawing on a hidden level: say so, with a button that shows it
+  await page.selectOption('#sel-elayer', 'Level 2');
+  await page.keyboard.press('n');
+  await clickWorld(page, 12, 30); await clickWorld(page, 25, 30); await page.keyboard.press('Escape');
+  eq((await ED.last(page)).layer, 'Level 2', 'drawn on Level 2');
+  eq(await countL2(), c0 + 1, 'the panel count follows the edit');
+  await page.waitForSelector('.toast:has-text("hidden level")');
+  await shot(page, 'edit-hidden-level-toast-dark-1440');
+  await page.click('.toast button:has-text("Show level")');
+  assert(await page.evaluate((i) => !!window.__linework.layerVisible[i] && document.querySelector(`#layer-list input[data-i="${i}"]`).checked, lv2), 'Show level switched it on');
+  await page.keyboard.press('Control+z');
+  eq(await countL2(), c0, 'and undo');
+  await page.keyboard.press('Control+y');
+  eq(await countL2(), c0 + 1, 'and redo');
+  // a new level appears in the panel at once (even before it has items)
+  await page.keyboard.press('Escape');
+  await page.selectOption('#sel-elayer', '__new');
+  await page.waitForSelector('#dlg-layer[open]');
+  const lname = await page.inputValue('#layer-name');
+  await page.click('#btn-do-layer');
+  await page.waitForFunction((n) => [...document.querySelectorAll('#layer-list .lname')].some((x) => x.textContent === n), lname);
+  eq(await page.inputValue('#sel-elayer'), lname, 'the new level is current');
+  const counts = await page.evaluate(() => [document.querySelector('#layers-count').textContent, document.querySelectorAll('#layer-list li').length]);
+  eq(counts[0], `(${counts[1]})`, 'the panel count matches its rows');
+  await close(page);
+});
+
+test('paste: other text on the clipboard falls back to the copy made in this tab, else "Nothing to paste"; damaged copies are refused safely', async () => {
+  const page = await newPage({ context: { permissions: ['clipboard-read', 'clipboard-write'] } });
+  await openForEdit(page, 'site-plan.dgn');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 10, 5, 50, 35);
+  const pasteEvent = (txt) => page.evaluate((t) => { const dt = new DataTransfer(); dt.setData('text/plain', t); document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); }, txt);
+  await pasteEvent('some text from another program');
+  await page.waitForSelector('.toast:has-text("Nothing to paste")');
+  await clearToasts(page);
+  // copy an item; other text on the system clipboard then pastes this tab's copy (keyboard path)
+  await clickWorld(page, 30, 12);
+  await page.keyboard.press('Control+c');
+  await page.evaluate(() => navigator.clipboard.writeText('some text from another program'));
+  await page.keyboard.press('Control+v');
+  await page.waitForFunction(() => !!window.__linework.edit.place, null, { timeout: 3000 });
+  eq(await page.evaluate(() => window.__linework.edit.place.r.ents.length), 1, 'the in-tab copy follows the cursor');
+  await page.keyboard.press('Escape');
+  // a damaged or hostile Linework copy: nothing half-pasted, no error, nothing polluted
+  const n0 = await entCount(page);
+  await clearToasts(page);
+  await pasteEvent('LINEWORK-CLIPBOARD 1\n{"v":1,"ents":[{"type":"line","layer":"x"}],"blocks":{"__proto__":{"name":"x","base":[0,0],"entities":[]}},"ltypes":{"__proto__":{"p":1}}}');
+  await page.waitForSelector('.toast:has-text("Nothing could be pasted")');
+  eq(await entCount(page), n0, 'nothing added');
+  assert(!(await page.evaluate(() => window.__linework.edit.place)), 'nothing to place');
+  eq(await page.evaluate(() => ({}).p === undefined && ({}).polluted === undefined), true, 'Object.prototype untouched');
+  await close(page);
+});
+
+test('performance + saving: Ctrl+A on the 53k drawing < 300 ms, panning with all selected >= 30 fps, undo of delete-all < 1 s; Save as DXF of 53k items; a failing save is reported and keeps the edits', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'stress-test-53k.dxf', 'stress');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await page.focus('#stage');
+  await page.waitForTimeout(300);
+  const key = (k, o) => page.evaluate(async ([k, o]) => {
+    const raf = () => new Promise((r) => requestAnimationFrame(r));
+    await raf();
+    const t0 = performance.now();
+    document.querySelector('#stage').dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...o }));
+    await raf(); await raf(); // the frame that shows the result has been drawn
+    return performance.now() - t0;
+  }, [k, o]);
+  const selectAllMs = await key('a', { ctrlKey: true });
+  const n = await page.evaluate(() => window.__linework.edit.sel.size);
+  eq(n, 53100, 'Ctrl+A selected everything');
+  // pan with the middle button while everything is selected
+  const box = await stageBox(page);
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  await page.evaluate(() => { window.__frames = []; let last = performance.now(); const tick = (t) => { window.__frames.push(t - last); last = t; if (window.__rec) requestAnimationFrame(tick); }; window.__rec = true; requestAnimationFrame(tick); });
+  await page.mouse.move(cx, cy); await page.mouse.down({ button: 'middle' });
+  for (let i = 0; i < 40; i++) await page.mouse.move(cx - i * 5, cy - i * 2);
+  await page.mouse.up({ button: 'middle' });
+  const f = (await page.evaluate(() => { window.__rec = false; return window.__frames.slice(2); })).sort((a, b) => a - b);
+  const panMedian = +f[Math.floor(f.length / 2)].toFixed(1);
+  await page.waitForTimeout(300);
+  await key('Delete', {});
+  eq(await entCount(page), 0, 'deleted everything');
+  const undoMs = await key('z', { ctrlKey: true });
+  eq(await entCount(page), 53100, 'undo brings everything back');
+  perf.bigSelection = { selectAllMs: +selectAllMs.toFixed(0), panMedianMs: panMedian, panFrames: f.length, undoDeleteAllMs: +undoMs.toFixed(0) };
+  assert(selectAllMs < 300, `Ctrl+A on 53k items: ${selectAllMs.toFixed(0)} ms`);
+  assert(panMedian <= 34, `pan with everything selected: median frame ${panMedian} ms`);
+  assert(undoMs < 1000, `undo of delete-all: ${undoMs.toFixed(0)} ms`);
+  await shot(page, 'edit-select-all-53k-dark-1440');
+  // Save as DXF of all 53k items (this used to overflow the call stack)
+  await page.keyboard.press('Escape');
+  await page.click('#btn-esaveas');
+  await page.check('#save-form input[value="DXF"]');
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#btn-do-save')]);
+  const out = join(OUT, 'stress-saved.dxf');
+  await dl.saveAs(out);
+  const lines = readFileSync(out, 'latin1').split(/\r?\n/);
+  assert(lines.length > 53100 * 10, 'a full DXF was written');
+  // a failing save (an item the writer cannot handle): an error message, no download, the edits stay
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Delete');
+  await page.evaluate(() => { const bad = {}; Object.defineProperty(bad, 'type', { get() { throw new Error('damaged item'); } }); window.__linework.edit.doc.model.entities.push(bad); });
+  let downloaded = false;
+  page.on('download', () => { downloaded = true; });
+  await page.click('#btn-esave');
+  await page.waitForSelector('.toast.error:has-text("Could not save")');
+  await page.waitForTimeout(300);
+  assert(!downloaded, 'nothing downloaded');
+  assert(await ED.dirty(page), 'still marked unsaved');
+  await close(page);
+});
+
+test('hostile files and Cancel: tiny files expanding to 10^8 copies open quickly with "copies not shown"; Cancel stops an open; a new file replaces one still opening', async () => {
+  const page = await newPage();
+  for (const name of ['edge-huge-array.dxf', 'edge-nested-huge.dxf']) {
+    const t0 = Date.now();
+    await openFixture(page, name);
+    const ms = Date.now() - t0;
+    const ns = await page.evaluate(() => window.__linework.scene.notShown);
+    assert(ms < 20000, `${name} opened in ${ms} ms`);
+    assert(ns['Block copies (too many to draw)'] > 0, name + ': copies reported: ' + JSON.stringify(ns));
+    assert((await toastTexts(page)).some((t) => /not shown/.test(t)), 'the "not shown" message');
+    perf['hostile:' + name] = ms;
+  }
+  await shot(page, 'hostile-nested-dark-1440');
+  // Cancel while the stress drawing is being read
+  await page.evaluate(() => { window.__linework.openSample('stress'); });
+  await page.waitForSelector('#btn-cancel-load:visible');
+  await page.click('#btn-cancel-load');
+  await page.waitForFunction(() => !window.__linework.loading, null, { timeout: 5000 });
+  assert(await page.isHidden('#progress'), 'progress closed');
+  eq(await page.evaluate(() => window.__linework.doc.name), 'edge-nested-huge.dxf', 'the open drawing stays');
+  // a file chosen while another is still opening replaces it
+  await page.evaluate(() => { window.__linework.openSample('stress'); });
+  await page.waitForSelector('#progress:not([hidden])');
+  await openFixture(page, 'house-plan.dxf');
+  await page.waitForTimeout(2500);
+  eq(await page.evaluate(() => window.__linework.doc.name), 'house-plan.dxf', 'the later file wins');
+  assert(!(await page.evaluate(() => window.__linework.loading)), 'not stuck loading');
+  await close(page);
+});
+
+test('390 px: toasts sit below the multi-line tool hint; touch wording (tap Paste / tap Cancel); long-press after a tap opens the menu without reshaping', async () => {
+  const page = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 } });
+  await openFixture(page, 'site-plan.dgn');
+  await clearToasts(page);
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await page.tap('#tab-edit');
+  eq(await page.evaluate(() => window.__linework.tool), 'eselect', 'tapping the Edit tab starts Select');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 10, 5, 50, 35);
+  const cdp = await page.ctx.newCDPSession(page);
+  const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], i) => ({ x, y, id: i + 1, radiusX: 4, radiusY: 4, force: 1 })) });
+  const tap = async (pt) => { await touch('touchStart', [pt]); await touch('touchEnd', []); };
+  const m = await client(page, 30, 12);
+  await tap(m);
+  await page.tap('#btn-ecopy');
+  await page.waitForSelector('#toasts .toast');
+  const r = await page.evaluate(() => { const h = document.querySelector('#tool-hint'), t = document.querySelector('#toasts .toast'); return { hint: h.hidden ? null : h.getBoundingClientRect().bottom, top: t.getBoundingClientRect().top, lines: Math.round(h.getBoundingClientRect().height / 16) }; });
+  assert(r.hint !== null && r.top >= r.hint, `the toast (top ${r.top}) is below the hint (bottom ${r.hint})`);
+  const t = (await toastTexts(page)).join(' ');
+  assert(/tap Paste/.test(t) && !/Ctrl/.test(t), 'touch wording: ' + t);
+  await shot(page, 'edit-toast-below-hint-dark-390');
+  await page.tap('#btn-epaste');
+  await page.waitForFunction(() => !!window.__linework.edit.place);
+  const hint = await page.textContent('#tool-hint');
+  assert(/Tap to place/.test(hint) && /tap Cancel/.test(hint) && !/Esc/.test(hint), 'placing hint: ' + hint);
+  await page.tap('#btn-cancel-draft');
+  await close(page);
+  // a quick tap, then a long-press on the same item (a fresh page): the browser reports the
+  // long-press's release as a double-tap; it must open the menu only, not the reshape handles
+  const pg = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } });
+  await openFixture(pg, 'site-plan.dgn');
+  await clearToasts(pg);
+  await pg.waitForFunction(() => window.__linework.edit.ready);
+  await pg.tap('#tab-edit');
+  await pg.evaluate(() => { window.__dbl = 0; document.querySelector('#cv-overlay').addEventListener('dblclick', () => window.__dbl++); });
+  const cdp2 = await pg.ctx.newCDPSession(pg);
+  const q = await client(pg, 30, 12);
+  await pg.touchscreen.tap(q[0], q[1]);
+  await pg.waitForTimeout(300);
+  await cdp2.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: q[0], y: q[1] }] });
+  await pg.waitForTimeout(800);
+  await cdp2.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await pg.waitForTimeout(300);
+  assert(await pg.isVisible('#ctx-menu'), 'long-press menu');
+  assert(await pg.evaluate(() => window.__dbl > 0), 'the browser sent the double-tap this checks');
+  eq(await pg.evaluate(() => window.__linework.edit.vedit), -1, 'no reshape handles');
+  await close(pg);
+});
+
+test('ribbon: Layer, Colour and Weight show the selection and change only it, the current values for new items stay; DGN colour grid (whole table) with arrow keys; a toast never blocks starting a markup', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'house-plan.dxf');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 500, 5000, 4000, 8000);
+  const label = (id) => page.evaluate((s) => document.querySelector(s).textContent.trim(), id);
+  // current colour for new items: Red
+  await page.click('#btn-ecolor');
+  await page.click('#color-pop button:has-text("Red")');
+  eq(await label('#ecolor-label'), 'Red', 'current colour');
+  const cur = await page.inputValue('#sel-elayer');
+  // the selection's own values are shown
+  await clickWorld(page, 2300, 6600);
+  eq(await label('#ecolor-label'), 'ByLayer', "the selection's colour");
+  assert(await page.evaluate(() => document.querySelector('#btn-ecolor').closest('.field').classList.contains('for-sel')), 'marked as the selection');
+  await page.click('#btn-ecolor');
+  await page.click('#color-pop button:has-text("Blue")');
+  eq((await ED.ent(page, 33)).color, 5, 'the selection is recoloured');
+  eq(await label('#ecolor-label'), 'Blue', 'and shown');
+  await page.click('#btn-eweight');
+  await page.click('#color-pop button:has-text("0.50 mm")');
+  eq((await ED.ent(page, 33)).lw, 50, 'the selection gets the weight');
+  await page.selectOption('#sel-elayer', 'TEXT');
+  eq((await ED.ent(page, 33)).layer, 'TEXT', 'the selection moves to the layer');
+  await zoomTo(page, 500, 1000, 4000, 8000);
+  await page.keyboard.down('Shift'); await clickWorld(page, 3300, 1700); await page.keyboard.up('Shift');
+  eq(JSON.stringify(await ED.sel(page)), '[33,34]', 'two items');
+  eq(await label('#ecolor-label'), 'Varies', 'a mixed selection says so');
+  eq(await page.evaluate(() => document.querySelector('#sel-elayer').selectedOptions[0].textContent), 'Varies', 'the Layer box too');
+  await page.keyboard.press('Escape');
+  eq(await label('#ecolor-label'), 'Red', 'the current colour for new items did not change');
+  eq(await label('#eweight-label'), 'ByLayer', 'nor the current weight');
+  eq(await page.inputValue('#sel-elayer'), cur, 'nor the current layer');
+  await page.keyboard.press('n');
+  await clickWorld(page, 1000, 6000); await clickWorld(page, 2000, 6000); await page.keyboard.press('Escape');
+  const ln = await ED.last(page);
+  eq(ln.color, 1, 'a new line gets the current colour'); eq(ln.layer, cur, 'and layer'); eq(ln.lw, undefined, 'and weight (ByLayer)');
+  // a toast at the top centre does not block a markup started under it (its buttons still work)
+  await page.click('#tab-markup');
+  eq(await page.evaluate(() => window.__linework.tool), 'pan', 'leaving the Edit tab leaves Edit mode');
+  await page.click('[data-tool="rect"]');
+  await page.evaluate(() => { document.querySelector('#toasts').innerHTML = '<div class="toast info"><div class="msg">A message at the top of the drawing<small>with some detail under it</small></div><button type="button" class="btn sm">OK</button></div>'; });
+  const tb = await page.evaluate(() => { const r = document.querySelector('#toasts .toast .msg').getBoundingClientRect(); const b = document.querySelector('#toasts .toast button').getBoundingClientRect(); return { m: [r.left + r.width / 2, r.top + r.height / 2], b: [b.left + b.width / 2, b.top + b.height / 2] }; });
+  eq(await page.evaluate(([x, y]) => document.elementFromPoint(x, y).tagName, tb.b), 'BUTTON', "the toast's button still takes clicks");
+  const mk0 = await page.evaluate(() => window.__linework.markups.length);
+  await dragScreen(page, tb.m, [tb.m[0] + 80, tb.m[1] + 60]);
+  eq(await page.evaluate(() => window.__linework.markups.length), mk0 + 1, 'the markup was drawn from under the toast');
+  // DGN: the whole colour table as a grid, keyboard friendly
+  page.once('dialog', (d) => d.accept()); // "unsaved edits: open another drawing anyway?"
+  await openForEdit(page, 'site-plan.dgn');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 10, 5, 50, 35);
+  await clickWorld(page, 30, 12);
+  const i = await page.evaluate(() => [...window.__linework.edit.sel][0]);
+  await page.click('#btn-ecolor');
+  eq(await page.locator('#color-pop button').count(), 256, '256 colours');
+  await shot(page, 'edit-dgn-colour-grid-dark-1440');
+  const start = await page.evaluate(() => Number(document.activeElement.title.replace('Colour ', '')));
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  const want = start + 17;
+  eq(await page.evaluate(() => document.activeElement.title), 'Colour ' + want, 'arrow keys move through the grid');
+  await page.keyboard.press('Enter');
+  eq((await ED.ent(page, i)).ci, want, 'Enter picks the colour');
+  assert(await page.isHidden('#color-pop'), 'and closes the grid');
+  eq(await page.evaluate(() => document.activeElement.id), 'btn-ecolor', 'focus goes back to the Colour button');
+  await close(page);
+});
+
+test('version, help, kept markups: about shows src/version.js; help lists Ctrl+A, arrow keys and touch; markups are kept per file revision; Clear stored markups; writers load when Edit opens', async () => {
+  const page = await newPage();
+  const v = readFileSync(join(ROOT, 'src/version.js'), 'utf8').match(/LINEWORK_VERSION = '([^']+)'/)[1];
+  assert((await page.textContent('#about-line')).includes(`Linework ${v} `), 'about line has the version');
+  const help = await page.textContent('#dlg-help');
+  for (const s of ['Select everything on the visible layers', 'Arrow keys', 'Long-press', 'Two fingers', 'Esc'] ) assert(help.includes(s), 'help mentions ' + s);
+  // markups are kept per file revision: same name, same size, other content
+  const openAs = async (fixture, name) => {
+    await page.evaluate(() => { window.__prev = window.__linework.scene; });
+    await page.setInputFiles('#file-input', { name, mimeType: 'application/dxf', buffer: readFileSync(FIX(fixture)) });
+    await page.waitForFunction(() => window.__linework.scene && window.__linework.scene !== window.__prev && !window.__linework.loading);
+    await settle(page);
+  };
+  await openAs('edge-rev-1.dxf', 'revision.dxf');
+  const h1 = await page.evaluate(() => window.__linework.doc.hash);
+  assert(/^[0-9a-f]{16}$/.test(h1), 'content hash: ' + h1);
+  await page.click('#tab-markup'); await page.click('[data-tool="rect"]');
+  const box = await stageBox(page);
+  await dragScreen(page, [box.x + box.w * 0.4, box.y + box.h * 0.4], [box.x + box.w * 0.6, box.y + box.h * 0.6]);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'a markup');
+  await openAs('edge-rev-2.dxf', 'revision.dxf');
+  assert(await page.evaluate((h) => window.__linework.doc.hash !== h, h1), 'the other revision has another hash');
+  eq(await page.evaluate(() => window.__linework.markups.length), 0, 'the other revision does not get those markups');
+  await openAs('edge-rev-1.dxf', 'revision.dxf');
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'the same revision gets them back');
+  const keys = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('linework:autosave:')));
+  assert(keys.length === 1 && keys[0].endsWith(':' + h1), 'kept under name + size + hash: ' + keys.join(','));
+  await page.click('#btn-help');
+  await page.click('#btn-clear-stored');
+  await page.waitForSelector('.toast:has-text("Cleared")');
+  eq(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('linework:autosave:')).length), 0, 'Clear stored markups');
+  await page.keyboard.press('Escape');
+  // the writers are fetched when Edit opens, not at save time (a page saves with its own code)
+  const fetched = () => page.evaluate(() => performance.getEntriesByType('resource').map((r) => r.name).filter((n) => /(dxf|dgn)-write\.js/.test(n)).length);
+  eq(await fetched(), 0, 'not loaded before Edit');
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await page.click('#tab-edit');
+  await page.waitForFunction(() => performance.getEntriesByType('resource').filter((r) => /(dxf|dgn)-write\.js/.test(r.name)).length === 2, null, { timeout: 5000 });
   await close(page);
 });
 

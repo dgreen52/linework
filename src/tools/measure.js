@@ -1,11 +1,5 @@
-// Measurement maths + formatting. The interactive tool lives in ../app/measure-tool.js.
+// Measurement maths + formatting. The interactive tool lives in ../app.js.
 import { polylineLength, polygonArea } from '../geom.js';
-
-export const MEASURE_MODES = {
-  distance: { label: 'Distance', minPts: 2, maxPts: 2 },
-  length: { label: 'Length', minPts: 2, maxPts: Infinity },
-  area: { label: 'Area', minPts: 3, maxPts: Infinity },
-};
 
 /** Result of a measurement over points (flat [x,y,...] in drawing units). */
 export function measure(mode, pts) {

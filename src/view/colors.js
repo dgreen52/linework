@@ -38,7 +38,3 @@ export function cssColor(c, theme) {
   m.set(c, s);
   return s;
 }
-
-export function swatchColor(c) {
-  return c === FG ? null : hex(c);
-}

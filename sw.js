@@ -1,7 +1,9 @@
 // Service worker: caches the app shell so the viewer works fully offline.
 // It never sees drawings: files opened by the user are read in the page and are not fetched.
-// When you change ANY file below, bump VERSION (tests/unit/sw.test.mjs checks the list).
-const VERSION = 'linework-0.2.2';
+// When you change ANY file below, bump the version in src/version.js (the one place it lives;
+// tests/unit/shell.test.mjs checks the list).
+importScripts('src/version.js');
+const VERSION = 'linework-' + self.LINEWORK_VERSION;
 const SHELL = [
   './',
   'index.html',
@@ -36,6 +38,7 @@ const SHELL = [
   'src/scene.js',
   'src/tools/measure.js',
   'src/tools/snap.js',
+  'src/version.js',
   'src/view/batches.js',
   'src/view/colors.js',
   'src/view/renderer2d.js',

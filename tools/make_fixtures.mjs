@@ -184,4 +184,41 @@ out(FIX, 'edge-garbage.dxf', 'this is not a drawing\njust some text\n\u0000\u000
   w.insert('TAG', [0, 90], {}, { layer: 'PLAIN', lw: 70 });
   out(FIX, 'edge-lineweights.dxf', w.toString());
 }
+// 15) hostile, tiny files that expand to 10^8 items: a 10000 x 10000 array insert, and blocks
+//     nested eight deep with ten copies at each level (the scene caps block expansion)
+{
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.layer('GRID', 7);
+  w.block('DOT', [0, 0], (b) => { b.line([0, 0], [1, 1], { layer: '0' }); });
+  w.line([-10, -10], [-5, -5], { layer: 'GRID' });
+  w.insert('DOT', [0, 0], { cols: 10000, rows: 10000, dc: 2, dr: 2 }, { layer: 'GRID' });
+  out(FIX, 'edge-huge-array.dxf', w.toString());
+}
+{
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.layer('NEST', 7);
+  w.block('N8', [0, 0], (b) => { b.line([0, 0], [1, 1], { layer: '0' }); });
+  for (let k = 7; k >= 1; k--) w.block('N' + k, [0, 0], (b) => { for (let i = 0; i < 10; i++) b.insert('N' + (k + 1), [i * 2, 0], {}, { layer: '0' }); });
+  w.line([-10, -10], [-5, -5], { layer: 'NEST' });
+  for (let i = 0; i < 10; i++) w.insert('N1', [0, i * 2], {}, { layer: 'NEST' });
+  out(FIX, 'edge-nested-huge.dxf', w.toString());
+}
+// 16) the first layer with items is switched off: new items must not go on it by default
+{
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.layer('A-HIDDEN', 1, 'CONTINUOUS', { off: true }).layer('B-SHOWN', 3);
+  w.line([0, 0], [100, 0], { layer: 'A-HIDDEN' });
+  w.circle([50, 50], 20, { layer: 'A-HIDDEN' });
+  w.line([0, 100], [100, 100], { layer: 'B-SHOWN' });
+  w.text('SHOWN', [0, 110], { h: 5 }, { layer: 'B-SHOWN' });
+  out(FIX, 'edge-first-layer-off.dxf', w.toString());
+}
+// 17) two revisions of one drawing: same size, one coordinate differs (markups are kept per revision)
+for (const [rev, x] of [[1, 41], [2, 42]]) {
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.layer('PART', 7);
+  w.line([0, 0], [100, 0], { layer: 'PART' });
+  w.line([100, 0], [100, x], { layer: 'PART' });
+  out(FIX, `edge-rev-${rev}.dxf`, w.toString());
+}
 console.log('done');

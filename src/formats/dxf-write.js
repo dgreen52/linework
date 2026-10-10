@@ -11,6 +11,7 @@ import { ACI } from '../palettes.js';
 import { FG } from '../model.js';
 import { TAU } from '../geom.js';
 import { transformEntity } from '../edit/ops.js';
+import { weightToLw } from '../scene.js';
 
 const R2D = 180 / Math.PI;
 
@@ -131,8 +132,6 @@ export function ellipseParams(e) {
   return { c: e.c, major: [ux, uy], ratio, t0: norm(t0), t1: norm(t1) }; // end < start: wraps past 0
 }
 
-const STD_LW = [13, 18, 25, 35, 50, 70, 100, 140, 200, 211];
-
 /**
  * Serialise a model. opts: { extents: [x0,y0,x1,y1] } (world; computed roughly when absent).
  * Returns { text, notes: [..], written: { entities, splines, cellsFlattened } }.
@@ -175,7 +174,8 @@ export function writeDxf(model, opts = {}) {
     E(8, layerName(e.layer));
     if (e.ltype && e.ltype !== 'BYLAYER') E(6, ltypeName(e.ltype));
     colorGroups(e);
-    if (isDgn && e.weight > 0) E(370, STD_LW[Math.min(STD_LW.length - 1, e.weight - 1)]);
+    const lw = isDgn ? weightToLw(e.weight) : e.lw ?? -1; // DGN weights: see weightToLw (scene.js)
+    if (lw !== -1) E(370, lw);
     if (e.invisible) E(60, 1);
     if (sub) E(100, sub);
     stats.entities++;
@@ -459,7 +459,7 @@ export function writeDxf(model, opts = {}) {
       P(62, L.visible === false ? -aci : aci);
       P(6, safeName(layerLt(L)));
       if (L.color !== FG && L.color != null && (L.color & 0xffffff) !== ACI[aci] && !isDgn) P(420, L.color & 0xffffff);
-      P(370, -3);
+      P(370, isDgn ? -3 : L.lw ?? -3);
     }
   });
   // text styles

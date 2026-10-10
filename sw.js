@@ -16,6 +16,7 @@ const SHELL = [
   'src/app/print.js',
   'src/app/ui.js',
   'src/config.js',
+  'src/edit/clipboard.js',
   'src/edit/doc.js',
   'src/edit/live-scene.js',
   'src/edit/ops.js',

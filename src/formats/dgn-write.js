@@ -12,7 +12,7 @@
 //    maps layers to levels 1-63 and writes every item (blocks flattened).
 import { SEED_2D } from './dgn-seed.js';
 import { DGN_DEFAULT } from '../palettes.js';
-import { createEmitter, sceneTables, KIND, FLAG, CHAR_W } from '../scene.js';
+import { createEmitter, sceneTables, KIND, FLAG, CHAR_W, DXF_LW, lwToWeight } from '../scene.js';
 import { FG } from '../model.js';
 import { ellipseParams } from './dxf-write.js';
 import { TAU } from '../geom.js';
@@ -253,6 +253,7 @@ class Writer {
     this.em = createEmitter(model, this.tables);
     this.levelOf = map.levelOf;
     this.colorCache = new Map();
+    this.lw = model.format !== 'DGN'; // scene weights are DXF lineweight classes: map them to DGN weights
   }
   colorIndex(rgb, ci) {
     if (rgb === FG || rgb == null) rgb = 0xffffff;
@@ -268,11 +269,16 @@ class Writer {
     this.colorCache.set(rgb, best);
     return best;
   }
+  /** DGN weight of an emitted item (texts carry none: their entity's). DXF lineweight classes map to the nearest weight. */
+  weightOf(w, e) {
+    if (w == null) return this.lw ? lwToWeight(e.lw ?? -1) : Math.min(31, e.weight | 0);
+    return this.lw ? lwToWeight(DXF_LW[w - 1] ?? -1) : Math.min(31, w | 0);
+  }
   styleOf(idx) { const n = this.tables.ltypes[idx] ? this.tables.ltypes[idx].name : ''; const m = /^DGN(\d)$/.exec(n); return m ? +m[1] : idx ? 2 : 0; }
   sym(p, e) {
     return {
       level: this.levelOf(this.tables.layers[p.layer] ? this.tables.layers[p.layer].name : '0'),
-      color: this.colorIndex(p.color, e.ci), style: this.styleOf(p.style), weight: Math.min(31, p.weight | 0),
+      color: this.colorIndex(p.color, e.ci), style: this.styleOf(p.style), weight: this.weightOf(p.weight, e),
       zr: e.zr, font: e.font, just: e.just,
     };
   }
@@ -321,17 +327,10 @@ class Writer {
     return out;
   }
 
-  /** Cell: the original header (patched) followed by its components; no header -> components only. */
+  /** Cell: its original header (patched) or a new one (pasted / duplicated cells, new files), then its components. */
   cell(e, opt) {
     const kids = [];
     for (const c of e.children || []) kids.push(...this.child(c));
-    const src = this.bytes && e.dgn ? this.bytes : null;
-    if (!src) { this.notes.cellsFlattened++; return (e.children || []).flatMap((c) => this.encode(c, { component: !!opt.component })); }
-    const o = e.dgn[0];
-    const hdr = src.slice(o, o + elemSize(src, o));
-    const r = rd(hdr), g = this.enc.g;
-    hdr[0] = (hdr[0] & 0x3f) | (opt.component ? 0x80 : 0);
-    hdr[1] &= 0x7f;
     let words = 0;
     const R = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
     for (const el of kids) {
@@ -340,6 +339,13 @@ class Writer {
       for (let k = 0; k < 3; k++) { R[k] = Math.min(R[k], q[k]); R[k + 3] = Math.max(R[k + 3], q[k + 3]); }
     }
     if (!kids.length) return [];
+    const src = this.bytes && e.dgn ? this.bytes : null;
+    if (!src) return [this.newCell(e, R, words, opt), ...kids];
+    const o = e.dgn[0];
+    const hdr = src.slice(o, o + elemSize(src, o));
+    const r = rd(hdr), g = this.enc.g;
+    hdr[0] = (hdr[0] & 0x3f) | (opt.component ? 0x80 : 0);
+    hdr[1] &= 0x7f;
     hdr[36] = 0; hdr[37] = 0;
     const tot = (hdr.length - 38) / 2 + words;
     hdr[36] = tot & 255; hdr[37] = (tot >> 8) & 255;
@@ -365,7 +371,34 @@ class Writer {
     }
     const lv = this.levelOf(e.layer);
     hdr[0] = (hdr[0] & 0xc0) | (lv & 63);
+    if (e.rgb != null) hdr[35] = this.colorIndex(e.rgb, e.ci); // restyled cells: header colour and weight follow
+    if (!this.lw) hdr[34] = (hdr[34] & 7) | ((Math.min(31, e.weight | 0)) << 3);
     return [hdr, ...kids];
+  }
+
+  /**
+   * A fresh type-2 cell header (ISFF layout as read by dgn.js): name (RAD50), class 0, all levels,
+   * range, transform (1.0 = 214748; 2D 2x2, 3D 3x3 rows) and origin. The transform is the cell's
+   * own (`trans` / `trans3` from its source file, else identity) after any edit move/rotate (`mv`).
+   */
+  newCell(e, R, words, opt) {
+    const g = this.enc.g, d3 = g.dim === 3, a = [];
+    const r50 = (s) => { let v = 0; for (const ch of s) v = v * 40 + Math.max(0, ' ABCDEFGHIJKLMNOPQRSTUVWXYZ$.?0123456789'.indexOf(ch)); return v; };
+    const nm = (String(e.name || '').toUpperCase() + '      ').slice(0, 6);
+    pushU16(a, 0); pushU16(a, r50(nm.slice(0, 3))); pushU16(a, r50(nm.slice(3))); pushU16(a, 0);
+    for (let k = 0; k < 4; k++) pushU16(a, 0xffff);
+    for (const v of d3 ? R : [R[0], R[1], R[3], R[4]]) pushI32(a, v);
+    const t = e.trans || [1, 0, 0, 1], M = e.mv;
+    let T = e.trans3 || [t[0], t[1], 0, t[2], t[3], 0, 0, 0, 1];
+    if (M) { const L = [M[0], M[2], 0, M[1], M[3], 0, 0, 0, 1]; T = T.map((_, k) => { const i = (k / 3) | 0, j = k % 3; return L[3 * i] * T[j] + L[3 * i + 1] * T[3 + j] + L[3 * i + 2] * T[6 + j]; }); }
+    for (const v of d3 ? T : [T[0], T[1], T[3], T[4]]) pushI32(a, v * 214748);
+    const p = e.origin || [(R[0] / g.uor) - g.ox, (R[1] / g.uor) - g.oy];
+    pushI32(a, this.enc.X(p[0])); pushI32(a, this.enc.Y(p[1]));
+    if (d3) pushI32(a, e.zr || 0);
+    const tot = (a.length - 2) / 2 + words;
+    a[0] = tot & 255; a[1] = (tot >> 8) & 255;
+    const sym = { level: this.levelOf(e.layer ?? '0'), color: this.colorIndex(e.rgb, e.ci), style: 0, weight: this.weightOf(null, e) };
+    return this.enc.element(2, sym, a, [R[0], R[1], R[3], R[4]], { component: !!opt.component, z: [R[2], R[5]] });
   }
 
   /**
@@ -398,12 +431,11 @@ function cellComponents(ents, set = new Set()) {
 }
 
 // ------------------------------------------------------------------ public API
-function newNotes() { return { truncated: 0, fills: 0, curves: 0, cellsFlattened: 0, merged: 0, levels: [] }; }
+function newNotes() { return { truncated: 0, fills: 0, curves: 0, merged: 0, levels: [] }; }
 function noteList(n) {
   const out = [];
   if (n.levels.length) out.push(`Layers became DGN levels (DGN v7 has no layer names): ${n.levels.join(', ')}.`);
   if (n.merged) out.push(`${n.merged} layer${n.merged === 1 ? '' : 's'} beyond 63 were merged into level 63.`);
-  if (n.cellsFlattened) out.push(`${n.cellsFlattened} cell${n.cellsFlattened === 1 ? '' : 's'} written as separate elements.`);
   if (n.curves) out.push(`${n.curves} curve${n.curves === 1 ? ' was' : 's were'} written as line strings.`);
   if (n.fills) out.push(`${n.fills} filled area${n.fills === 1 ? ' was' : 's were'} written as outlines.`);
   if (n.truncated) out.push(`${n.truncated} text${n.truncated === 1 ? ' was' : 's were'} longer than DGN v7 allows and ${n.truncated === 1 ? 'was' : 'were'} shortened.`);

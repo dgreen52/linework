@@ -5,9 +5,10 @@ import { EditDoc, selectInRect } from '../edit/doc.js';
 import { entityItems, entityBBox, liveExtents } from '../edit/live-scene.js';
 import {
   moveEntity, rotateEntity, gripsOf, moveGrip, insertVertex, deleteVertex, segmentsOf, nearestOnSegment,
-  setText, restyle, canReshape, isText, colorInfo, partAt, withPart,
+  setText, restyle, canReshape, isText, colorInfo, weightLabel, partAt, withPart,
 } from '../edit/ops.js';
-import { createEmitter, sceneTables, KIND, CHAR_W } from '../scene.js';
+import { makePayload, preparePaste, clipText, parseClip, CLIP_HEADER, CLIP_MAX } from '../edit/clipboard.js';
+import { createEmitter, sceneTables, KIND, CHAR_W, DXF_LW, weightPx } from '../scene.js';
 import { addConic, addPoly, CAP_HEIGHT } from '../view/renderer2d.js';
 import { findSnap, pickItem } from '../tools/snap.js';
 import { fmtNum } from '../tools/measure.js';
@@ -45,7 +46,9 @@ export function initEdit(app, api) {
     sel: new Set(), selPath: null, hover: -1, hoverPath: null,
     vedit: -1, gripHover: -1,
     drag: null, box: null, gdrag: null, draft: null, cursor: null,
-    curLayer: null, curColor: 'bylayer',
+    curLayer: null, curColor: 'bylayer', curWeight: -1,
+    clip: null, // this tab's last copy (a clipboard payload; survives opening another drawing)
+    place: null, // items following the cursor (paste / duplicate): { r, path, label, at }
     text: null, // in-place text editor state
     nudgeAt: 0,
   };
@@ -62,8 +65,9 @@ export function initEdit(app, api) {
   function reset() {
     E.doc = null; E.ready = false;
     E.sel = new Set(); E.selPath = null; E.hover = -1; E.vedit = -1;
-    E.drag = E.box = E.gdrag = E.draft = null;
+    E.drag = E.box = E.gdrag = E.draft = E.place = null;
     E.curColor = isDgn() ? { ci: 0, rgb: 0xffffff } : 'bylayer';
+    E.curWeight = isDgn() ? 0 : -1;
     closeText(false); closeMenus(); hideLen();
     updateRibbon(); updateDirty();
   }
@@ -117,9 +121,11 @@ export function initEdit(app, api) {
   /** Properties for a new item on the current layer / colour. */
   function newProps(src) {
     const p = { layer: E.curLayer || '0', ltype: 'BYLAYER', weight: 0, src };
-    if (isDgn()) { const c = E.curColor && E.curColor.ci != null ? E.curColor : { ci: 0, rgb: 0xffffff }; p.color = 256; p.rgb = c.rgb; p.ci = c.ci; p.ltype = 'CONTINUOUS'; }
-    else if (E.curColor === 'bylayer' || !E.curColor) p.color = 256;
-    else p.color = E.curColor.aci;
+    if (isDgn()) { const c = E.curColor && E.curColor.ci != null ? E.curColor : { ci: 0, rgb: 0xffffff }; p.color = 256; p.rgb = c.rgb; p.ci = c.ci; p.ltype = 'CONTINUOUS'; p.weight = E.curWeight | 0; }
+    else {
+      p.color = E.curColor === 'bylayer' || !E.curColor ? 256 : E.curColor.aci;
+      if (E.curWeight >= 0) p.lw = E.curWeight;
+    }
     return p;
   }
 
@@ -176,13 +182,13 @@ export function initEdit(app, api) {
     }
     return p;
   }
-  /** Path (scene coordinates) of an entity that is not in the scene yet (drafts, previews). */
-  function entityPath(e) {
-    const s = scene(), m = model();
+  /** Path (scene coordinates) of entities that are not in the scene yet (drafts, previews, pastes). */
+  function entityPath(list, m = model(), tables = null) {
+    const s = scene();
     const p = new Path2D();
-    if (!e || !m) return p;
-    const em = createEmitter(m, sceneTables(m, s));
-    em.emit(e, 0);
+    if (!m) return p;
+    const em = createEmitter(m, tables || sceneTables(m, s));
+    [].concat(list).forEach((e, k) => e && em.emit(e, k));
     const B = em.B, [ox, oy] = s.origin;
     for (let j = 0; j < B.kind.length; j++) {
       if (B.kind[j] === KIND.CONIC) {
@@ -243,6 +249,14 @@ export function initEdit(app, api) {
       } else { stroke(p, halo, 5.5, 0.9); stroke(p, acc, 2.2, 1, big ? null : [7, 4]); } // dashed: reads on any line colour
     }
     if (E.gdrag && E.gdrag.preview) { stroke(E.gdrag.preview, halo, 5, 0.9); stroke(E.gdrag.preview, acc, 2.2); }
+    const P = E.place;
+    if (P && P.at) { // the items being pasted / duplicated, at the cursor
+      ctx.save();
+      ctx.translate(P.at[0] - P.r.base[0], P.at[1] - P.r.base[1]);
+      if (P.r.ents.length <= 150) stroke(P.path, halo, 5, 0.9);
+      stroke(P.path, acc, 2, 1, [7, 4]);
+      ctx.restore();
+    }
     if (E.draft) {
       const p = draftPath();
       if (p) { stroke(p, halo, 4.5, 0.8); stroke(p, acc, 2, 1, [7, 5]); }
@@ -271,7 +285,7 @@ export function initEdit(app, api) {
       ctx.strokeRect(x + 0.5, y + 0.5, w, h);
       ctx.setLineDash([]);
     }
-    if (E.cursor && E.cursor.snap && (app.tool !== 'eselect' || E.drag || E.gdrag)) api.drawSnapGlyph(ctx, E.cursor.sx, E.cursor.sy, E.cursor.snap.kind);
+    if (E.cursor && E.cursor.snap && (app.tool !== 'eselect' || E.drag || E.gdrag || E.place)) api.drawSnapGlyph(ctx, E.cursor.sx, E.cursor.sy, E.cursor.snap.kind);
     ctx.restore();
   }
 
@@ -297,6 +311,7 @@ export function initEdit(app, api) {
     return E.draftCache.p;
   }
   function finishDraft() {
+    if (E.place) { placeAt(E.place.at); return true; }
     const d = E.draft;
     if (!d) return false;
     if (d.tool === 'epoly' && d.pts.length >= 4) {
@@ -315,7 +330,11 @@ export function initEdit(app, api) {
     api.updateFinishBar(); api.invalidate();
     return true;
   }
-  function cancelDraft() { if (!E.draft) return false; E.draft = null; hideLen(); api.updateFinishBar(); api.invalidate(); return true; }
+  function cancelDraft() {
+    if (E.place) { E.place = null; hint(''); status(); api.updateFinishBar(); api.invalidate(); return true; }
+    if (!E.draft) return false;
+    E.draft = null; hideLen(); api.updateFinishBar(); api.invalidate(); return true;
+  }
 
   // ---------------------------------------------------------------- pointer handling
   function down(sx, sy, ev) {
@@ -324,6 +343,7 @@ export function initEdit(app, api) {
     closeMenus();
     if (E.text) { closeText(true); return; }
     if (!E.ready) { whenReady(); return; }
+    if (E.place) { E.place.down = true; return; }
     startLongPress(sx, sy, ev);
     const t = app.tool;
     if (t === 'eselect') return selectDown(sx, sy, ev);
@@ -398,6 +418,8 @@ export function initEdit(app, api) {
     if (!scene() || !E.ready) return;
     E.lastPointer = ev.pointerType;
     if (E.lp && Math.hypot(sx - E.lp.sx, sy - E.lp.sy) > 8) cancelLongPress();
+    E.mouse = ev.pointerType === 'mouse' ? [sx, sy] : null;
+    if (E.place) { const c = (E.cursor = pointAt(sx, sy, ev)); E.place.at = [c.x, c.y]; api.invalidate(); return; }
     const t = app.tool;
     if (t !== 'eselect') {
       E.cursor = pointAt(sx, sy, ev, { from: E.draft && E.draft.pts.length ? E.draft.pts.slice(-2) : null });
@@ -423,6 +445,7 @@ export function initEdit(app, api) {
       cancelLongPress();
       if (!d.moving && d.shift && !E.sel.has(d.hit)) { E.sel.add(d.hit); E.selPath = null; }
       d.moving = true;
+      if (!!d.copy !== copyKey(ev)) { d.copy = copyKey(ev); hint(d.copy ? 'Copy: release to drop a copy (the originals stay)' : ''); api.setCursor(d.copy ? 'copy' : 'move'); }
       const c = pointAt(sx, sy, ev, { from: d.base, skip: E.sel });
       E.cursor = c;
       d.dx = c.x - d.base[0]; d.dy = c.y - d.base[1];
@@ -443,6 +466,10 @@ export function initEdit(app, api) {
   function up(sx, sy, ev) {
     cancelLongPress();
     if (E.lpFired) { E.lpFired = false; E.drag = E.box = E.gdrag = null; return; }
+    if (E.place) {
+      if (E.place.down) { const c = pointAt(sx, sy, ev); placeAt([c.x, c.y]); }
+      return;
+    }
     const t = app.tool;
     if (t === 'etext') {
       const pt = E.pendingText;
@@ -468,7 +495,8 @@ export function initEdit(app, api) {
     if (E.drag) {
       const d = E.drag;
       E.drag = null;
-      if (d.moving && (d.dx || d.dy)) {
+      if (d.moving && d.copy) { hint(''); pasteNow(dupPrep(), [d.dx, d.dy], 'Copy'); }
+      else if (d.moving && (d.dx || d.dy)) {
         const ids = [...E.sel];
         commit(ids.length > 1 ? `Move ${ids.length} items` : 'Move', ids.map((i) => ({ i, before: entity(i), after: moveEntity(entity(i), d.dx, d.dy) })), ids);
       } else if (d.shift) { if (d.wasSel) E.sel.delete(d.hit); else E.sel.add(d.hit); E.selPath = null; status(); updateRibbon(); }
@@ -495,7 +523,7 @@ export function initEdit(app, api) {
   }
 
   function dbl(sx, sy) {
-    if (!E.ready) return;
+    if (!E.ready || E.place) return;
     const t = app.tool;
     if (t === 'epoly' || t === 'eline') { if (t === 'epoly') finishDraft(); else cancelDraft(); return; }
     if (t !== 'eselect') return;
@@ -582,17 +610,22 @@ export function initEdit(app, api) {
   /** Right-click (mouse) or long-press (touch) at a point. */
   function context(sx, sy) {
     if (!E.ready || app.tool !== 'eselect') return false;
+    if (E.place) return cancelDraft(); // right-click while placing: cancel
     if (E.vedit >= 0) {
       if (deletePointAt(sx, sy)) return true;
       if (addPointAt(sx, sy)) return true;
     }
     const hit = pickEnt(sx, sy);
-    if (hit < 0) return false;
+    const pastes = E.clip ? [{ label: 'Paste here', act: () => { const c = pointAt(sx, sy); pasteNow(prep(E.clip), null, 'Paste', [c.x, c.y]); } }, { label: 'Paste in place', act: () => paste(null, true) }] : [];
+    if (hit < 0) { if (pastes.length) openMenu(sx, sy, pastes); return !!pastes.length; }
     if (!E.sel.has(hit)) { E.sel = new Set([hit]); E.selPath = null; updateRibbon(); status(); }
     openMenu(sx, sy, [
       { label: 'Edit…', act: () => editEntity(hit, sx, sy) },
+      { label: 'Copy', act: copyButton },
+      { label: 'Duplicate', act: duplicateSel },
       { label: 'Rotate 90°', act: () => rotateSel(Math.PI / 2) },
-      { label: 'Delete', act: () => deleteSel() },
+      { label: 'Delete', act: deleteSel },
+      ...pastes,
     ]);
     api.invalidate();
     return true;
@@ -625,12 +658,14 @@ export function initEdit(app, api) {
     endVedit();
     return true;
   }
-  function selCentre() {
+  /** World extents of entity slots `ids`. */
+  function extOf(ids) {
     const b = [Infinity, Infinity, -Infinity, -Infinity];
-    for (const i of E.sel) { const q = entityBBox(scene(), i); if (!q) continue; b[0] = Math.min(b[0], q[0]); b[1] = Math.min(b[1], q[1]); b[2] = Math.max(b[2], q[2]); b[3] = Math.max(b[3], q[3]); }
+    for (const i of ids) { const q = entityBBox(scene(), i); if (!q) continue; b[0] = Math.min(b[0], q[0]); b[1] = Math.min(b[1], q[1]); b[2] = Math.max(b[2], q[2]); b[3] = Math.max(b[3], q[3]); }
     const [ox, oy] = scene().origin;
-    return [(b[0] + b[2]) / 2 + ox, (b[1] + b[3]) / 2 + oy];
+    return b[0] <= b[2] ? [b[0] + ox, b[1] + oy, b[2] + ox, b[3] + oy] : [0, 0, 0, 0];
   }
+  function selCentre() { const b = extOf(E.sel); return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]; }
   function rotateSel(a) {
     if (!E.sel.size) return;
     const [cx, cy] = selCentre();
@@ -651,6 +686,64 @@ export function initEdit(app, api) {
     m.entities.forEach((e, i) => { if (e) E.sel.add(i); });
     E.selPath = null; status(); updateRibbon(); api.invalidate();
   }
+  // ---------------------------------------------------------------- copy, paste, duplicate
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  /** Ctrl (Alt on macOS) while dragging: drop a copy, keep the originals. */
+  const copyKey = (ev) => !!(isMac ? ev.altKey : ev.ctrlKey);
+  const plural = (n) => `${n} item${n === 1 ? '' : 's'}`;
+  /**
+   * Copy the selection: kept in this tab (survives opening another drawing) and returned as
+   * clipboard text (a stub when too large for the system clipboard; null: nothing to copy).
+   */
+  function copySel() {
+    if (!E.ready || !inEdit() || !E.sel.size || E.text || E.draft) return null;
+    const ids = [...E.sel];
+    E.clip = makePayload(model(), ids, { ext: extOf(ids) });
+    const t = clipText(E.clip), big = t.length > CLIP_MAX;
+    toast(`Copied ${plural(ids.length)}`, { timeout: 2000, detail: big ? 'Too large for the system clipboard: paste it in this tab.' : 'Ctrl+V pastes it here or in another drawing.' });
+    updateRibbon();
+    return big ? CLIP_HEADER + '\n{"v":1,"ents":[],"big":1}' : t;
+  }
+  function copyButton() { const t = copySel(); if (t && navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {}); }
+  const prep = (P) => preparePaste(P, model(), { layer: E.curLayer });
+  const dupPrep = () => { const ids = [...E.sel]; return preparePaste(makePayload(model(), ids, { ext: extOf(ids) }), model(), { layer: E.curLayer }); };
+  /** Paste P (null: this tab's last copy) so that it follows the cursor, or in place (same coordinates). */
+  async function paste(P, inPlace) {
+    if (P && P.big && E.clip) P = null; // our own oversized copy: the full one is here
+    P = P || E.clip;
+    if (!app.scene || E.text || E.draft || E.place) return;
+    if (!P || !P.ents.length) { toast(P ? 'That copy was too large for the clipboard: copy fewer items.' : 'Nothing to paste yet: select items and copy them (Ctrl+C) first.', { timeout: 3500 }); return; }
+    if (!(await whenReady())) return;
+    if (app.tool !== 'eselect') api.setTool('eselect');
+    E.clip = P;
+    const r = prep(P);
+    if (inPlace) pasteNow(r, null, 'Paste'); else startPlace(r, 'Paste');
+  }
+  function duplicateSel() { if (E.ready && E.sel.size && !E.place) startPlace(dupPrep(), 'Duplicate'); }
+  /** The items follow the cursor (snaps on); a click or tap places them, Esc cancels. */
+  function startPlace(r, label) {
+    if (!r.ents.length) return;
+    cancelDraft(); endVedit(); closeMenus();
+    const m = model(), s = scene(), tm = { ...m };
+    for (const c of r.changes) if (c.table) tm[c.table] = { ...tm[c.table], [c.key]: c.after };
+    // private copies of the scene tables: the preview must not add layers to the real ones
+    const tables = sceneTables(tm, { ...s, layers: s.layers.slice(), ltypes: s.ltypes.slice(), srcNames: s.srcNames.slice(), blockNames: s.blockNames.slice() });
+    const c = E.mouse ? pointAt(...E.mouse) : null;
+    E.place = { r, label, path: entityPath(r.ents, tm, tables), at: c ? [c.x, c.y] : S2W(app.view.w / 2, app.view.h / 2) };
+    hint(`${coarse() ? 'Tap' : 'Click'} to place ${plural(r.ents.length)} (lower-left corner at the ${coarse() ? 'finger' : 'cursor'}) · Esc cancels`);
+    api.setInfo(`${label}: ${plural(r.ents.length)}`);
+    api.updateFinishBar(); api.invalidate();
+  }
+  function placeAt(p) { const P = E.place; E.place = null; hint(''); api.updateFinishBar(); pasteNow(P.r, [p[0] - P.r.base[0], p[1] - P.r.base[1]], P.label); }
+  /** Commit a paste as one undo step. d: offset from the copied position, or to: where the base point goes. */
+  function pasteNow(r, d, label, to) {
+    if (to) d = [to[0] - r.base[0], to[1] - r.base[1]];
+    const i0 = newIdx(), ids = r.ents.map((_, k) => i0 + k);
+    const ents = d && (d[0] || d[1]) ? r.ents.map((e) => moveEntity(e, d[0], d[1])) : r.ents;
+    commit(`${label} ${plural(ents.length)}`, [...r.changes, ...ents.map((e, k) => ({ i: i0 + k, before: null, after: e }))], ids);
+    if (r.notes.length) toast(`${label}: ${plural(ents.length)}`, { list: r.notes, timeout: 6000 });
+  }
+
   function applyProps(props) {
     if (!E.sel.size) return;
     const ids = [...E.sel];
@@ -671,6 +764,7 @@ export function initEdit(app, api) {
       if (E.sel.size) { E.sel = new Set(); E.selPath = null; status(); updateRibbon(); api.invalidate(); return true; }
       return false;
     }
+    if (e.key === 'Enter' && E.place) { finishDraft(); e.preventDefault(); return true; }
     if (e.key === 'Enter') { if (d) { if (d.tool === 'epoly') finishDraft(); else cancelDraft(); e.preventDefault(); return true; } return false; }
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); if (undoDraftPoint()) return true; deleteSel(); return true; }
     if (k === 'c' && d && d.tool === 'epoly' && d.pts.length >= 6) { d.close = true; finishDraft(); return true; }
@@ -850,7 +944,7 @@ export function initEdit(app, api) {
   function closeMenus() {
     let was = false;
     for (const id of ['#ctx-menu', '#color-pop']) { const m = $(id); if (m && !m.hidden) { m.hidden = true; was = true; } }
-    $('#btn-ecolor').setAttribute('aria-expanded', 'false');
+    for (const id of ['#btn-ecolor', '#btn-eweight']) $(id).setAttribute('aria-expanded', 'false');
     return was;
   }
   let hintTimer = 0;
@@ -873,24 +967,24 @@ export function initEdit(app, api) {
     if (e.type === 'polyline' && e.closed) t = 'Closed polyline';
     if (isText(e)) t += ` “${String(e.text).replace(/\n/g, ' ').slice(0, 40)}”`;
     const c = colorInfo(e, fmt());
-    return `${t} · Layer ${e.layer ?? '0'} · ${c.label}`;
+    return `${t} · Layer ${e.layer ?? '0'} · ${c.label} · ${weightLabel(e, fmt())}`;
   }
   function status() {
     if (!inEdit()) return;
     let txt = '';
     if (E.sel.size === 1) txt = '1 selected · ' + describe(entity([...E.sel][0]));
     else if (E.sel.size > 1) {
-      const kinds = new Map(), layers = new Set();
-      for (const i of E.sel) { const e = entity(i); if (!e) continue; const n = TYPE_NAME[e.type] || e.type; kinds.set(n, (kinds.get(n) || 0) + 1); layers.add(e.layer ?? '0'); }
-      txt = `${E.sel.size} selected · ${[...kinds].map(([k, v]) => `${v} ${k.toLowerCase()}${v > 1 ? 's' : ''}`).slice(0, 3).join(', ')} · ${layers.size === 1 ? 'Layer ' + [...layers][0] : layers.size + ' layers'}`;
+      const kinds = new Map(), layers = new Set(), ws = new Set();
+      for (const i of E.sel) { const e = entity(i); if (!e) continue; const n = TYPE_NAME[e.type] || e.type; kinds.set(n, (kinds.get(n) || 0) + 1); layers.add(e.layer ?? '0'); ws.add(weightLabel(e, fmt())); }
+      txt = `${E.sel.size} selected · ${[...kinds].map(([k, v]) => `${v} ${k.toLowerCase()}${v > 1 ? 's' : ''}`).slice(0, 3).join(', ')} · ${layers.size === 1 ? 'Layer ' + [...layers][0] : layers.size + ' layers'}${ws.size === 1 ? ' · ' + [...ws][0] : ''}`;
     }
     if (E.hover >= 0 && !E.sel.has(E.hover)) txt = (txt ? txt + '   |   ' : '') + describe(entity(E.hover));
     api.setInfo(txt);
   }
   function updateRibbon() {
     const has = E.ready && E.sel.size > 0;
-    $('#btn-edelete').disabled = !has;
-    $('#btn-erotate').disabled = !has;
+    for (const id of ['#btn-edelete', '#btn-erotate', '#btn-ecopy', '#btn-edup']) $(id).disabled = !has;
+    $('#btn-epaste').disabled = !E.clip || !app.scene;
     for (const id of ['#btn-esave', '#btn-esaveas']) $(id).disabled = !app.scene;
     // show the selection's layer / colour when they are uniform
     if (has) {
@@ -899,6 +993,7 @@ export function initEdit(app, api) {
       if (es.every((e) => (e.layer ?? '0') === L)) $('#sel-elayer').value = L;
     } else if (E.curLayer) $('#sel-elayer').value = E.curLayer;
     paintColorButton();
+    paintWeightButton();
   }
   function fillLayers() {
     const sel = $('#sel-elayer');
@@ -929,28 +1024,46 @@ export function initEdit(app, api) {
     }
     return ['bylayer', ...DXF_COLORS.map((aci) => ({ aci }))];
   }
-  function openColorPop() {
+  /** The colour or the weight list, under its ribbon button. items: [{ html, on, act }] */
+  function openPop(btn, items, cols) {
     const pop = $('#color-pop');
-    if (!pop.hidden) { closeMenus(); return; }
-    const btn = $('#btn-ecolor');
+    if (!pop.hidden) { const was = pop.dataset.for; closeMenus(); if (was === btn.id) return; }
+    pop.dataset.for = btn.id;
     pop.innerHTML = '';
-    for (const c of colorChoices()) {
-      const sw = colorSwatch(c);
+    for (const it of items) {
       const b = document.createElement('button');
       b.type = 'button'; b.setAttribute('role', 'menuitemradio');
-      b.setAttribute('aria-checked', String(JSON.stringify(c) === JSON.stringify(E.curColor)));
-      b.innerHTML = `<i class="sw ${sw.cls}" style="--c:${sw.css || 'transparent'}"></i> ${esc(sw.label)}`;
-      b.style.display = 'flex'; b.style.gap = '6px'; b.style.alignItems = 'center';
-      b.addEventListener('click', () => { closeMenus(); setColor(c); });
+      b.setAttribute('aria-checked', String(it.on));
+      b.innerHTML = it.html;
+      b.addEventListener('click', () => { closeMenus(); it.act(); });
       pop.appendChild(b);
     }
-    pop.style.display = 'grid';
+    pop.style.gridTemplateColumns = `repeat(${cols}, auto)`;
     pop.hidden = false;
     const r = btn.getBoundingClientRect(), st = $('#stage').getBoundingClientRect();
     pop.style.left = `${Math.max(4, Math.min(st.width - pop.offsetWidth - 4, r.left - st.left))}px`;
     pop.style.top = '6px';
     btn.setAttribute('aria-expanded', 'true');
-    pop.querySelector('button').focus();
+    (pop.querySelector('[aria-checked="true"]') || pop.querySelector('button')).focus();
+  }
+  function openColorPop() {
+    openPop($('#btn-ecolor'), colorChoices().map((c) => {
+      const sw = colorSwatch(c);
+      return { html: `<i class="sw ${sw.cls}" style="--c:${sw.css || 'transparent'}"></i> ${esc(sw.label)}`, on: JSON.stringify(c) === JSON.stringify(E.curColor), act: () => setColor(c) };
+    }), 4);
+  }
+  // line weights: DGN 0-31, DXF ByLayer + the standard lineweights (mm)
+  const weightName = (w) => (isDgn() ? String(w) : w < 0 ? 'ByLayer' : (w / 100).toFixed(2) + ' mm');
+  const weightLine = (w) => `<i class="lw" style="--w:${isDgn() ? weightPx(w, 'DGN') : weightPx(DXF_LW.indexOf(w) + 1, 'DXF')}px"></i>`;
+  function openWeightPop() {
+    const list = isDgn() ? Array.from({ length: 32 }, (_, w) => w) : [-1, ...DXF_LW];
+    openPop($('#btn-eweight'), list.map((w) => ({ html: `${weightLine(w)} ${weightName(w)}`, on: w === E.curWeight, act: () => setWeight(w) })), isDgn() ? 4 : 3);
+  }
+  function paintWeightButton() { $('#eweight-sw').outerHTML = weightLine(E.curWeight).replace('<i ', '<i id="eweight-sw" '); $('#eweight-label').textContent = weightName(E.curWeight); }
+  function setWeight(w) {
+    E.curWeight = w;
+    paintWeightButton();
+    if (E.sel.size) applyProps({ weight: w });
   }
   function setColor(c) {
     E.curColor = c;
@@ -1023,6 +1136,8 @@ export function initEdit(app, api) {
   function saveNotes(f) {
     const m = model(), src = m ? m.format : srcFormat(), notes = [];
     if (src === 'DGN' && f === 'DGN') notes.push('Untouched items stay exactly as they were; edited items are added at the end of the file.');
+    const np = m ? m.entities.filter((e) => e && e.pasted).length : 0;
+    if (np) notes.push(`${plural(np)} pasted or duplicated${f === 'DGN' ? '; pasted cells get new cell headers' : ''}.`);
     if (src === 'DGN' && f === 'DXF') notes.push('Cells are saved as separate items; DGN levels become layers.');
     if (src !== 'DGN' && f === 'DGN') notes.push('Layers become DGN levels 1–63 (DGN v7 has no layer names); blocks are flattened; fills become outlines.');
     if (f === 'DGN') notes.push('Saved DGN files are checked with GDAL’s reader but have not been tested in MicroStation yet.');
@@ -1094,11 +1209,12 @@ export function initEdit(app, api) {
   function toolChanged(t) {
     if (!EDIT_TOOLS.has(t)) {
       closeText(true); cancelDraft(); closeMenus(); hideLen();
+      cancelDraft(); // (a placement first, then a draft)
       if (E.sel.size || E.vedit >= 0) { E.sel = new Set(); E.selPath = null; endVedit(); }
       E.hover = -1;
       return;
     }
-    if (t !== 'eselect') { endVedit(); E.hover = -1; }
+    if (t !== 'eselect') { endVedit(); E.hover = -1; if (E.place) cancelDraft(); }
     if (E.draft && E.draft.tool !== t) cancelDraft();
     if (app.scene && !E.ready) whenReady();
     status(); updateRibbon();
@@ -1112,13 +1228,31 @@ export function initEdit(app, api) {
     e.target.blur();
   });
   $('#btn-ecolor').addEventListener('click', (e) => { e.stopPropagation(); if (app.scene) openColorPop(); });
-  document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#color-pop, #btn-ecolor, #ctx-menu')) closeMenus(); });
+  $('#btn-eweight').addEventListener('click', (e) => { e.stopPropagation(); if (app.scene) openWeightPop(); });
+  document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#color-pop, #btn-ecolor, #btn-eweight, #ctx-menu')) closeMenus(); });
   window.addEventListener('beforeunload', (e) => { if (E.doc && E.doc.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  // clipboard events (app.js): Ctrl+C -> copy event; Ctrl+V / Ctrl+Shift+V -> keydown, then the paste event
+  let pk = null;
+  /** Ctrl+V pressed (Shift: in place). The paste event normally follows; if it does not, this tab's copy is used. */
+  function pasteKey(inPlace) {
+    pk = { inPlace };
+    const me = pk;
+    setTimeout(() => { if (pk === me) { pk = null; paste(null, inPlace); } }, 150);
+  }
+  /** Text from a paste event: pasted when it is a Linework copy, ignored otherwise. */
+  function pasteText(t) {
+    const inPlace = !!(pk && pk.inPlace);
+    pk = null;
+    const P = parseClip(t);
+    if (P) paste(P, inPlace);
+  }
 
   return {
     reset, setModel, revert, reapply, drawOverlay, down, move, up, dbl, context, key, toolChanged, cancelGesture,
     finishDraft, undoDraftPoint, cancelDraft, deleteSel, rotateSel, selectAll, quickSave, openSaveAs, save, editEntity,
-    get draftActive() { return !!(E.draft && (E.draft.tool === 'epoly' || E.draft.tool === 'eline') && E.draft.pts.length); },
+    copy: copySel, copyButton, paste, pasteKey, pasteText, duplicate: duplicateSel,
+    get draftActive() { return !!(E.place || (E.draft && (E.draft.tool === 'epoly' || E.draft.tool === 'eline') && E.draft.pts.length)); },
     get dirty() { return !!(E.doc && E.doc.dirty); },
     get ready() { return E.ready; },
     status,

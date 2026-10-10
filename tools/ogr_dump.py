@@ -24,7 +24,7 @@ def dump(path):
             env = g.GetEnvelope() if g else None
             item = {"geom": g.GetGeometryName() if g else None,
                     "env": [env[0], env[2], env[1], env[3]] if env else None}
-            for k in ("Type", "Level", "ColorIndex", "Layer", "Text", "SubClasses", "EntityHandle"):
+            for k in ("Type", "Level", "ColorIndex", "Weight", "Layer", "Text", "SubClasses", "EntityHandle"):
                 if k in names:
                     v = f.GetField(k)
                     if v is not None:
@@ -32,6 +32,8 @@ def dump(path):
             style = f.GetStyleString() or ""
             if "c:#" in style:
                 item["rgb"] = style.split("c:#")[1][:6].lower()
+            if "w:" in style:
+                item["w"] = style.split("w:")[1].split(",")[0].split(")")[0]
             if g and g.GetGeometryName() in ("LINESTRING", "POINT"):
                 item["points"] = [[g.GetX(i), g.GetY(i)] for i in range(g.GetPointCount())]
             feats.append(item)

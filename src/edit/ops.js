@@ -258,14 +258,16 @@ export function setText(e, s) {
 }
 
 /**
- * Change layer and/or colour. colour: { aci: 1..255 } | 'bylayer' (DXF), or for DGN a colour-table
- * entry { ci, rgb } (an ACI colour is also accepted; the DGN writer then uses the nearest entry).
- * Cells and inserts apply to their components.
+ * Change layer, colour and/or line weight. colour: { aci: 1..255 } | 'bylayer' (DXF), or for DGN a
+ * colour-table entry { ci, rgb } (an ACI colour is also accepted; the DGN writer then uses the
+ * nearest entry). weight: DGN 0..31; DXF lineweight in 1/100 mm, -1 = ByLayer. Cells apply all of
+ * it to their components, inserts the layer and weight to their attributes.
  */
-export function restyle(e, { layer, color } = {}, format = 'DXF') {
+export function restyle(e, { layer, color, weight } = {}, format = 'DXF') {
   if (!e) return e;
   const o = { ...e };
   if (layer != null) o.layer = layer;
+  if (weight != null) { if (format === 'DGN') o.weight = weight; else if (weight === -1) delete o.lw; else o.lw = weight; }
   if (color != null) {
     if (format === 'DGN') { // colour-table entry of the file { ci, rgb } (or an ACI colour, mapped later)
       if (color.ci != null) { o.rgb = color.rgb; o.ci = color.ci; }
@@ -274,9 +276,16 @@ export function restyle(e, { layer, color } = {}, format = 'DXF') {
     } else if (color === 'bylayer') { o.color = 256; o.rgb = null; }
     else { o.color = color.aci; o.rgb = null; }
   }
-  if (e.type === 'cell') o.children = e.children.map((c) => restyle(c, { layer, color }, format));
-  if (e.type === 'insert' && e.attribs && layer != null) o.attribs = e.attribs.map((a) => ({ ...a, layer }));
+  if (e.type === 'cell') o.children = e.children.map((c) => restyle(c, { layer, color, weight }, format));
+  if (e.type === 'insert' && e.attribs && (layer != null || weight != null)) o.attribs = e.attribs.map((a) => restyle(a, { layer, weight }, format));
   return o;
+}
+
+/** Line weight for the status bar: DGN "Weight 3", DXF "Weight 0.35 mm" / "ByLayer" / "ByBlock" / "Default". */
+export function weightLabel(e, format) {
+  if (format === 'DGN') return 'Weight ' + ((e && e.weight) | 0);
+  const lw = e && e.lw != null ? e.lw : -1;
+  return 'Weight ' + (lw >= 0 ? (lw / 100).toFixed(2) + ' mm' : ['ByLayer', 'ByBlock', 'Default'][-1 - lw] || 'Default');
 }
 
 /** Colour description for the status bar: { label, css } (css null = foreground). */

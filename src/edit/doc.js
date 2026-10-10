@@ -1,6 +1,7 @@
 // Edit document: the model being edited, the change list behind undo/redo, dirty tracking, and
-// selection maths. A change is { i, before, after } (entity slot i; null = absent) or
-// { layer: name, before, after } (layer record; null = absent). Undo applies `before`, redo
+// selection maths. A change is { i, before, after } (entity slot i; null = absent),
+// { layer: name, before, after } (layer record; null = absent) or { table: 'blocks' | 'ltypes' |
+// 'styles', key, before, after } (a definition added by a paste). Undo applies `before`, redo
 // `after`, so the model is always a pure function of the history and undoing back to the start
 // restores the original objects (the DGN writer then keeps those elements byte for byte).
 import { replaceEntities, entityItems, entityBBox, makeLive } from './live-scene.js';
@@ -46,6 +47,7 @@ export class EditDoc {
     for (const c of list) {
       const v = c[side];
       if (c.layer != null) { this.setLayer(c.layer, v); layersChanged = true; continue; }
+      if (c.table) { const t = this.model[c.table] || (this.model[c.table] = {}); if (v) t[c.key] = v; else delete t[c.key]; continue; }
       this.model.entities[c.i] = v;
       touched.add(c.i);
     }
@@ -65,14 +67,14 @@ export class EditDoc {
       if (at >= 0) m.layers.splice(at, 1);
       m.layerIndex.delete(key);
     } else {
-      const L = { name: rec.name, color: rec.color, aci: rec.aci, visible: true, frozen: false, ltype: rec.ltype || 'CONTINUOUS' };
+      const L = { name: rec.name, color: rec.color, aci: rec.aci, visible: true, frozen: false, ltype: rec.ltype || 'CONTINUOUS', lw: rec.lw };
       if (at >= 0) m.layers[at] = L; else m.layers.push(L);
       m.layerIndex.set(key, L);
     }
     const sl = this.scene.layers;
     let si = sl.findIndex((l) => l.name.toUpperCase() === key);
     if (si < 0 && rec) { si = sl.length; sl.push({ name: rec.name, color: rec.color, visible: true, frozen: false, ltype: 'CONTINUOUS', count: 0 }); }
-    if (si >= 0) { sl[si].removed = !rec; if (rec) sl[si].color = rec.color; }
+    if (si >= 0) { sl[si].removed = !rec; if (rec) Object.assign(sl[si], { color: rec.color, ltype: rec.ltype || 'CONTINUOUS', lw: rec.lw }); }
   }
 
   /** Layer names that can receive new items (in display order). */

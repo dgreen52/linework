@@ -29,8 +29,8 @@ export class DxfWriter {
   nextHandle() { return (this.handle++).toString(16).toUpperCase(); }
 
   // ---------------------------------------------------------------- tables
-  layer(name, color = 7, ltype = 'CONTINUOUS', { off = false, frozen = false, rgb = null } = {}) {
-    this.layers.push({ name, color: off ? -Math.abs(color) : color, ltype, frozen, rgb });
+  layer(name, color = 7, ltype = 'CONTINUOUS', { off = false, frozen = false, rgb = null, lw = null } = {}) {
+    this.layers.push({ name, color: off ? -Math.abs(color) : color, ltype, frozen, rgb, lw });
     return this;
   }
   ltype(name, desc, pattern) { this.ltypes.push({ name, desc, pattern }); return this; }
@@ -55,6 +55,7 @@ export class DxfWriter {
     if (p.ltype) g.push([6, p.ltype]);
     if (p.color != null) g.push([62, p.color]);
     if (p.rgb != null) g.push([420, p.rgb]);
+    if (p.lw != null) g.push([370, p.lw]); // lineweight, 1/100 mm
     if (p.invisible) g.push([60, 1]);
     if (p.paper) g.push([67, 1]);
     return g;
@@ -274,6 +275,7 @@ export class DxfWriter {
         P(0, 'LAYER'); if (!r12) { P(100, 'AcDbSymbolTableRecord'); P(100, 'AcDbLayerTableRecord'); }
         P(2, l.name); P(70, l.frozen ? 1 : 0); P(62, l.color); P(6, l.ltype);
         if (l.rgb != null && !r12) P(420, l.rgb);
+        if (l.lw != null && !r12) P(370, l.lw);
       }
       P(0, 'ENDTAB');
       P(0, 'TABLE'); P(2, 'STYLE'); P(70, this.styles.length + 1);

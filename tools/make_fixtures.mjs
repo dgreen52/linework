@@ -167,4 +167,21 @@ out(FIX, 'edge-garbage.dxf', 'this is not a drawing\njust some text\n\u0000\u000
   w.line([297, 0], [297, 210], { layer: 'SHEET', paper: true });
   out(FIX, 'edge-paperspace.dxf', w.toString());
 }
+// 14) line weights (group 370): explicit, ByLayer (layer weights), ByBlock inside a block, default
+{
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.layer('THIN', 7, 'CONTINUOUS', { lw: 13 }).layer('HEAVY', 1, 'CONTINUOUS', { lw: 100 }).layer('PLAIN', 3);
+  w.block('TAG', [0, 0], (b) => {
+    b.line([0, 0], [10, 0], { layer: '0', lw: -2 }); // ByBlock: takes the insert's weight
+    b.line([0, 2], [10, 2], { layer: 'THIN' }); // ByLayer inside the block
+  });
+  w.line([0, 0], [100, 0], { layer: 'PLAIN', lw: 200 }); // 2.00 mm
+  w.line([0, 10], [100, 10], { layer: 'PLAIN', lw: 35 });
+  w.line([0, 20], [100, 20], { layer: 'HEAVY' }); // ByLayer -> 1.00 mm
+  w.line([0, 30], [100, 30], { layer: 'THIN', lw: -1 }); // explicit ByLayer -> 0.13 mm
+  w.line([0, 40], [100, 40], { layer: 'PLAIN', lw: -3 }); // default
+  w.circle([50, 70], 15, { layer: 'PLAIN', lw: 50 });
+  w.insert('TAG', [0, 90], {}, { layer: 'PLAIN', lw: 70 });
+  out(FIX, 'edge-lineweights.dxf', w.toString());
+}
 console.log('done');

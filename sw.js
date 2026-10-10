@@ -66,10 +66,10 @@ const SHELL = [
 // first use they are cached and DWGs open offline from then on:
 // * ON_DEMAND app modules are cached in the versioned app cache (and fetched again by the next
 //   app version's install if the DWG reader has been used);
-// * the DWG reader (LibreDWG WebAssembly, ~9.5 MB, ~2.2 MB compressed) has its own cache that
+// * the DWG reader (LibreDWG WebAssembly, ~9.4 MB, ~2.1 MB compressed) has its own cache that
 //   survives app updates. Change READER_CACHE whenever vendor/libredwg changes.
 const ON_DEMAND = ['src/formats/dwg.js'];
-const READER_CACHE = 'linework-reader-libredwg-0.7.16-1';
+const READER_CACHE = 'linework-reader-libredwg-0.7.16-2';
 const READER = ['vendor/libredwg/libredwg-web.js', 'vendor/libredwg/libredwg-web.wasm'];
 
 self.addEventListener('install', (event) => {

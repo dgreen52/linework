@@ -12,7 +12,7 @@ import { parseDxf } from '../../src/formats/dxf.js';
 import { writeDxf } from '../../src/formats/dxf-write.js';
 import { buildScene, KIND } from '../../src/scene.js';
 import { DWG_FIXTURES, dxfToDwg } from '../../tools/make_dwg_fixtures.mjs';
-import { dynamicCodeSites, patchWasmMemory } from '../../tools/vendor_libredwg.mjs';
+import { dynamicCodeSites, wasmMemory, libredwgVersion } from '../../tools/vendor_libredwg.mjs';
 
 const wasmBytes = readFileSync(join(ROOT, 'vendor/libredwg/libredwg-web.wasm'));
 const glue = readFileSync(join(ROOT, 'vendor/libredwg/libredwg-web.js'), 'utf8');
@@ -189,16 +189,23 @@ test('saving a DWG drawing as DXF gives the same drawing back (Linework does not
 });
 
 // ------------------------------------------------------------------ the vendored reader
-test('vendored LibreDWG: no run-time code generation (CSP without unsafe-eval), provenance hashes, memory, size', () => {
+test('vendored LibreDWG: built from pinned sources, no run-time code generation (CSP without unsafe-eval), provenance hashes, memory, size', () => {
   assert.deepEqual(dynamicCodeSites(glue), [], 'no eval / new Function in the glue');
-  assert.ok(glue.startsWith('// LibreDWG for Linework'), 'patched glue');
+  assert.ok(glue.startsWith('// LibreDWG for Linework: built by tools/build_dwg_wasm.sh'), 'glue from the build script');
   const readme = readFileSync(join(ROOT, 'vendor/libredwg/README.md'), 'utf8');
   for (const [name, buf] of [['libredwg-web.js', Buffer.from(glue)], ['libredwg-web.wasm', wasmBytes]]) {
     const sha = createHash('sha256').update(buf).digest('hex');
     assert.ok(readme.includes(`| ${name} | ${buf.length} | \`${sha}\` |`), `README records ${name}`);
   }
   assert.equal(WASM_SIZE, wasmBytes.length, 'WASM_SIZE (download progress) matches the file');
-  assert.equal(patchWasmMemory(wasmBytes, 1024).oldPages, 1024, 'initial memory is 64 MiB, not 1 GiB');
+  assert.deepEqual(wasmMemory(wasmBytes), { initial: 1024, maximum: 65536 }, 'initial memory 64 MiB (not 1 GiB), grows up to 4 GiB');
+  // the exact corresponding source is known (GPL-3.0): a clean tree at a pinned commit
+  const version = libredwgVersion(wasmBytes);
+  assert.ok(version && !/dirty/i.test(version), `LibreDWG version string of a clean source tree: ${version}`);
+  assert.ok(readme.includes(`\`LibreDWG ${version}\``), 'README names the version the binary reports');
+  assert.match(readme, /\| Source \| https:\/\/github\.com\/mlightcad\/libredwg-web tag `v[\d.]+`, commit `[0-9a-f]{40}`/, 'README pins the source commit');
+  assert.match(readme, /\| Toolchain \| Emscripten SDK `[\d.]+` \(emsdk commit `[0-9a-f]{40}`\)/, 'README pins the toolchain');
+  assert.match(readme, /-sDYNAMIC_EXECUTION=0/, 'built without run-time code generation');
   const notice = readFileSync(join(ROOT, 'NOTICE'), 'utf8');
   assert.ok(/LibreDWG/.test(notice) && /GPL-3\.0-or-later/.test(notice), 'NOTICE credits LibreDWG and its licence');
 });

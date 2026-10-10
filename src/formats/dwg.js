@@ -18,9 +18,9 @@ export const UNREADABLE = 'This DWG could not be read; save it as DXF and open t
 const VENDOR = '../../vendor/libredwg/';
 /** Revision of the vendored reader: part of its URLs (they are cached for a year) and of the
  *  service worker's reader cache name (sw.js READER_CACHE). Bump both when vendor/libredwg changes. */
-export const READER_REV = '0.7.16-1';
+export const READER_REV = '0.7.16-2';
 /** Size of vendor/libredwg/libredwg-web.wasm (download progress when the server compresses it). */
-export const WASM_SIZE = 9496803;
+export const WASM_SIZE = 9389632;
 /** Largest DWG we try to open (decoding needs many times the file size in memory). */
 export const MAX_DWG_BYTES = 120 * 1024 * 1024;
 

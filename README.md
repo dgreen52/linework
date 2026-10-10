@@ -87,7 +87,7 @@ Deploy folder layout (`dist/`, upload its contents as the site root):
 ```
 index.html  app.css  sw.js  manifest.webmanifest   app shell (precached by the service worker)
 icons/  src/  samples/                            app code (served as-is, no build step), samples
-vendor/libredwg/                                  DWG reader: libredwg-web.wasm (9.5 MB) + .js glue
+vendor/libredwg/                                  DWG reader: libredwg-web.wasm (9.4 MB) + .js glue
                                                   + README (provenance); fetched only for DWGs
 _headers                                          HTTP headers, from deploy/_headers
 LICENSE  NOTICE                                   GPL-3.0 + third-party notices (LibreDWG, GDAL)
@@ -431,7 +431,7 @@ rendering, 1440×900, on the development laptop. Real GPUs do better.
 | | |
 |---|---|
 | App shell (HTML + CSS + JS + icons, gzip) | **≈161 KB** total, **≈146 KB** code (v0.1: 100 / 81; before copy / paste, duplicate and line weights: 147 / 132) — no dependencies |
-| DWG reader (only when a DWG is opened) | 9.5 MB WebAssembly, **≈2.1 MB gzip** (≈1.1 MB brotli) + 12 KB `dwg.js`; cached for offline use |
+| DWG reader (only when a DWG is opened) | 9.4 MB WebAssembly, **≈2.1 MB gzip** (≈1.1 MB brotli) + 12 KB `dwg.js`; cached for offline use |
 | First open (DOMContentLoaded, local server) | ≈0.4 s |
 | 53,100-entity stress drawing: generate + parse + index | ≈0.6–1.3 s, in a Web Worker with a progress bar |
 | Main-thread long tasks while that drawing loads | **0** (UI never freezes) |

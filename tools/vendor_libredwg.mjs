@@ -1,89 +1,24 @@
 #!/usr/bin/env node
-// Vendors LibreDWG (WebAssembly) into vendor/libredwg/ from the pinned npm package
-// @mlightcad/libredwg-web, and makes it fit Linework's rules:
+// Installs a build of the DWG reader into vendor/libredwg/ and writes vendor/libredwg/README.md
+// (provenance + SHA-256). The build comes from tools/build_dwg_wasm.sh, which calls this script at
+// its end; it normally runs on GitHub Actions (.github/workflows/build-libredwg-wasm.yml):
 //
-//   npm pack @mlightcad/libredwg-web@0.7.16          (downloads the .tgz; nothing is installed)
-//   node tools/vendor_libredwg.mjs mlightcad-libredwg-web-0.7.16.tgz
+//   node tools/vendor_libredwg.mjs <dir>     <dir>: the build output (libredwg-web.js,
+//                                            libredwg-web.wasm, build-info.json), e.g. the
+//                                            unpacked workflow artifact
 //
-// 1. Checks the tarball against the pinned npm integrity hash (sha512).
-// 2. Copies package/wasm/libredwg-web.{js,wasm}.
-// 3. Patches the Emscripten glue so it never generates code at run time: the two places where
-//    embind builds functions with `new Function` (function invokers and emval method callers) are
-//    replaced by the closure-based versions Emscripten emits for -sDYNAMIC_EXECUTION=0. The page's
-//    Content-Security-Policy can then stay without 'unsafe-eval' (only 'wasm-unsafe-eval').
-// 4. Lowers the module's initial memory from 1 GiB to 64 MiB (it still grows on demand up to
-//    4 GiB), so phones and tablets can instantiate it.
-// 5. Writes vendor/libredwg/README.md with the provenance and the SHA-256 of the output files.
-//
-// Preferred long-term route: build from source with tools/build_dwg_wasm.sh (see DWG.md).
+// The files are copied as built (no patching). The script refuses a build whose glue generates
+// code at run time (eval / new Function: the app's Content-Security-Policy allows only
+// 'wasm-unsafe-eval'), whose memory limits are not 64 MiB / 4 GiB, whose LibreDWG version string
+// says "dirty" (built from a modified source tree) or whose build-info.json lacks a source pin.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { gunzipSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-export const PACKAGE = '@mlightcad/libredwg-web';
-export const VERSION = '0.7.16';
-export const INTEGRITY = 'sha512-gWmjJ5TVNHR7JSHSke0Y8WmvTDPRTUNiRUejbIiymdjR4FV8Jv3hulR0Cv4TNwihr+r1DaxoD0phOFDENY5+Nw==';
-const INITIAL_PAGES = 1024; // 64 MiB
-
-function untar(buf) {
-  const files = {};
-  for (let o = 0; o + 512 <= buf.length;) {
-    const h = buf.subarray(o, o + 512);
-    if (h.every((b) => b === 0)) break;
-    const str = (a, n) => { const s = h.subarray(a, a + n); const z = s.indexOf(0); return Buffer.from(z < 0 ? s : s.subarray(0, z)).toString('utf8'); };
-    const name = (str(345, 155) ? str(345, 155) + '/' : '') + str(0, 100);
-    const size = parseInt(str(124, 12).trim() || '0', 8);
-    const type = String.fromCharCode(h[156] || 48);
-    o += 512;
-    if (type === '0' || type === '\0') files[name] = buf.subarray(o, o + size);
-    o += Math.ceil(size / 512) * 512;
-  }
-  return files;
-}
-
-function replaceOnce(s, from, to, what) {
-  const i = s.indexOf(from);
-  if (i < 0 || s.indexOf(from, i + 1) >= 0) throw new Error(`glue patch "${what}": expected exactly one match`);
-  return s.slice(0, i) + to + s.slice(i + from.length);
-}
-
-/** Patch the embind glue so it does not use `new Function` (see header comment). */
-export function patchGlue(js) {
-  // (a) function invokers
-  js = replaceOnce(js,
-    'let[args,invokerFnBody]=createJsInvoker(argTypes,isClassMethodFunc,returns,isAsync);args.push(invokerFnBody);var invokerFn=newFunc(Function,args)(...closureArgs);',
-    'var invokerFn=lwInvoker(argTypes,isClassMethodFunc,needsDestructorStack,returns,cppInvokerFunc,cppTargetFunc);',
-    'craftInvokerFunction');
-  js = replaceOnce(js, 'function craftInvokerFunction(',
-    // Same behaviour as the code createJsInvoker() generates, written as a closure.
-    'function lwInvoker(argTypes,isClassMethodFunc,needsDestructorStack,returns,invoker,fn){' +
-    'var argCount=argTypes.length-2,retType=argTypes[0],classParam=argTypes[1];' +
-    'return function(...args){var destructors=needsDestructorStack?[]:null;var thisWired;' +
-    'if(isClassMethodFunc){thisWired=classParam["toWireType"](destructors,this)}' +
-    'var argsWired=new Array(argCount);for(var i=0;i<argCount;++i){argsWired[i]=argTypes[i+2]["toWireType"](destructors,args[i])}' +
-    'var rv=isClassMethodFunc?invoker(fn,thisWired,...argsWired):invoker(fn,...argsWired);' +
-    'if(needsDestructorStack){runDestructors(destructors)}else{for(var i=isClassMethodFunc?1:2;i<argTypes.length;++i){var d=argTypes[i].destructorFunction;if(d!==null&&d!==undefined){d(i===1?thisWired:argsWired[i-2])}}}' +
-    'if(returns){return retType["fromWireType"](rv)}}}' +
-    'function craftInvokerFunction(',
-    'lwInvoker');
-  // (b) emval method callers
-  const start = js.indexOf('var functionBody=`return function (obj, func, destructorsRef, args) {\\n`;');
-  const endMark = 'var invokerFunction=newFunc(Function,params)(...args);';
-  const end = js.indexOf(endMark, start);
-  if (start < 0 || end < 0 || js.indexOf(endMark, end + 1) >= 0) throw new Error('glue patch "emval method caller": markers not found');
-  js = js.slice(0, start) +
-    'var invokerFunction=(obj,func,destructorsRef,args)=>{var offset=0;var argN=new Array(argCount);' +
-    'for(var i=0;i<argCount;++i){argN[i]=types[i]["readValueFromPointer"](args+offset);offset+=types[i].argPackAdvance}' +
-    'var rv=kind===1?reflectConstruct(func,argN):func.apply(obj,argN);' +
-    'if(!retType.isVoid){return emval_returnValue(retType,destructorsRef,rv)}};' +
-    js.slice(end + endMark.length);
-  const banner = '// LibreDWG for Linework: Emscripten glue from @mlightcad/libredwg-web ' + VERSION +
-    ', patched by tools/vendor_libredwg.mjs (no run-time code generation). Emscripten runtime: MIT licence.\n';
-  return banner + js;
-}
+export const INITIAL_PAGES = 1024; // 64 MiB
+export const MAXIMUM_PAGES = 65536; // 4 GiB
 
 /** Dynamic code generation left in a glue file (must be empty for the CSP). */
 export function dynamicCodeSites(js) {
@@ -96,103 +31,110 @@ export function dynamicCodeSites(js) {
 
 function leb(buf, p) { let r = 0, s = 0, b; do { b = buf[p++]; r += (b & 0x7f) * 2 ** s; s += 7; } while (b & 0x80); return [r, p]; }
 
-/** Rewrite the defined memory's initial size in place (same LEB128 length). */
-export function patchWasmMemory(wasm, pages) {
-  const out = Uint8Array.from(wasm);
-  let p = 8, dataEnd = 0, stackTop = 0, memAt = -1, memLen = 0, oldPages = 0;
-  while (p < out.length) {
-    const id = out[p++];
-    let size; [size, p] = leb(out, p);
-    const start = p;
+/** Limits of the module's own memory, in 64 KiB pages: { initial, maximum }. */
+export function wasmMemory(wasm) {
+  let p = 8;
+  while (p < wasm.length) {
+    const id = wasm[p++];
+    let size; [size, p] = leb(wasm, p);
     if (id === 5) {
-      let n; [n, p] = leb(out, p);
+      let n, initial, maximum = null;
+      [n, p] = leb(wasm, p);
       if (n !== 1) throw new Error('expected one memory');
-      const flags = out[p++];
-      memAt = p;
-      [oldPages, p] = leb(out, p);
-      memLen = p - memAt;
-      if (flags & 1) [, p] = leb(out, p);
-    } else if (id === 6) { // globals: the stack pointer is the first mutable i32 global
-      let n; [n, p] = leb(out, p);
-      for (let i = 0; i < n; i++) {
-        const type = out[p++], mut = out[p++];
-        if (out[p] === 0x41) { let v; [v, p] = leb(out, p + 1); if (type === 0x7f && mut && !stackTop) stackTop = v; } else { while (out[p] !== 0x0b) p++; }
-        p++; // end
-      }
-    } else if (id === 11) { // data segments
-      let n; [n, p] = leb(out, p);
-      for (let i = 0; i < n; i++) {
-        let kind; [kind, p] = leb(out, p);
-        let off = 0;
-        if (kind === 0 || kind === 2) { if (kind === 2) [, p] = leb(out, p); if (out[p] === 0x41) [off, p] = leb(out, p + 1); while (out[p] !== 0x0b) p++; p++; }
-        let len; [len, p] = leb(out, p);
-        dataEnd = Math.max(dataEnd, off + len);
-        p += len;
-      }
+      const flags = wasm[p++];
+      [initial, p] = leb(wasm, p);
+      if (flags & 1) [maximum] = leb(wasm, p);
+      return { initial, maximum };
     }
-    p = start + size;
+    p += size;
   }
-  if (memAt < 0) throw new Error('no memory section');
-  const need = Math.max(dataEnd, stackTop);
-  if (pages * 65536 < need + 16 * 1024 * 1024) throw new Error(`initial memory too small: needs ${need} bytes`);
-  if (memLen < 3) throw new Error('unexpected memory encoding');
-  // padded LEB128 of `pages` in memLen bytes
-  let v = pages;
-  for (let i = 0; i < memLen; i++) { out[memAt + i] = (v & 0x7f) | (i < memLen - 1 ? 0x80 : 0); v = Math.floor(v / 128); }
-  return { wasm: out, oldPages, dataEnd, stackTop };
+  throw new Error('no memory section');
+}
+
+/** The version LibreDWG reports (e.g. "0.13.4.321_abcd"), read from the module's data. */
+export function libredwgVersion(wasm) {
+  const m = /LibreDWG (\d+\.\d+[\w.]*)/.exec(Buffer.from(wasm).toString('latin1'));
+  return m ? m[1] : null;
 }
 
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
+const PINS = ['libredwgWeb.repo', 'libredwgWeb.tag', 'libredwgWeb.commit', 'jsmn.commit', 'libredwgBase.tag', 'libredwgBase.commit',
+  'emsdk.version', 'emsdk.commit', 'emcc', 'version', 'configure', 'cflags', 'compile', 'link'];
+const get = (o, path) => path.split('.').reduce((v, k) => (v == null ? v : v[k]), o);
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const tgzPath = process.argv[2];
-  if (!tgzPath) { console.error(`usage: npm pack ${PACKAGE}@${VERSION} && node tools/vendor_libredwg.mjs <tgz>`); process.exit(2); }
-  const tgz = readFileSync(tgzPath);
-  const integrity = 'sha512-' + createHash('sha512').update(tgz).digest('base64');
-  if (integrity !== INTEGRITY) { console.error(`integrity mismatch:\n  got      ${integrity}\n  expected ${INTEGRITY}`); process.exit(1); }
-  const files = untar(gunzipSync(tgz));
-  const pkg = JSON.parse(Buffer.from(files['package/package.json']).toString('utf8'));
-  if (pkg.version !== VERSION || pkg.license !== 'GPL-3.0') throw new Error('unexpected package metadata');
-  const glue = patchGlue(Buffer.from(files['package/wasm/libredwg-web.js']).toString('utf8'));
-  const left = dynamicCodeSites(glue);
-  if (left.length) throw new Error('dynamic code left in the glue:\n' + left.join('\n'));
-  const { wasm, oldPages, dataEnd, stackTop } = patchWasmMemory(files['package/wasm/libredwg-web.wasm'], INITIAL_PAGES);
-  const ver = /LibreDWG (\d+\.\d+[\w.]*)/.exec(Buffer.from(wasm).toString('latin1'));
-  const dir = join(ROOT, 'vendor', 'libredwg');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'libredwg-web.js'), glue);
-  writeFileSync(join(dir, 'libredwg-web.wasm'), wasm);
-  const readme = `# LibreDWG (WebAssembly) — vendored
+/** vendor/libredwg/README.md for a build (build-info.json + the installed files, as bytes). */
+export function readme(info, glue, wasm) {
+  const w = info.libredwgWeb, mem = wasmMemory(wasm);
+  const built = info.run
+    ? `GitHub Actions: ${info.run.url} (workflow \`.github/workflows/build-libredwg-wasm.yml\` at commit \`${info.run.commit}\` of this repository; runner image \`${info.run.image}\`)`
+    : 'a local run of `tools/build_dwg_wasm.sh`';
+  return `# LibreDWG (WebAssembly) — vendored
 
 Used by \`src/formats/dwg.js\` to read DWG files. Loaded only when a DWG is opened.
 
+Built from pinned sources by \`tools/build_dwg_wasm.sh\` and installed unchanged by
+\`tools/vendor_libredwg.mjs\` (which also wrote this file). Nothing is patched after the build.
+
 | | |
 |---|---|
-| Library | GNU LibreDWG ${ver ? ver[1] : '(version string not found)'} — https://www.gnu.org/software/libredwg/ |
+| Library | GNU LibreDWG — https://www.gnu.org/software/libredwg/ ; the binary reports \`LibreDWG ${info.version}\` (a snapshot built from a clean source tree) |
 | Licence | GPL-3.0-or-later (LibreDWG); GPL-3.0 (JavaScript bindings); MIT (Emscripten runtime glue, mimalloc); zlib licence (zlib); see \`NOTICE\` |
-| Built by | the \`${PACKAGE}\` project — https://github.com/mlightcad/libredwg-web (Emscripten + embind bindings over LibreDWG) |
-| Taken from | npm \`${PACKAGE}@${VERSION}\`, files \`wasm/libredwg-web.js\` and \`wasm/libredwg-web.wasm\` |
-| npm integrity | \`${INTEGRITY}\` |
-| Upstream build flags | \`configure --enable-release --enable-debug --disable-docs --disable-write --disable-python --disable-bindings --disable-shared --disable-json\` with \`CFLAGS=-O2 -sUSE_ZLIB=1 -DNDEBUG\`; link \`-O2 -lembind -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=1GB -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc -sMODULARIZE=1 -sEXPORT_ES6=1\` (from the package's \`package.json\`) |
-| Binary identifies itself as | \`${ver ? ver[0] : '?'}\` — a development snapshot ("dirty": built from a modified tree), so the exact source revision cannot be verified from the binary alone; see DWG.md |
+| Source | ${w.repo.replace(/\.git$/, '')} tag \`${w.tag}\`, commit \`${w.commit}\`: the LibreDWG source tree with the Emscripten/embind bindings (\`bindings/javascript/embind/\`); the same C/C++ sources as npm \`@mlightcad/libredwg-web@${w.tag.replace(/^v/, '')}\` |
+| Submodule | \`jsmn\` (https://github.com/zserge/jsmn) at commit \`${info.jsmn.commit}\`, as pinned by that commit |
+| LibreDWG base | upstream LibreDWG release \`${info.libredwgBase.tag}\` (commit \`${info.libredwgBase.commit}\`) is in that history; the version string counts the commits since it |
+| Toolchain | Emscripten SDK \`${info.emsdk.version}\` (emsdk commit \`${info.emsdk.commit}\`): \`${info.emcc}\` |
+| Configure | \`${info.configure}\` with \`CFLAGS=${info.cflags}\` |
+| Compile (C) | \`make -C src CFLAGS="${info.compile}"\` |
+| Link | \`${info.link}\` |
+| Built on | ${built} |
+| Memory | initial ${mem.initial} pages (${mem.initial / 16} MiB), grows on demand up to ${mem.maximum} pages (${mem.maximum / 16384} GiB) |
 
-Changes made by \`tools/vendor_libredwg.mjs\` (run it to reproduce these files byte for byte):
-
-1. Glue: embind's two run-time code generators (\`new Function\` for function invokers and for
-   emval method callers) are replaced by the closure versions Emscripten emits with
-   \`-sDYNAMIC_EXECUTION=0\`, so the app's Content-Security-Policy needs only \`'wasm-unsafe-eval'\`.
-2. WebAssembly: initial memory lowered from ${oldPages} pages (${oldPages / 16} MiB) to ${INITIAL_PAGES} pages (${INITIAL_PAGES / 16} MiB); it still
-   grows on demand. (Static data ends at ${dataEnd} bytes, stack top ${stackTop}.)
+Differences from the npm package's own build (the scripts in its \`package.json\`):
+\`-sDYNAMIC_EXECUTION=0\` (the glue never generates code at run time, so the Content-Security-Policy
+needs only \`'wasm-unsafe-eval'\`), 64 MiB initial memory instead of 1 GiB (phones and tablets), no
+TypeScript declarations, and the C code compiled with \`-O2\` (configure removes it when
+\`--enable-debug\` is given; these sources need that option, for LibreDWG's DEBUG_CLASSES).
 
 | File | Bytes | SHA-256 |
 |---|---|---|
-| libredwg-web.js | ${Buffer.byteLength(glue)} | \`${sha256(glue)}\` |
+| libredwg-web.js | ${glue.length} | \`${sha256(glue)}\` |
 | libredwg-web.wasm | ${wasm.length} | \`${sha256(wasm)}\` |
 
-Source code: LibreDWG — https://git.savannah.gnu.org/git/libredwg.git and https://github.com/LibreDWG/libredwg ;
-bindings and build scripts — https://github.com/mlightcad/libredwg-web . See DWG.md for the
-plan to rebuild this binary from pinned sources (\`tools/build_dwg_wasm.sh\`).
+Corresponding source: the commits above and \`tools/build_dwg_wasm.sh\`, which fetches exactly those,
+verifies them and records them in \`build-info.json\` (part of the workflow artifact). Sources:
+https://github.com/mlightcad/libredwg-web , LibreDWG https://git.savannah.gnu.org/git/libredwg.git .
+See DWG.md.
 `;
-  writeFileSync(join(dir, 'README.md'), readme);
-  console.log(readme);
+}
+
+/** Check a build and install it into dest (default vendor/libredwg/). Returns the README text. */
+export function install(dir, dest = join(ROOT, 'vendor', 'libredwg')) {
+  const info = JSON.parse(readFileSync(join(dir, 'build-info.json'), 'utf8'));
+  for (const k of PINS) if (!get(info, k)) throw new Error(`build-info.json: missing ${k}`);
+  for (const k of ['libredwgWeb.commit', 'jsmn.commit', 'libredwgBase.commit', 'emsdk.commit']) {
+    if (!/^[0-9a-f]{40}$/.test(get(info, k))) throw new Error(`build-info.json: ${k} is not a full commit hash`);
+  }
+  const glue = readFileSync(join(dir, 'libredwg-web.js'));
+  const wasm = readFileSync(join(dir, 'libredwg-web.wasm'));
+  const js = glue.toString('utf8');
+  const left = dynamicCodeSites(js);
+  if (left.length) throw new Error('dynamic code left in the glue:\n' + left.join('\n'));
+  if (!js.startsWith('// LibreDWG for Linework')) throw new Error('glue without the build banner');
+  const mem = wasmMemory(wasm);
+  if (mem.initial !== INITIAL_PAGES || mem.maximum !== MAXIMUM_PAGES) throw new Error(`unexpected memory limits ${JSON.stringify(mem)}`);
+  const ver = libredwgVersion(wasm);
+  if (ver !== info.version) throw new Error(`the binary reports LibreDWG ${ver}, build-info.json says ${info.version}`);
+  if (/dirty/i.test(ver)) throw new Error(`built from a modified source tree: ${ver}`);
+  const text = readme(info, glue, wasm);
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, 'libredwg-web.js'), glue);
+  writeFileSync(join(dest, 'libredwg-web.wasm'), wasm);
+  writeFileSync(join(dest, 'README.md'), text);
+  return text;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const dir = process.argv[2];
+  if (!dir) { console.error('usage: node tools/vendor_libredwg.mjs <build output dir> [dest dir]'); process.exit(2); }
+  console.log(install(dir, process.argv[3]));
 }

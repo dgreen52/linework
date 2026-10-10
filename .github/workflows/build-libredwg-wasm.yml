@@ -1,0 +1,69 @@
+# Builds the DWG reader (vendor/libredwg/: GNU LibreDWG + the libredwg-web bindings, compiled to
+# WebAssembly) from pinned sources with tools/build_dwg_wasm.sh — the one build recipe — and
+# uploads the result as the artifact "libredwg-wasm". To vendor it: unpack the artifact and run
+#   node tools/vendor_libredwg.mjs <unpacked folder>
+# then bump READER_REV / READER_CACHE and run the tests (see DWG.md). Nothing is deployed here.
+name: Build DWG reader (LibreDWG WebAssembly)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - tools/build_dwg_wasm.sh
+      - .github/workflows/build-libredwg-wasm.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the build tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends autoconf automake libtool pkg-config texinfo
+
+      - name: Build (tools/build_dwg_wasm.sh)
+        env:
+          OUT: ${{ runner.temp }}/libredwg-wasm
+        run: bash tools/build_dwg_wasm.sh
+
+      - name: SHA-256 of the outputs
+        env:
+          OUT: ${{ runner.temp }}/libredwg-wasm
+        run: |
+          cp vendor/libredwg/README.md "$OUT/README.md"
+          cd "$OUT"
+          sha256sum libredwg-web.js libredwg-web.wasm build-info.json README.md
+          ls -l
+          cat build-info.json
+
+      - name: Smoke test (a synthetic DWG fixture reads like its DXF)
+        run: |
+          node --input-type=module -e "
+          import { readFileSync } from 'node:fs';
+          import { parseDwg } from './src/formats/dwg.js';
+          import { parseDxf } from './src/formats/dxf.js';
+          const wasmBytes = readFileSync('vendor/libredwg/libredwg-web.wasm');
+          const m = await parseDwg(new Uint8Array(readFileSync('tests/fixtures/dwg-bracket.dwg')), { wasmBytes, mode: 'direct' });
+          const d = parseDxf(new Uint8Array(readFileSync('samples/bracket.dxf')));
+          const counts = (x) => JSON.stringify(Object.entries(x.stats.byType).sort());
+          console.log('DWG', counts(m));
+          console.log('DXF', counts(d));
+          if (counts(m) !== counts(d)) process.exit(1);
+          "
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: libredwg-wasm
+          path: ${{ runner.temp }}/libredwg-wasm/
+          if-no-files-found: error
+          retention-days: 90

@@ -8,3 +8,4 @@ Thumbs.db
 tests/fixtures/stress-50k.dxf
 dist/
 .build-dwg/
+.wrangler/

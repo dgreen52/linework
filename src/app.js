@@ -688,6 +688,9 @@ function cancelDrafts() {
 function updateFinishBar() {
   const active = (app.mdraft && app.mdraft.mode !== 'distance' && app.mdraft.pts.length > 0) || (app.draft && app.draft.type === 'cloud-poly') || (edit && edit.draftActive);
   $('#finish-bar').hidden = !active;
+  const placing = !!(edit && edit.placing); // pasted / duplicated items following the cursor
+  $('#btn-undo-point').hidden = placing;
+  $('#btn-finish').lastChild.textContent = placing ? 'Place' : 'Finish';
 }
 
 function updateMeasureCard() {
@@ -1120,6 +1123,8 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     if (k === 'a' && EDIT_TOOLS.has(app.tool)) { e.preventDefault(); edit.selectAll(); return; }
+    if (k === 'd' && EDIT_TOOLS.has(app.tool)) { e.preventDefault(); edit.duplicate(); return; }
+    if (k === 'v' && app.scene) { edit.pasteKey(e.shiftKey); return; } // the paste event follows (Ctrl+C: the copy event)
     if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
     if (k === 'p') { e.preventDefault(); if (app.doc) openPrintDialog(); return; }
@@ -1153,6 +1158,19 @@ document.addEventListener('keydown', (e) => {
   if (k === 's') { toggleSnap(); return; }
   if (k === 'e') { setTool('eselect'); return; }
   if (KEY_TOOLS[k]) { setTool(KEY_TOOLS[k]); }
+});
+// copy / paste of drawing items (Edit mode): plain text on the system clipboard, no permission needed
+document.addEventListener('copy', (e) => {
+  if (isTyping(e.target) || document.querySelector('dialog[open]')) return;
+  const t = edit.copy();
+  if (t == null) return;
+  e.preventDefault();
+  e.clipboardData.setData('text/plain', t);
+});
+document.addEventListener('paste', (e) => {
+  if (isTyping(e.target) || document.querySelector('dialog[open]') || !app.scene) return;
+  e.preventDefault();
+  edit.pasteText(e.clipboardData ? e.clipboardData.getData('text/plain') : '');
 });
 document.addEventListener('keyup', (e) => { if (e.key === ' ') { app.spaceDown = false; if (!gesture) cvOverlay.classList.remove('dragging'); } });
 
@@ -1198,6 +1216,9 @@ const actions = {
   export: () => doExport(),
   print: () => openPrintDialog(),
   'e-delete': () => edit.deleteSel(),
+  'e-copy': () => edit.copyButton(),
+  'e-paste': () => edit.paste(),
+  'e-dup': () => edit.duplicate(),
   'e-save': () => edit.quickSave(),
   'e-saveas': () => edit.openSaveAs(),
 };

@@ -65,7 +65,7 @@ export function parseDgn(input, { onProgress } = {}) {
   const masterName = ascii(1120, 2).trim(), subName = ascii(1122, 2).trim();
   const ox = vaxD(1240) / uorPerMaster, oy = vaxD(1248) / uorPerMaster;
   model.units = unitsFromLabel(masterName);
-  model.header = { dimension: dim, masterUnit: masterName, subUnit: subName, subPerMaster, uorPerSub, origin: [ox, oy] };
+  model.header = { dimension: dim, masterUnit: masterName, subUnit: subName, subPerMaster, uorPerSub, origin: [ox, oy], oz: vaxD(1256) / uorPerMaster };
   if (dim === 3) warn(model, '3D design file: shown in top (plan) view.');
   // Saved views (TCB bytes 46 + 118 * view): flags word (0x80 = view open), then a 64-bit level mask
   // (bit n-1 = level n). The first open view (else view 1) decides which levels start visible, the way
@@ -299,7 +299,9 @@ export function parseDgn(input, { onProgress } = {}) {
           cell.rotation = Math.atan2(t[2], t[0]);
           if (t[0] * t[3] - t[1] * t[2] < 0) cell.mirrored = true;
         } else {
+          cell.trans3 = Array.from({ length: 9 }, (_, k) => i32(o + 76 + 4 * k) / 214748);
           cell.origin = [X(i32(o + 112)), Y(i32(o + 116))];
+          cell.zr = i32(o + 120);
         }
         cells.push(cell);
         place(cell);

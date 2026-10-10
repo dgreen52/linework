@@ -107,7 +107,7 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 .tools { display: flex; align-items: center; gap: 2px; padding: 4px 8px; overflow-x: auto; scrollbar-width: thin; flex: 1; }
 .tool {
   display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  min-width: 58px; height: 50px; padding: 4px 6px; flex: none;
+  min-width: 52px; height: 50px; padding: 4px 5px; flex: none;
   background: none; border: 1px solid transparent; border-radius: var(--radius); cursor: pointer;
   font-size: 12px; color: var(--text);
 }
@@ -135,6 +135,7 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 #cv-overlay.crosshair { cursor: crosshair; }
 #cv-overlay.pointer { cursor: pointer; }
 #cv-overlay.move { cursor: move; }
+#cv-overlay.copy { cursor: copy; }
 
 .empty { position: absolute; inset: 0; display: grid; place-items: center; overflow: auto; padding: 24px 16px; background: var(--bg); }
 .empty-card { max-width: 720px; width: 100%; text-align: center; }
@@ -180,7 +181,10 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 .sw.fg { background: linear-gradient(135deg, #fff 50%, #000 50%); }
 .sw.bylayer { background: repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 5px); }
 .color-pop { position: absolute; z-index: 12; grid-template-columns: repeat(4, auto); gap: 2px; min-width: 0; padding: 6px; }
-.color-pop button { padding: 6px 8px; font-size: 13px; white-space: nowrap; }
+.color-pop button { padding: 6px 8px; font-size: 13px; white-space: nowrap; gap: 6px; }
+.color-pop { right: auto; max-height: min(70vh, 520px); overflow-y: auto; }
+#btn-eweight { min-width: 0; }
+.lw { display: inline-block; width: 18px; height: var(--w, 1px); background: currentColor; flex: none; }
 .color-pop button[aria-checked="true"] { background: var(--accent-soft); outline: 1px solid var(--accent); }
 .ctx { position: absolute; z-index: 12; min-width: 170px; }
 .ctx button { min-height: 40px; }

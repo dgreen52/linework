@@ -33,8 +33,9 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   so a reload never loses work.
 * **Edits the drawing** (new in v0.2, see [Edit mode](#edit-mode)): select, move, nudge, rotate,
   delete; double-click to retype text in place or to reshape lines, polylines and circles with
-  handles; draw lines, polylines, rectangles, circles and text on any layer; change layer and
-  colour; one undo history for edits and markups.
+  handles; draw lines, polylines, rectangles, circles and text on any layer; change layer, colour
+  and line weight; **copy and paste between drawings** (DGN ↔ DGN, DXF ↔ DGN, across tabs) and
+  **duplicate**; one undo history for edits and markups.
 * **Saves** the edited drawing as **DXF** (R2000) or **DGN v7** — downloaded to your device,
   never uploaded. A DGN you opened is saved back with every untouched element byte-for-byte.
   Linework does not write DWG: a DWG you opened is saved as DXF (the default) or DGN v7.
@@ -102,7 +103,10 @@ for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/d
 | `E` | Edit mode (select tool) — then `V` select, `N` line, `P` polyline, `R` rectangle, `O` circle, `T` text |
 | Click / `Shift`+click | select / add or remove; `Ctrl+A` selects everything |
 | Drag a box | left→right: items fully inside (solid box) · right→left: anything touched (dashed box) |
-| Drag | move the selection (snaps; `Shift` keeps it horizontal/vertical) |
+| Drag | move the selection (snaps; `Shift` keeps it horizontal/vertical); `Ctrl`+drag (`Alt` on a Mac) drops a copy |
+| `Ctrl+C` / `Ctrl+V` | copy the selection / paste it (also into another drawing or tab): the items follow the cursor, click places them, `Esc` cancels |
+| `Ctrl+Shift+V` | paste in place (same coordinates) |
+| `Ctrl+D` | duplicate the selection (follows the cursor, click places it) |
 | Arrow keys | nudge 1 screen pixel (`Shift`: 10) |
 | Double-click | retype text in place / show handles to reshape |
 | Right-click a handle / a side | delete that point / add a point (double-click a side also adds) |
@@ -111,8 +115,9 @@ for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/d
 | `Delete` | delete the selection |
 | `Ctrl+S` / `Ctrl+Shift+S` | save the drawing (in Edit) / save as DXF or DGN |
 
-On touch screens: tap to select, drag to move, long-press for a menu (edit, rotate, delete, add or
-delete a point); two fingers still pan and zoom.
+On touch screens: tap to select, drag to move, long-press for a menu (edit, copy, duplicate, rotate,
+delete, paste here / in place, add or delete a point); the ribbon has Copy, Paste and Duplicate, and a
+tap places pasted items; two fingers still pan and zoom.
 
 Press `?` in the app for the same sheet.
 
@@ -141,7 +146,38 @@ Open the **Edit** tab (or press `E`). The drawing itself is edited; markups stay
   (`Enter`/double-click finishes, `C` closes), rectangles, circles and text. New items go on the
   **current layer** (Layer box; "New layer…" creates one with a colour) in the **current colour**
   (ByLayer or a colour swatch; for DGN drawings the swatches are the file's own colour table).
-* **Properties**: with a selection, the Layer box and colour swatches change the selection.
+* **Line weight**: the **Weight** box next to Colour. DGN drawings: weights 0–31; DXF drawings:
+  ByLayer or a standard lineweight (0.00–2.11 mm). It applies to new items and, with a selection,
+  changes the selection (a cell's components, a block's attributes too). Line weights are drawn
+  (DGN: 1 px + 0.75 px per step; DXF: 0.25 mm ≈ 1 px; both capped) and saved.
+* **Properties**: with a selection, the Layer box, colour swatches and Weight box change the selection.
+* **Copy and paste** (`Ctrl+C`, `Ctrl+V`; ribbon Copy / Paste; right-click or long-press menu):
+  the copied items follow the cursor with snaps on — their lower-left corner goes where you click
+  (or tap); `Esc` cancels. `Ctrl+Shift+V` or *Paste in place* keeps the original coordinates. Copies
+  travel as text on the system clipboard, so they paste into another drawing in the same tab, in
+  another tab or window, and survive opening another drawing (no permission prompt; nothing leaves
+  the device). One paste is one undo step, and the pasted items become the selection.
+  * Units: when both drawings have known units the items are scaled (m → ft, mm → in…, the toast
+    says so); if either has no units they are pasted 1:1, with a note.
+  * Layers: DXF → DXF keeps layer names (missing layers are created with their colour, line type
+    and lineweight); DGN → DGN keeps the level numbers; DGN → DXF creates layers "Level N";
+    DXF → DGN puts the items on the current level of the Edit ribbon (DGN levels have no names).
+  * Colours: copies carry explicit colours (ByLayer / ByBlock resolved), so they look the same.
+    In a DGN the colour becomes the nearest entry of *that file's* colour table (the same entry when
+    both files have that colour). In a DXF, white / black become colour 7, exact ACI colours stay
+    ACI, others are true colour; an item that was ByLayer is ByLayer again when the target layer
+    has the same colour. Line weights travel too (DGN weight ↔ DXF lineweight, see below).
+  * Blocks and cells: DXF blocks (nested, dimension blocks too), line types and text styles come
+    along; a block name that exists with other content gets a new name (`NAME_2`, `*D5`). A pasted
+    DGN cell stays a cell: it gets a new cell header (name, transform, range) and its text can
+    still be retyped. DXF blocks pasted into a DGN are exploded into separate items (DGN v7 has no
+    blocks; the toast says so).
+  * 3D DGN files: Z is kept between 3D files (converted for the other file's units and origin);
+    pasting into a 2D drawing flattens it to Z = 0, with a note.
+* **Duplicate** (`Ctrl+D`, ribbon, menu): like a paste of the selection in the same drawing.
+  **`Ctrl`+drag** (`Alt`+drag on a Mac) leaves the originals and drops a copy where you release.
+  Copies are new items: in a DGN round trip they are added at the end of the file and the
+  originals' bytes are untouched.
 * **Undo/redo**: one history for drawing edits and markups — `Ctrl+Z` always undoes the last
   thing you did. "• unsaved" next to the file name shows there are edits to save; the browser
   asks before leaving the page while it is shown.
@@ -161,8 +197,13 @@ How saving works:
   elements stay byte-for-byte at the same place (header, colour table, levels, cells, attribute
   data, elements this app cannot show). Edited or deleted elements get their *deleted* flag set
   in place, and the new versions are appended before the end-of-design marker (cells keep their
-  header, with an updated origin, transform and range; a single edited element keeps its
-  attribute data).
+  header, with an updated origin, transform, range, colour and weight; a single edited element
+  keeps its attribute data). Pasted and duplicated items are appended the same way; pasted cells
+  get a new type-2 cell header (2D or 3D layout).
+* **Line weights**: DXF lineweights (group 370, on items and layers; ByLayer / ByBlock / default)
+  are kept exactly. Between formats: DGN weight *n* = DXF lineweight 0.13, 0.18, 0.25, 0.35, 0.50,
+  0.70, 1.00, 1.40, 2.00, 2.11 mm for *n* = 1–10 (11 and above: 2.11 mm; weight 0 = default);
+  a DXF lineweight becomes the nearest of those (below 0.10 mm and default: weight 0).
 * **DGN v7, drawing opened from a DXF**: a new 2D design file started from GDAL's seed file;
   working units are chosen so coordinates fit the 32-bit grid, layers become levels 1–63 (more
   than 63 are merged into level 63, with a note), colours go into a colour table, blocks are
@@ -189,14 +230,15 @@ How saving works:
 | Dimensions, leaders | DIMENSION via its block (fallback drawing when the block is missing), LEADER with arrowhead | All dimension types via their block (same fallback), LEADER | — |
 | Fills | SOLID, TRACE, HATCH (solid fill; pattern hatches as a light screen pattern) | SOLID, TRACE, HATCH (polyline and edge boundaries, pattern data kept for saving) | — |
 | Points | POINT | POINT | — |
-| Layers / levels | LAYER table: colour (ACI and true colour), on/off, frozen, linetype | LAYER table: colour (index; true colour from 2004), on/off, frozen, linetype | Levels 1–63 (swatch = most common colour); levels off in the saved open view start hidden |
+| Layers / levels | LAYER table: colour (ACI and true colour), on/off, frozen, linetype, lineweight | LAYER table: colour (index; true colour from 2004), on/off, frozen, linetype | Levels 1–63 (swatch = most common colour); levels off in the saved open view start hidden |
+| Line weights | Lineweight (370) on items and layers, ByLayer / ByBlock / default, drawn and saved | Not read yet (drawn at the default weight) | Weight 0–31, drawn and saved |
 | Colours | ACI 256-colour table, true colour (420) | Colour index; true colour (2004+) | Colour table element (type 5) or the default DGN palette |
 | Line types | LTYPE dash patterns (shown at screen scale) | LTYPE dash patterns | Line styles 0–7 |
 | Units | `$INSUNITS` | `INSUNITS` | Master/sub units and UORs from the TCB, global origin |
 | Other | OCS/extrusion (e.g. mirrored arcs), paper space shown if model space is empty, `$EXTMIN/$EXTMAX`, CRLF/LF, padded group codes, missing HEADER/TABLES sections, truncated files | OCS/extrusion, paper space as for DXF, damaged files (shows what LibreDWG could read), 120 MB size limit, 2-minute read limit | Deleted elements skipped, 2D and 3D files, truncated files |
 | Skipped (reported as "not shown") | 3DSOLID, REGION, BODY, MESH, IMAGE, WIPEOUT, OLE, XREFs, proxy/custom entities | Same as DXF, plus MLINE, MULTILEADER, TOLERANCE, RAY/XLINE, SHAPE | Shared cells, B-splines (21/24–28), raster, dimensions (33) |
 | Not supported yet | Binary DXF | R12 and older DWG; writing DWG | DGN v8 |
-| **Save** | **DXF** R2000 (AC1015), pure ASCII; layers, line types, text styles, blocks and attributes kept; DGN drawings saved as DXF get layers "Level N", cells as separate items | Saved as **DXF** (default) or **DGN v7** — Linework does not write DWG | **DGN v7**: a DGN you opened keeps every untouched element byte-for-byte (edits appended, originals flagged deleted); any other drawing becomes a new 2D DGN from GDAL's seed file (layers → levels 1–63, colour table, blocks flattened) |
+| **Save** | **DXF** R2000 (AC1015), pure ASCII; layers, line types, lineweights, text styles, blocks and attributes kept; DGN drawings saved as DXF get layers "Level N", cells as separate items | Saved as **DXF** (default) or **DGN v7** — Linework does not write DWG | **DGN v7**: a DGN you opened keeps every untouched element byte-for-byte (edits appended, originals flagged deleted); any other drawing becomes a new 2D DGN from GDAL's seed file (layers → levels 1–63, colour table, blocks flattened) |
 
 DWG versions: the tests use synthetic R2000 (AC1015) files; LibreDWG also reads R13/R14 and
 R2004–R2018, which are not covered by synthetic fixtures yet ([DWG.md](DWG.md)).
@@ -211,7 +253,7 @@ rendering, 1440×900, on the development laptop. Real GPUs do better.
 
 | | |
 |---|---|
-| App shell (HTML + CSS + JS + icons, gzip) | **≈150 KB** total, **≈135 KB** code (v0.1: 100 / 81) — no dependencies |
+| App shell (HTML + CSS + JS + icons, gzip) | **≈161 KB** total, **≈146 KB** code (v0.1: 100 / 81; before copy / paste, duplicate and line weights: 147 / 132) — no dependencies |
 | DWG reader (only when a DWG is opened) | 9.5 MB WebAssembly, **≈2.1 MB gzip** (≈1.1 MB brotli) + 12 KB `dwg.js`; cached for offline use |
 | First open (DOMContentLoaded, local server) | ≈0.4 s |
 | 53,100-entity stress drawing: generate + parse + index | ≈0.6–1.3 s, in a Web Worker with a progress bar |
@@ -222,6 +264,7 @@ rendering, 1440×900, on the development laptop. Real GPUs do better.
 | Edit, 53k drawing: box-select 554 items | ≈3 ms to select; 60 fps while dragging the box |
 | Edit, 53k drawing: drag those 554 items | median **16.7 ms**/frame, p95 16.8 ms (60 fps) |
 | Edit, 53k drawing: commit the move / undo it | ≈36 ms / ≈11 ms (no re-parse, no rebuild); next frame ≈2 ms |
+| Edit, 53k drawing: copy those 554 items / paste them | ≈6–11 ms to copy; the pasted outline follows the cursor at median 16.7 ms/frame (p95 ≈17–33 ms); ≈6–8 ms to commit |
 
 How: geometry is parsed and batched in a worker; each spatial chunk keeps one `Path2D` per style,
 built lazily and drawn with the view transform (no re-tessellation on pan/zoom); arcs/ellipses
@@ -243,13 +286,15 @@ the first frame, so opening a large file never blocks the page.
 * Drawings are read with `FileReader`/`File.arrayBuffer` and parsed in a Web Worker in the same
   browser tab. The service worker caches only the app's own files and never sees your drawings.
 * Markups stay in the sidecar file you save and in this browser's local storage.
+* Copied drawing items go to the system clipboard as plain text (and stay in the open tab), only
+  when you copy; nothing is sent anywhere.
 * Saving an edited drawing creates the file in the page and hands it to the browser as a
   download (a `Blob`); it never leaves the device.
 
 ## Tests
 
 ```bash
-npm test                                  # 132 Node unit tests (node --test, no dependencies)
+npm test                                  # 151 Node unit tests (node --test, no dependencies)
 NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 27 Playwright end-to-end tests
 ```
 
@@ -271,6 +316,13 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   rebuild, and saved DXF/DGN read back equal to the edited drawing; edit operations (move,
   rotate, mirror, OCS baking, handles, add/delete points, text, layer/colour), undo/redo
   invariants (undoing everything restores the original objects), window vs crossing selection.
+* Copy / paste, duplicate, line weights: clipboard payload round trip; source byte ranges and raw
+  Z stripped; colours made explicit; unit scaling; layer / level rules; block dependencies and
+  renames on a name clash; DGN → DGN (same and other units, origins and colour tables; cells with
+  new headers read back by this app and GDAL/OGR; text in pasted cells retyped; every original
+  byte kept), 3D DGN (Z kept / flattened), DXF → DGN (blocks exploded), DGN → DXF; duplicates of
+  lines, line strings, text, cells and inserts with attributes; DXF lineweights (370, ByLayer /
+  ByBlock) read, drawn and written exactly, DGN weight ↔ lineweight mapping, checked with GDAL/OGR.
 * End to end: open every fixture, friendly errors, fit/zoom/box zoom, layer toggle (pixel check),
   measuring known distances/lengths/areas with snaps (DXF and DGN), every markup type, undo/redo,
   select/move/delete, sidecar save + reload in a fresh browser, autosave, PNG export, print
@@ -281,7 +333,10 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   radius), every draw tool with a typed length, new layer + colour changes, Save DXF and reopen
   it, Save as DGN, DGN round trip byte check, lost-item warning, unsaved indicator and the
   leave-page prompt, touch at 390 px (tap, drag, long-press menu, pinch), DGN cells, 53k
-  performance. Screenshots (dark + paper at 1440/1024/390) go to `tests/e2e/out/`.
+  performance. Copy / paste: DGN → DXF with a snapped click, save + reopen, paste in place, across
+  two tabs (DGN cell, retyped, original bytes kept), Ctrl+D / Ctrl+drag / ribbon Duplicate with
+  one-step undo, line weight changes drawn thicker (pixel check) and saved, touch at 390 px.
+  Screenshots (dark + paper at 1440/1024/390) go to `tests/e2e/out/`.
 * DWG: every DWG fixture is one of the synthetic DXF files converted to DWG R2000, and must read
   exactly like its DXF (entity counts, layers, blocks, insert transforms, extents, every drawn
   item and text) — through the direct mapping and through LibreDWG's DXF fallback; version
@@ -334,10 +389,10 @@ Trade-offs, for the owner to decide before the first public release:
 
 * **v0.2** — Edit mode and saving as DXF / DGN v7.
 * **v0.3 (this version)** — DWG (R13–2018) via LibreDWG compiled to WebAssembly, lazy-loaded
-  ([details](DWG.md)).
+  ([details](DWG.md)); copy / paste between drawings, duplicate and line weights.
 * **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; vector PDF
   export (true lines and text instead of an image); measurement export (CSV); editing the
-  geometry inside blocks/cells and shared block-definition text; copy/paste and mirror.
+  geometry inside blocks/cells and shared block-definition text; mirror.
 * **v0.4** — WebGL renderer for very large drawings; true linetype scaling; hatch patterns;
   layouts / paper space tabs; markup resize handles and markup list panel.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
@@ -368,6 +423,10 @@ Editing and saving (v0.2):
   AutoCAD or MicroStation** yet. Please keep the original file.
 * Blocks (INSERTs) and DGN cells can be moved, rotated, restyled and deleted, but not edited
   inside. Moving a dimension gives it its own copy of its block in the saved DXF.
+* Copy / paste: DXF blocks pasted into a DGN are exploded; DGN cells pasted into a DXF stay cells
+  in Linework but are saved as separate items (DXF has no cells). A pasted DGN cell gets a new
+  header with class 0 and no attribute data of its own (its components keep theirs). Hatch pattern
+  scales are not changed when a paste is scaled between units.
 * The DXF writer writes the drawing model, not the original file: non-graphical data (layouts,
   dimension styles, extended data, plot settings, groups) is not carried over, and lineweights
   are not read. TEXT/MTEXT that you did not edit is written exactly as stored; edited MTEXT

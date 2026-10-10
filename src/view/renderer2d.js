@@ -13,7 +13,7 @@
 // Conics use Path2D.ellipse (exact at every zoom). Text is drawn with a per-text transform;
 // sub-pixel text is skipped and tiny text is "greeked" as a bar.
 
-import { KIND, FLAG } from '../scene.js';
+import { KIND, FLAG, weightPx } from '../scene.js';
 import { cssColor, THEMES } from './colors.js';
 import { buildChunks, BK, chunkGrid, chunkOf, batchStyle, newBatch, orderBase } from './batches.js';
 
@@ -158,7 +158,7 @@ export class Canvas2DRenderer {
         continue;
       }
       ctx.strokeStyle = color;
-      const wpx = g0.bk === BK.POINT ? 3 : 1 + Math.min(6, g0.weight * 0.75);
+      const wpx = g0.bk === BK.POINT ? 3 : weightPx(g0.weight, scene.format);
       ctx.lineWidth = wpx / s;
       const dash = g0.bk === BK.POINT ? null : g0.dash;
       if (dash !== lastDash) {

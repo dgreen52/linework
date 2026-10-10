@@ -11,11 +11,15 @@ import { ACI } from '../palettes.js';
 import { FG } from '../model.js';
 import { TAU } from '../geom.js';
 import { transformEntity } from '../edit/ops.js';
+import { weightToLw } from '../scene.js';
 
 const R2D = 180 / Math.PI;
 
 /** Shortest exact decimal for a number (DXF readers accept exponents). */
 export const num = (v) => (Number.isFinite(v) ? (Number.isInteger(v) ? v.toFixed(1) : String(v)) : '0.0');
+/** Integer group codes (flags, colours, counts, lineweights...) must be written without a decimal point. */
+const isInt = (c) => (c >= 60 && c < 100) || (c >= 170 && c < 180) || (c >= 270 && c < 290) || (c >= 370 && c < 390) || (c >= 400 && c < 410) || (c >= 1060 && c < 1072);
+const val = (c, v) => (typeof v !== 'number' ? String(v) : isInt(c) ? String(Math.round(v) || 0) : num(v));
 
 /** Nearest ACI index (1..255) to an RGB colour; white/black map to 7 (foreground). */
 export function nearestAci(rgb) {
@@ -131,8 +135,6 @@ export function ellipseParams(e) {
   return { c: e.c, major: [ux, uy], ratio, t0: norm(t0), t1: norm(t1) }; // end < start: wraps past 0
 }
 
-const STD_LW = [13, 18, 25, 35, 50, 70, 100, 140, 200, 211];
-
 /**
  * Serialise a model. opts: { extents: [x0,y0,x1,y1] } (world; computed roughly when absent).
  * Returns { text, notes: [..], written: { entities, splines, cellsFlattened } }.
@@ -141,7 +143,7 @@ export function writeDxf(model, opts = {}) {
   let handle = 0x20;
   const H = () => (handle++).toString(16).toUpperCase();
   const out = [];
-  const P = (c, v) => { out.push(String(c), typeof v === 'number' ? num(v) : String(v)); };
+  const P = (c, v) => { out.push(String(c), val(c, v)); };
   const stats = { entities: 0, splines: 0, cellsFlattened: 0, dimsMoved: 0, degenerate: 0 };
   const isDgn = model.format === 'DGN';
 
@@ -160,7 +162,7 @@ export function writeDxf(model, opts = {}) {
 
   // ---- entity writer (into a separate buffer so tables can list everything that was used)
   const body = [];
-  const E = (c, v) => { body.push(String(c), typeof v === 'number' ? num(v) : String(v)); };
+  const E = (c, v) => { body.push(String(c), val(c, v)); };
   const xyz = (c, p) => { E(c, p[0]); E(c + 10, p[1]); E(c + 20, 0); };
   const colorGroups = (e) => {
     if (e.rgb != null) {
@@ -175,7 +177,8 @@ export function writeDxf(model, opts = {}) {
     E(8, layerName(e.layer));
     if (e.ltype && e.ltype !== 'BYLAYER') E(6, ltypeName(e.ltype));
     colorGroups(e);
-    if (isDgn && e.weight > 0) E(370, STD_LW[Math.min(STD_LW.length - 1, e.weight - 1)]);
+    const lw = isDgn ? weightToLw(e.weight) : e.lw ?? -1; // DGN weights: see weightToLw (scene.js)
+    if (lw !== -1) E(370, lw);
     if (e.invisible) E(60, 1);
     if (sub) E(100, sub);
     stats.entities++;
@@ -459,7 +462,7 @@ export function writeDxf(model, opts = {}) {
       P(62, L.visible === false ? -aci : aci);
       P(6, safeName(layerLt(L)));
       if (L.color !== FG && L.color != null && (L.color & 0xffffff) !== ACI[aci] && !isDgn) P(420, L.color & 0xffffff);
-      P(370, -3);
+      P(370, isDgn ? -3 : L.lw ?? -3);
     }
   });
   // text styles

@@ -314,6 +314,7 @@ function tableLayer(model, g) {
   L.frozen = !!(flags & 1);
   L.visible = aci >= 0 && !L.frozen;
   L.ltype = g.s(6, 'CONTINUOUS').trim().toUpperCase() || 'CONTINUOUS';
+  L.lw = g.i(370, -3); // lineweight, 1/100 mm (-3 = default)
 }
 
 function tableLtype(model, g) {
@@ -407,6 +408,7 @@ function common(g, model) {
     ltype: g.s(6, 'BYLAYER').trim().toUpperCase() || 'BYLAYER',
     src: g.type,
   };
+  if (g.has(370)) e.lw = g.i(370); // lineweight (1/100 mm; -1 ByLayer, -2 ByBlock, -3 default); absent = ByLayer
   if (g.i(67, 0) === 1) e.paper = true;
   if (g.i(60, 0) === 1) e.invisible = true;
   return e;

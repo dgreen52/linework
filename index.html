@@ -49,6 +49,8 @@
     <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
     <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-paste" viewBox="0 0 24 24"><path d="M9 3.5h6v3H9Z M9 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-13A1.5 1.5 0 0 0 17.5 5H15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-dup" viewBox="0 0 24 24"><rect x="3" y="3" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="10" y="10" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="3 2"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></symbol>
     <symbol id="i-polyline" viewBox="0 0 24 24"><path d="M4 18 9 7l6 8 5-10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><rect x="2.5" y="16.5" width="3" height="3" fill="currentColor"/><rect x="7.5" y="5.5" width="3" height="3" fill="currentColor"/><rect x="13.5" y="13.5" width="3" height="3" fill="currentColor"/><rect x="18.5" y="3.5" width="3" height="3" fill="currentColor"/></symbol>
     <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 12h8" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2 1.6"/></symbol>
@@ -154,7 +156,11 @@
     <span class="sep" aria-hidden="true"></span>
     <label class="field" title="Layer for new items; with a selection, moves it to this layer"><span>Layer</span><select id="sel-elayer" aria-label="Layer"></select></label>
     <div class="field" title="Colour for new items; with a selection, recolours it"><span>Colour</span><button type="button" class="ecolor" id="btn-ecolor" aria-haspopup="true" aria-expanded="false"><i class="sw" id="ecolor-sw"></i><span id="ecolor-label">ByLayer</span></button></div>
+    <div class="field" title="Line weight for new items; with a selection, changes it"><span>Weight</span><button type="button" class="ecolor" id="btn-eweight" aria-haspopup="true" aria-expanded="false"><i class="lw" id="eweight-sw"></i><span id="eweight-label">ByLayer</span></button></div>
     <span class="sep" aria-hidden="true"></span>
+    <button type="button" class="tool" data-action="e-copy" id="btn-ecopy" title="Copy the selection, to paste here or into another drawing (Ctrl+C)" disabled><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span></button>
+    <button type="button" class="tool" data-action="e-paste" id="btn-epaste" title="Paste: the items follow the cursor, click to place (Ctrl+V; Ctrl+Shift+V or right-click › Paste in place: same coordinates)" disabled><svg class="ic" aria-hidden="true"><use href="#i-paste"/></svg><span>Paste</span></button>
+    <button type="button" class="tool" data-action="e-dup" id="btn-edup" title="Duplicate the selection: the copy follows the cursor, click to place (Ctrl+D; or Ctrl+drag)" disabled><svg class="ic" aria-hidden="true"><use href="#i-dup"/></svg><span>Duplicate</span></button>
     <button type="button" class="tool" data-action="e-rotate" id="btn-erotate" title="Rotate the selection 90° counter-clockwise (Shift+click: clockwise)" disabled><svg class="ic" aria-hidden="true"><use href="#i-rotate"/></svg><span>Rotate 90°</span></button>
     <button type="button" class="tool" data-action="e-delete" id="btn-edelete" title="Delete the selection (Delete)" disabled><svg class="ic" aria-hidden="true"><use href="#i-clear"/></svg><span>Delete</span></button>
     <button type="button" class="tool" data-action="undo" id="btn-eundo" title="Undo (Ctrl+Z)" disabled><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
@@ -301,6 +307,8 @@
           <dt><kbd>N</kbd> <kbd>P</kbd> <kbd>R</kbd> <kbd>O</kbd> <kbd>T</kbd></dt><dd>Line, polyline (<kbd>C</kbd> closes), rectangle, circle, text</dd>
           <dt>Type a number</dt><dd>While drawing a line: exact length, then <kbd>Enter</kbd></dd>
           <dt><kbd>Delete</kbd></dt><dd>Delete the selection</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd></dt><dd>Copy / paste, also between drawings and tabs (click places; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>: in place)</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+drag</dt><dd>Duplicate (click places) / drag a copy</dd>
           <dt><kbd>Ctrl</kbd>+<kbd>S</kbd></dt><dd>Save the drawing (in Edit) · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> save as DXF / DGN</dd>
         </dl>
       </section>

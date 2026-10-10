@@ -43,6 +43,18 @@ export function dashFromPattern(pattern) {
   return out.every((v, i) => i % 2 === 1 || v > 0) ? out : null;
 }
 
+/** DXF lineweights (1/100 mm). A DXF item's scene weight is 1 + its index here (nearest; 0 = default). */
+export const DXF_LW = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211];
+/** DGN weight n (1..31) <-> DXF lineweight: DGN_LW[n - 1] (10 and above: the last entry); weight 0 = default. */
+export const DGN_LW = [13, 18, 25, 35, 50, 70, 100, 140, 200, 211];
+export const weightToLw = (w) => (w > 0 ? DGN_LW[Math.min(DGN_LW.length, w) - 1] : -1);
+const nearest = (list, v) => { let k = 0; for (let j = 1; j < list.length; j++) if (Math.abs(list[j] - v) < Math.abs(list[k] - v)) k = j; return k; };
+/** DXF lineweight -> nearest DGN weight (below 0.10 mm and default -> 0). */
+export const lwToWeight = (lw) => (lw >= 10 ? 1 + nearest(DGN_LW, lw) : 0);
+const lwClass = (lw) => (lw >= 0 ? 1 + nearest(DXF_LW, lw) : 0);
+/** Screen width (px) of a scene weight: DGN 1 + 0.75 per step (max 7); DXF 0.25 mm = 1 px (max 8). */
+export const weightPx = (w, format) => (!w ? 1 : format === 'DGN' ? 1 + Math.min(6, w * 0.75) : Math.max(1, Math.min(8, DXF_LW[w - 1] / 25)));
+
 export class Builder {
   constructor() {
     this.kind = []; this.flags = []; this.layer = []; this.color = []; this.style = []; this.weight = [];
@@ -110,7 +122,7 @@ export function conicBBox(c, o, out) {
  */
 export function sceneTables(model, scene = null) {
   const layers = scene ? scene.layers
-    : model.layers.map((l) => ({ name: l.name, color: l.color, visible: l.visible !== false, frozen: !!l.frozen, ltype: l.ltype || 'CONTINUOUS', count: 0 }));
+    : model.layers.map((l) => ({ name: l.name, color: l.color, visible: l.visible !== false, frozen: !!l.frozen, ltype: l.ltype || 'CONTINUOUS', lw: l.lw, count: 0 }));
   const ltypes = scene ? scene.ltypes : [{ name: 'CONTINUOUS', dash: null }];
   const srcNames = scene ? scene.srcNames : [''];
   const blockNames = scene ? scene.blockNames : [''];
@@ -154,9 +166,10 @@ export function createEmitter(model, tables) {
   const srcOf = (s) => { s = s || '?'; let i = srcIdx.get(s); if (i === undefined) { i = srcNames.length; srcNames.push(s); srcIdx.set(s, i); } return i; };
   const blkOf = (s) => { let i = blkIdx.get(s); if (i === undefined) { i = blockNames.length; blockNames.push(s); blkIdx.set(s, i); } return i; };
   const blocks = model.blocks;
+  const dxfLw = model.format !== 'DGN'; // DXF lineweights (lw, 1/100 mm; -1 ByLayer, -2 ByBlock, -3 default) vs DGN weights 0..31
 
-  // ctx: { M (affine|null), layer (idx, for entities on layer 0 inside blocks), color (BYBLOCK colour), ltype (BYBLOCK), blk, depth, stack }
-  const topCtx = { M: null, layer: -1, color: FG, ltype: 0, blk: 0, depth: 0, stack: [] };
+  // ctx: { M (affine|null), layer (idx, for entities on layer 0 inside blocks), color (BYBLOCK colour), ltype (BYBLOCK), lw (BYBLOCK), blk, depth, stack }
+  const topCtx = { M: null, layer: -1, color: FG, ltype: 0, lw: -3, blk: 0, depth: 0, stack: [] };
 
   function attrsFor(e, ctx) {
     let li;
@@ -176,7 +189,9 @@ export function createEmitter(model, tables) {
     if (lt === 'BYLAYER') style = getLtype(L.ltype);
     else if (lt === 'BYBLOCK') style = ctx.ltype;
     else style = getLtype(lt);
-    return { layer: li, color, style, weight: e.weight | 0, src: srcOf(e.src || e.type), blk: ctx.blk };
+    let lw = e.lw ?? -1;
+    if (lw === -1) lw = L.lw ?? -3; else if (lw === -2) lw = ctx.lw;
+    return { layer: li, color, style, weight: dxfLw ? lwClass(lw) : e.weight | 0, lw, src: srcOf(e.src || e.type), blk: ctx.blk };
   }
 
   const xform = (M, pts) => {
@@ -388,6 +403,7 @@ export function createEmitter(model, tables) {
           layer: a.layer,
           color: a.color,
           ltype: a.style,
+          lw: a.lw,
           blk: ctx.blk || (e.type === 'insert' ? blkOf(e.block) : ctx.blk),
           depth: ctx.depth + 1,
           stack: ctx.stack,

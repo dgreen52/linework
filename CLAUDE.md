@@ -53,6 +53,7 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/view/renderer2d.js` | Canvas2D renderer (interface designed so WebGL can replace it). |
 | `src/tools/snap.js`, `measure.js` | Snaps and measurement maths (pure, unit tested). |
 | `src/markup/*` | Markup model, sidecar format (see MARKUP_FORMAT.md), history, drawing. |
+| `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings). |
 | `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. |
 | `src/worker.js` | Parse worker. |
 | `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump `VERSION`.** The DWG reader has its own cache (`READER_CACHE`). |

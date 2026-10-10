@@ -32,5 +32,6 @@ TypeScript declarations, and the C code compiled with `-O2` (configure removes i
 
 Corresponding source: the commits above and `tools/build_dwg_wasm.sh`, which fetches exactly those,
 verifies them and records them in `build-info.json` (part of the workflow artifact). Sources:
+https://github.com/dgreen52/libredwg-web (this project's copy, kept for the GPL),
 https://github.com/mlightcad/libredwg-web , LibreDWG https://git.savannah.gnu.org/git/libredwg.git .
 See DWG.md.

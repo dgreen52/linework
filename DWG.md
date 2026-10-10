@@ -106,10 +106,10 @@ bindings, every DWG fixture reads exactly as before, 1% smaller (2,146,389 bytes
 2,167,875; brotli 1,066,336 instead of 1,083,860).
 
 **Corresponding source (GPL-3.0).** `vendor/libredwg/README.md` and `NOTICE` point to the exact
-commits, and `tools/build_dwg_wasm.sh` fetches them. Those repositories belong to other people;
-before a public release with DWG support, keep a copy of the source we distribute (for example a
-fork of libredwg-web at the pinned commit, or a source archive attached to the release), because
-GPL-3.0 §6 makes the distributor responsible for the source staying available.
+commits, and `tools/build_dwg_wasm.sh` fetches them. Because GPL-3.0 §6 makes the distributor
+responsible for the source staying available, the project keeps its own copy:
+https://github.com/dgreen52/libredwg-web (a fork of mlightcad/libredwg-web holding the pinned
+commit and the v0.7.16 tag). Keep that fork in place for as long as this build is distributed.
 
 ## Testing (synthetic only)
 

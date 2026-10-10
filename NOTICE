@@ -75,7 +75,9 @@ DWG files are read by GNU LibreDWG compiled to WebAssembly
   the build flags, the build's workflow run and the SHA-256 of the files.
   Corresponding source: the libredwg-web commit above (with its jsmn
   submodule) and tools/build_dwg_wasm.sh, which fetches exactly those sources
-  and rebuilds the binary. LibreDWG itself:
+  and rebuilds the binary. This project's copy of that source (kept for as
+  long as the binary is distributed): https://github.com/dgreen52/libredwg-web
+  LibreDWG itself:
   https://git.savannah.gnu.org/git/libredwg.git
 
 The test fixture writer tools/dwg-r2000.mjs (not part of the app) writes DWG

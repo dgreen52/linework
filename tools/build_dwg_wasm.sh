@@ -59,7 +59,7 @@ set +u
 # shellcheck disable=SC1091
 source "$WORK/emsdk/emsdk_env.sh" >/dev/null 2>&1
 set -u
-EMCC_VERSION="$(emcc --version | head -n 1)"
+EMCC_VERSION="$(emcc --version 2>/dev/null | sed -n 1p)"
 echo "$EMCC_VERSION"
 case "$EMCC_VERSION" in *" $EMSDK_VERSION "*) ;; *) fail "emcc is not $EMSDK_VERSION" ;; esac
 
@@ -122,7 +122,7 @@ if [ -n "${GITHUB_RUN_ID:-}" ]; then
   RUN_COMMIT="${GITHUB_SHA:-}"
   RUN_IMAGE="${ImageOS:-} ${ImageVersion:-}"
 fi
-AUTOTOOLS="$(autoconf --version | head -n 1); $(automake --version | head -n 1); $(libtoolize --version | head -n 1)"
+AUTOTOOLS="$(autoconf --version 2>/dev/null | sed -n 1p); $(automake --version 2>/dev/null | sed -n 1p); $(libtoolize --version 2>/dev/null | sed -n 1p)"
 export EMSDK_VERSION EMSDK_COMMIT LIBREDWG_WEB_REPO LIBREDWG_WEB_TAG LIBREDWG_WEB_COMMIT JSMN_COMMIT LIBREDWG_BASE_TAG \
   LIBREDWG_BASE_COMMIT VERSION EMCC_VERSION AUTOTOOLS CONFIGURE_FLAGS CFLAGS_WASM LINK_FLAGS RUN_URL RUN_COMMIT RUN_IMAGE
 node - "$OUT/build-info.json" <<'JS'

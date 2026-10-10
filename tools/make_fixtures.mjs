@@ -167,4 +167,98 @@ out(FIX, 'edge-garbage.dxf', 'this is not a drawing\njust some text\n\u0000\u000
   w.line([297, 0], [297, 210], { layer: 'SHEET', paper: true });
   out(FIX, 'edge-paperspace.dxf', w.toString());
 }
+// 14) entity and table variants for the DWG reader (converted to DWG by make_dwg_fixtures.mjs):
+//     hidden layers, line types, OCS, 3D polylines, meshes, text alignments, MINSERT, constant
+//     attributes, hatch edges and patterns, weighted and fit-point splines, more dimension types,
+//     leaders, 3DFACE/TRACE, invisible items, paper space
+{
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.ltype('DASHED', 'Dashed __ __', [10, -5]);
+  w.style('NARROW', { width: 0.8, oblique: 10 });
+  w.layer('VIS', 1).layer('OFF', 3, 'CONTINUOUS', { off: true }).layer('FROZEN', 4, 'CONTINUOUS', { frozen: true }).layer('DASH', 5, 'DASHED').layer('TXT', 2).layer('MESH', 6).layer('HATCH', 8).layer('DIM', 3);
+  const L = (layer, extra = {}) => ({ layer, ...extra });
+  w.line([0, 0], [50, 0], L('VIS', { color: 2 }));
+  w.line([0, 5], [50, 5], L('VIS', { ltype: 'DASHED' }));
+  w.line([0, 10], [50, 10], L('DASH'));
+  w.line([0, 15], [50, 15], L('DASH', { ltype: 'CONTINUOUS' }));
+  w.line([0, 20], [50, 20], L('OFF'));
+  w.line([0, 25], [50, 25], L('FROZEN'));
+  w.line([0, 30], [50, 30], L('VIS', { invisible: true }));
+  w.line([0, 35], [50, 35], L('NOT_IN_TABLE'));
+  w.point([60, 0], L('VIS'));
+  w.circle([70, 10], 4, L('VIS', { extrusion: [0, 0, -1] }));
+  w.arc([80, 10], 5, 20, 160, L('VIS', { extrusion: [0, 0, -1] }));
+  w.ellipse([100, 10], [8, 3], 0.5, 0.5, 2.5, L('VIS'));
+  w.lwpolyline([[110, 0, 0.5], [130, 0, 0], [130, 15, -0.3], [110, 15]], true, L('VIS', { elevation: 2 }));
+  w.polyline([[140, 0, 0], [150, 0, 0.4], [150, 10, 0], [140, 10, 0]], true, L('VIS'));
+  // 3D polyline
+  w.raw('POLYLINE', [[8, 'MESH'], [66, 1], [10, 0], [20, 0], [30, 0], [70, 8 | 1]], 'AcDb3dPolyline');
+  for (const [x, y, z] of [[0, 50, 0], [10, 55, 3], [20, 50, 6], [15, 40, 2]]) w.raw('VERTEX', [[8, 'MESH'], [10, x], [20, y], [30, z], [70, 32]], 'AcDb3dPolylineVertex');
+  w.raw('SEQEND', [[8, 'MESH']]);
+  // polyface mesh: 4 vertices, 2 faces (the second with a hidden edge)
+  w.raw('POLYLINE', [[8, 'MESH'], [66, 1], [10, 0], [20, 0], [30, 0], [70, 64], [71, 4], [72, 2]], 'AcDbPolyFaceMesh');
+  for (const [x, y] of [[30, 40], [45, 40], [45, 55], [30, 55]]) w.raw('VERTEX', [[8, 'MESH'], [10, x], [20, y], [30, 0], [70, 192]], 'AcDbPolyFaceMeshVertex');
+  w.raw('VERTEX', [[8, 'MESH'], [10, 0], [20, 0], [30, 0], [70, 128], [71, 1], [72, 2], [73, 3]], 'AcDbFaceRecord');
+  w.raw('VERTEX', [[8, 'MESH'], [10, 0], [20, 0], [30, 0], [70, 128], [71, 1], [72, -3], [73, 4]], 'AcDbFaceRecord');
+  w.raw('SEQEND', [[8, 'MESH']]);
+  // 2 x 3 polygon mesh
+  w.raw('POLYLINE', [[8, 'MESH'], [66, 1], [10, 0], [20, 0], [30, 0], [70, 16], [71, 2], [72, 3]], 'AcDbPolygonMesh');
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) w.raw('VERTEX', [[8, 'MESH'], [10, 60 + j * 8], [20, 40 + i * 10], [30, i + j], [70, 64]], 'AcDbPolygonMeshVertex');
+  w.raw('SEQEND', [[8, 'MESH']]);
+  w.raw('3DFACE', [[8, 'MESH'], [10, 90], [20, 40], [30, 0], [11, 100], [21, 40], [31, 0], [12, 100], [22, 50], [32, 0], [13, 90], [23, 50], [33, 0], [70, 2]], 'AcDbFace');
+  w.raw('TRACE', [[8, 'MESH'], [10, 110], [20, 40], [30, 0], [11, 120], [21, 40], [31, 0], [12, 110], [22, 44], [32, 0], [13, 120], [23, 44], [33, 0]], 'AcDbTrace');
+  w.solid([[125, 40], [135, 40], [130, 48]], L('MESH'));
+  // splines: weighted (rational) control points, and fit points only
+  {
+    const ctrl = [[0, 70], [10, 80], [20, 70], [30, 80]], wts = [1, 2, 0.5, 1], deg = 3, n = 4;
+    const g = [[8, 'VIS'], [70, 8 | 4], [71, deg], [72, n + deg + 1], [73, n], [74, 0]];
+    for (const k of [0, 0, 0, 0, 1, 1, 1, 1]) g.push([40, k]);
+    ctrl.forEach((c, i) => g.push([10, c[0]], [20, c[1]], [30, 0], [41, wts[i]]));
+    w.raw('SPLINE', g, 'AcDbSpline');
+    const f = [[8, 'VIS'], [70, 8], [71, 3], [72, 0], [73, 0], [74, 5], [44, 1e-10]];
+    for (const [x, y] of [[40, 70], [45, 78], [52, 72], [58, 80], [65, 74]]) f.push([11, x], [21, y], [31, 0]);
+    w.raw('SPLINE', f, 'AcDbSpline');
+  }
+  // text: alignments, rotation, width, oblique, style, mirrored; MTEXT rotated with a width
+  w.text('CENTER', [0, 100], { h: 3, halign: 1 }, L('TXT'));
+  w.text('RIGHT', [40, 100], { h: 3, halign: 2 }, L('TXT'));
+  w.text('MIDDLE', [80, 100], { h: 3, halign: 4 }, L('TXT'));
+  w.text('ALIGNED', [0, 110], { h: 3, halign: 3, at2: [30, 115] }, L('TXT'));
+  w.text('FIT', [40, 110], { h: 3, halign: 5, at2: [70, 110] }, L('TXT'));
+  w.text('TOP LEFT', [80, 110], { h: 3, halign: 0, valign: 3 }, L('TXT'));
+  w.text('BASE CENTER', [0, 120], { h: 3, halign: 1, valign: 1 }, L('TXT'));
+  w.text('ROTATED NARROW', [40, 120], { h: 3, rot: 30, width: 0.8, oblique: 15, style: 'NARROW' }, L('TXT'));
+  w.text('MIRRORED', [80, 120], { h: 3, mirror: 2 }, L('TXT'));
+  w.mtext('Rotated multi-line\\Ptext with a width', [0, 140], { h: 2.5, width: 40, attach: 5, rot: 15 }, L('TXT'));
+  // blocks: variable + constant attributes, non-uniform scale + rotation, MINSERT, BYBLOCK line type
+  w.block('TAG', [0, 0], (b) => {
+    b.circle([0, 0], 3, { layer: '0', ltype: 'BYBLOCK' });
+    b.attdef('ID', 'Identifier', '?', [-2, -1], { h: 2 }, { layer: '0' });
+    b.attdef('KIND', 'Kind', 'VALVE', [-2, -5], { h: 1.5, constant: true }, { layer: '0' });
+  });
+  w.insert('TAG', [100, 70], { attribs: [{ tag: 'ID', value: 'V-101', at: [98, 69], h: 2 }, { tag: 'NOTE', value: 'hidden', at: [98, 66], h: 1, invisible: true }] }, L('VIS', { ltype: 'DASHED' }));
+  w.insert('TAG', [120, 70], { sx: 2, sy: 0.5, rot: 30 }, L('VIS'));
+  w.insert('TAG', [140, 60], { cols: 3, rows: 2, dc: 8, dr: 9 }, L('VIS'));
+  // hatches: edges with an elliptic arc, a pattern with two dashed lines and a seed point
+  w.hatchEdges([{ type: 'line', a: [0, 160], b: [20, 160] }, { type: 'arc', c: [20, 165], r: 5, a0: -90, a1: 90 }, { type: 'line', a: [20, 170], b: [0, 170] }, { type: 'line', a: [0, 170], b: [0, 160] }], { solid: true }, L('HATCH'));
+  w.raw('HATCH', [[8, 'HATCH'], [10, 0], [20, 0], [30, 0], [210, 0], [220, 0], [230, 1], [2, 'NET'], [70, 0], [71, 0], [91, 1],
+    [92, 1], [93, 2], [72, 1], [10, 40], [20, 160], [11, 60], [21, 160], [72, 3], [10, 50], [20, 160], [11, 10], [21, 0], [40, 0.6], [50, 0], [51, 180], [73, 1], [97, 0],
+    [75, 1], [76, 1], [52, 0], [41, 1], [77, 0], [78, 2],
+    [53, 0], [43, 0], [44, 0], [45, 0], [46, 3], [79, 2], [49, 2], [49, -1],
+    [53, 90], [43, 0], [44, 0], [45, -3], [46, 0], [79, 0],
+    [98, 1], [10, 50], [20, 162]], 'AcDbHatch');
+  // dimensions without blocks (drawn from their definition points) and one with a block
+  w.raw('DIMENSION', [[8, 'DIM'], [2, ''], [10, 10], [20, 190], [30, 0], [11, 5], [21, 192], [31, 0], [70, 1], [1, ''], [13, 0], [23, 185], [33, 0], [14, 10], [24, 185], [34, 0], [42, 10]], 'AcDbDimension');
+  w.raw('DIMENSION', [[8, 'DIM'], [2, ''], [10, 30], [20, 190], [30, 0], [11, 34], [21, 194], [31, 0], [70, 4], [1, 'R5'], [15, 35], [25, 190], [35, 0], [40, 2]], 'AcDbDimension');
+  w.raw('DIMENSION', [[8, 'DIM'], [2, ''], [10, 50], [20, 190], [30, 0], [11, 55], [21, 194], [31, 0], [70, 3], [1, '%%c10'], [15, 60], [25, 190], [35, 0], [40, 0]], 'AcDbDimension');
+  w.raw('DIMENSION', [[8, 'DIM'], [2, ''], [10, 80], [20, 190], [30, 0], [11, 85], [21, 195], [31, 0], [70, 5], [1, ''], [13, 90], [23, 190], [33, 0], [14, 85], [24, 198], [34, 0], [15, 80], [25, 190], [35, 0]], 'AcDbDimension');
+  w.raw('DIMENSION', [[8, 'DIM'], [2, ''], [10, 0], [20, 0], [30, 0], [11, 105], [21, 195], [31, 0], [70, 6 | 64], [1, ''], [13, 100], [23, 190], [33, 0], [14, 105], [24, 195], [34, 0]], 'AcDbDimension');
+  w.linearDim([120, 185], [150, 185], [135, 195], 0, {}, L('DIM'));
+  w.leader([[160, 190], [170, 198], [180, 198]], L('DIM'));
+  w.raw('LEADER', [[8, 'DIM'], [3, 'STANDARD'], [71, 0], [72, 0], [73, 3], [76, 2], [10, 160], [20, 180], [30, 0], [10, 175], [20, 182], [30, 0]], 'AcDbLeader');
+  // paper space (model space is not empty, so these are reported, not drawn)
+  w.line([0, 0], [100, 0], { layer: 'VIS', paper: true });
+  w.text('SHEET NOTE', [0, 5], { h: 3 }, { layer: 'TXT', paper: true });
+  out(FIX, 'edge-dwg-coverage.dxf', w.toString());
+}
 console.log('done');

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Linework · CAD drawing viewer, markup &amp; editor</title>
-<meta name="description" content="Open, measure, mark up and edit DXF and DGN v7 drawings in your browser. Files never leave your device. Works offline.">
+<meta name="description" content="Open, measure, mark up and edit DXF, DWG and DGN v7 drawings in your browser. Files never leave your device. Works offline.">
 <meta name="theme-color" content="#16191e">
 <meta name="color-scheme" content="dark light">
 <link rel="manifest" href="manifest.webmanifest">
@@ -63,7 +63,7 @@
 
 <header class="topbar">
   <div class="brand" aria-label="Linework"><svg class="ic" aria-hidden="true"><use href="#i-logo"/></svg><span data-app-name>Linework</span></div>
-  <button type="button" class="btn primary" id="btn-open" title="Open a DXF or DGN drawing (Ctrl+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open</span></button>
+  <button type="button" class="btn primary" id="btn-open" title="Open a drawing (Ctrl+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open</span></button>
   <div class="docinfo" id="docinfo" hidden>
     <span class="docname" id="doc-name"></span>
     <span class="dirty" id="doc-dirty" hidden title="The drawing has edits that are not saved yet. Edit › Save downloads a copy.">•<span class="hide-sm"> unsaved</span></span>
@@ -174,7 +174,7 @@
       <div class="empty-card">
         <svg class="ic hero" aria-hidden="true"><use href="#i-logo"/></svg>
         <h1 id="empty-title">Open a CAD drawing</h1>
-        <p class="lead">View, measure, mark up and edit <strong>DXF</strong> and <strong>DGN v7</strong> drawings in your browser.</p>
+        <p class="lead">View, measure, mark up and edit <strong>DXF</strong>, <strong>DWG</strong> and <strong>DGN v7</strong> drawings in your browser.</p>
         <button type="button" class="btn primary big" id="btn-open-empty"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg>Open a drawing…</button>
         <p class="hint">or drag a file anywhere onto this window</p>
         <p class="promise"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg><span><strong>Your files never leave this device.</strong> Nothing is uploaded — the drawing is read inside this browser tab, and it keeps working offline.</span></p>
@@ -186,7 +186,7 @@
           <button type="button" class="sample" data-sample="samples/site-plan.dgn"><strong>Site plan</strong><span>DGN v7 · levels, cells, curves</span></button>
           <button type="button" class="sample" data-sample="stress"><strong>Stress test</strong><span>DXF · 53,100 items, generated</span></button>
         </div>
-        <p class="formats">Opens DXF (ASCII, R12 to 2018) and DGN v7. DWG support is coming — export to DXF for now.</p>
+        <p class="formats">Opens DXF (ASCII, R12 to 2018), DWG (R13 to 2018) and DGN v7.</p>
       </div>
     </section>
 
@@ -251,7 +251,7 @@
   <span class="st hide-sm" id="st-perf"></span>
 </footer>
 
-<div class="drop-overlay" id="drop-overlay" hidden><div>Drop the drawing to open it<small>DXF · DGN v7 · or a .markup.json file</small></div></div>
+<div class="drop-overlay" id="drop-overlay" hidden><div>Drop the drawing to open it<small>DXF · DWG · DGN v7 · or a .markup.json file</small></div></div>
 
 <dialog id="dlg-help" aria-labelledby="help-title">
   <form method="dialog" class="dlg">

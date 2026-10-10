@@ -1,7 +1,7 @@
 {
   "name": "Linework — CAD drawing viewer & markup",
   "short_name": "Linework",
-  "description": "Open, measure and mark up DXF and DGN v7 drawings. Files never leave your device. Works offline.",
+  "description": "Open, measure and mark up DXF, DWG and DGN v7 drawings. Files never leave your device. Works offline.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -17,6 +17,7 @@
       "action": "./",
       "accept": {
         "image/vnd.dxf": [".dxf"],
+        "image/vnd.dwg": [".dwg"],
         "application/octet-stream": [".dgn"]
       }
     }

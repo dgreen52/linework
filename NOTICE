@@ -45,11 +45,43 @@ Frank Warmerdam and Even Rouault. Licence text:
   DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
+GNU LibreDWG  (https://www.gnu.org/software/libredwg/)  -  GPL-3.0-or-later
+------------------------------------------------------------------------------
+DWG files are read by GNU LibreDWG compiled to WebAssembly
+(vendor/libredwg/libredwg-web.wasm), loaded only when a DWG is opened.
+
+* LibreDWG is Copyright (C) the Free Software Foundation, Inc., and is free
+  software: you can redistribute it and/or modify it under the terms of the
+  GNU General Public License as published by the Free Software Foundation,
+  either version 3 of the License, or (at your option) any later version.
+  The binary identifies itself as a LibreDWG 0.13.3 development snapshot.
+* The WebAssembly build and its JavaScript bindings come from the libredwg-web
+  project (https://github.com/mlightcad/libredwg-web, npm package
+  @mlightcad/libredwg-web 0.7.16, GPL-3.0).
+* Also linked into that binary: the Emscripten runtime and system libraries
+  (MIT / University of Illinois NCSA; musl libc: MIT; LLVM libc++ and
+  libc++abi: Apache-2.0 WITH LLVM-exception), mimalloc (MIT, Microsoft
+  Corporation) and zlib (zlib licence, Jean-loup Gailly and Mark Adler).
+  All of these are compatible with the GPL-3.0 licence of this app.
+* vendor/libredwg/README.md records the exact provenance, the two changes made
+  by tools/vendor_libredwg.mjs (no run-time code generation in the glue; a
+  smaller initial memory) and the SHA-256 of the files. Source code:
+  https://git.savannah.gnu.org/git/libredwg.git (LibreDWG) and the libredwg-web
+  repository above (bindings and build scripts); tools/build_dwg_wasm.sh
+  documents how to rebuild the binary from pinned sources (see DWG.md).
+
+The test fixture writer tools/dwg-r2000.mjs (not part of the app) writes DWG
+R2000 files from the publicly available "Open Design Specification for .dwg
+files" (Open Design Alliance). No vendor software was decompiled,
+disassembled or copied.
+
+------------------------------------------------------------------------------
 File formats
 ------------------------------------------------------------------------------
 The DXF reader and writer (src/formats/dxf.js, dxf-write.js) were written from
 the publicly published DXF reference. No vendor software was decompiled, disassembled or copied.
-"DXF" and "DGN" are used only to name the file formats this app opens.
+src/formats/dwg.js maps the objects LibreDWG decodes to the same DXF semantics.
+"DXF", "DWG" and "DGN" are used only to name the file formats this app opens.
 
 ------------------------------------------------------------------------------
 Not bundled

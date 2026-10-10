@@ -1022,6 +1022,7 @@ export function initEdit(app, api) {
   }
   function saveNotes(f) {
     const m = model(), src = m ? m.format : srcFormat(), notes = [];
+    if (src === 'DWG') notes.push('Opened from a DWG. Linework does not write DWG: save a DXF copy (recommended) or DGN v7. DWG-only data (layouts, dimension styles) is not kept.');
     if (src === 'DGN' && f === 'DGN') notes.push('Untouched items stay exactly as they were; edited items are added at the end of the file.');
     if (src === 'DGN' && f === 'DXF') notes.push('Cells are saved as separate items; DGN levels become layers.');
     if (src !== 'DGN' && f === 'DGN') notes.push('Layers become DGN levels 1–63 (DGN v7 has no layer names); blocks are flattened; fills become outlines.');
@@ -1047,6 +1048,7 @@ export function initEdit(app, api) {
       blob = new Blob([r.text], { type: 'application/dxf' });
       notes = r.notes;
     }
+    if (m.format === 'DWG') notes.unshift(`Linework does not write DWG, so this is a ${f} copy.`);
     download(blob, name);
     E.doc.markSaved();
     updateDirty();

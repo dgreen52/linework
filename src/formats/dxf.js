@@ -180,7 +180,11 @@ export function parseDxf(input, { onProgress } = {}) {
   }
   const model = createModel('DXF');
   model.header.encoding = encoding;
-  const R = new PairReader(text, onProgress);
+  return readDxf(new PairReader(text, onProgress), model);
+}
+
+/** Shared with dwg.js (R: any group-pair reader). */
+export function readDxf(R, model) {
   const ctx = { model, R, styles: {}, dimasz: 0, dimscale: 1, dimtxt: 0 };
   ensureLayer(model, '0', FG);
   let sawSection = false;

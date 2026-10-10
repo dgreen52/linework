@@ -249,7 +249,8 @@ test('edge: binary DXF, DWG, garbage and empty input give friendly errors', () =
   assert.equal(detectFormat(bytes('edge-binary.dxf'), 'edge-binary.dxf'), 'dxf-binary');
   assert.throws(() => parseDrawing(bytes('edge-binary.dxf'), 'x.dxf'), (e) => e.code === 'binary-dxf' && /ASCII DXF/.test(e.message));
   assert.equal(detectFormat(bytes('edge-fake.dwg'), 'edge-fake.dwg'), 'dwg');
-  assert.throws(() => parseDrawing(bytes('edge-fake.dwg'), 'x.dwg'), (e) => e.code === 'dwg' && /export the drawing to DXF/.test(e.message));
+  // DWG needs the asynchronous WebAssembly reader (its friendly errors: tests/unit/dwg.test.mjs)
+  assert.throws(() => parseDrawing(bytes('edge-fake.dwg'), 'x.dwg'), (e) => e.code === 'dwg-async' && /parseDrawingAsync/.test(e.message));
   assert.throws(() => parseDrawing(bytes('edge-garbage.dxf'), 'edge-garbage.dxf'), (e) => !!e.code);
   assert.throws(() => parseDrawing(new Uint8Array(0), 'empty.dxf'), (e) => e.code === 'empty');
 });

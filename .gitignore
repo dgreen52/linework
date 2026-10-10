@@ -6,3 +6,5 @@ tests/e2e/screens/*.tmp.png
 .DS_Store
 Thumbs.db
 tests/fixtures/stress-50k.dxf
+dist/
+.build-dwg/

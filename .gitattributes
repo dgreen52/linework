@@ -2,3 +2,6 @@
 *.png binary
 *.dgn binary
 *.dxf -text
+*.dwg binary
+*.wasm binary
+vendor/** -text

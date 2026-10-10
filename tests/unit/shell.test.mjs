@@ -10,16 +10,26 @@ const rel = (p) => relative(ROOT, p).split(sep).join('/');
 const sw = readFileSync(join(ROOT, 'sw.js'), 'utf8');
 const shellBlock = sw.slice(sw.indexOf('const SHELL = ['), sw.indexOf('];', sw.indexOf('const SHELL = [')));
 const SHELL = [...shellBlock.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+const listIn = (name) => { const i = sw.indexOf(`const ${name} = [`); return i < 0 ? [] : [...sw.slice(i, sw.indexOf('];', i)).matchAll(/'([^']+)'/g)].map((m) => m[1]); };
+const ON_DEMAND = listIn('ON_DEMAND'), READER = listIn('READER');
 
-test('service worker precaches every app module and sample, and every entry exists', () => {
+test('service worker precaches every app module and sample (or caches it on first use), and every entry exists', () => {
   const needed = [...walk(join(ROOT, 'src')), ...walk(join(ROOT, 'samples'))].map(rel).filter((p) => /\.(js|dxf|dgn)$/.test(p) && !p.endsWith('samples.js'));
-  for (const p of needed) assert.ok(SHELL.includes(p), `sw.js SHELL is missing ${p} (and bump VERSION)`);
-  for (const p of SHELL) if (p !== './') assert.ok(existsSync(join(ROOT, p)), `SHELL entry ${p} does not exist`);
+  for (const p of needed) assert.ok(SHELL.includes(p) !== ON_DEMAND.includes(p), `sw.js SHELL (or ON_DEMAND) is missing ${p} (and bump VERSION)`);
+  for (const p of [...SHELL, ...ON_DEMAND, ...READER]) if (p !== './') assert.ok(existsSync(join(ROOT, p)), `sw.js entry ${p} does not exist`);
   for (const p of ['index.html', 'app.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png']) assert.ok(SHELL.includes(p), p);
+  // only the DWG reader is loaded on demand; it is never part of the precached shell
+  assert.deepEqual(ON_DEMAND, ['src/formats/dwg.js']);
+  assert.deepEqual(READER, ['vendor/libredwg/libredwg-web.js', 'vendor/libredwg/libredwg-web.wasm']);
+  for (const p of READER) assert.ok(!SHELL.includes(p));
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  assert.ok(sw.includes(`const VERSION = 'linework-${pkg.version}'`), 'sw.js VERSION matches package.json');
+  const rev = /READER_REV = '([^']+)'/.exec(readFileSync(join(ROOT, 'src/formats/dwg.js'), 'utf8'))[1];
+  assert.ok(sw.includes(`READER_CACHE = 'linework-reader-libredwg-${rev}'`), 'reader cache name follows READER_REV (bump both together)');
 });
 
 test('no network dependencies: no external URLs or CDNs in the app shell', () => {
-  const files = ['index.html', 'app.css', 'sw.js', 'manifest.webmanifest', ...walk(join(ROOT, 'src')).map(rel)];
+  const files = ['index.html', 'app.css', 'sw.js', 'manifest.webmanifest', ...walk(join(ROOT, 'src')).map(rel), 'vendor/libredwg/libredwg-web.js'];
   for (const f of files) {
     const s = readFileSync(join(ROOT, f), 'utf8');
     const urls = (s.match(/https?:\/\/[^\s'")]+/g) || []).filter((u) => !/^http:\/\/www\.w3\.org\//.test(u));
@@ -49,4 +59,29 @@ test('colour tokens meet WCAG AA contrast for text in both themes', () => {
     assert.ok(ratio(t['accent-text'], t.accent) >= 4.5, `${sel} primary button text`);
     assert.ok(ratio(t.accent, t['bg-2']) >= 3, `${sel} accent (icons, focus) on panels`);
   }
+});
+
+test('deploy: dist/ holds every file the site needs (shell, on-demand modules, DWG reader, headers, licence) and nothing else', async () => {
+  const { distEntries } = await import('../../tools/make_dist.mjs');
+  const deployed = new Set(distEntries().map(([, to]) => to));
+  for (const p of [...SHELL, ...ON_DEMAND, ...READER, '_headers', 'LICENSE', 'NOTICE', 'vendor/libredwg/README.md']) if (p !== './') assert.ok(deployed.has(p), `dist is missing ${p}`);
+  for (const p of deployed) assert.ok(!/^(tests|tools|deploy|node_modules|dist)\//.test(p) && !p.startsWith('.'), `dist should not contain ${p}`);
+});
+
+test('deploy/_headers: CSP allows WebAssembly but not eval; reader cached long with the wasm type; shell revalidated', async () => {
+  const { headersFor } = await import('../../tools/serve.mjs');
+  const root = headersFor('/index.html');
+  const csp = root['Content-Security-Policy'];
+  assert.match(csp, /script-src 'self' 'wasm-unsafe-eval';/);
+  assert.ok(!/'unsafe-eval'/.test(csp.replace(/'wasm-unsafe-eval'/g, '')), 'no unsafe-eval');
+  for (const d of ["default-src 'self'", "worker-src 'self'", "connect-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "form-action 'none'", "base-uri 'self'"]) assert.ok(csp.includes(d), d);
+  assert.equal(root['X-Content-Type-Options'], 'nosniff');
+  assert.equal(root['X-Frame-Options'], 'DENY');
+  assert.equal(root['Referrer-Policy'], 'no-referrer');
+  assert.equal(root['Strict-Transport-Security'], 'max-age=31536000; includeSubDomains');
+  for (const p of ['/', '/index.html', '/sw.js']) assert.equal(headersFor(p)['Cache-Control'], 'no-cache', p);
+  const wasm = headersFor('/vendor/libredwg/libredwg-web.wasm');
+  assert.match(wasm['Cache-Control'], /max-age=31536000/);
+  assert.equal(wasm['Content-Type'], 'application/wasm');
+  assert.equal(headersFor('/src/app.js')['Cache-Control'], undefined, 'app code: host default (revalidated by the service worker)');
 });

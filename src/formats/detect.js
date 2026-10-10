@@ -35,10 +35,16 @@ export function parseDrawing(bytes, name = '', opts = {}) {
     case 'dxf-binary':
       throw new FormatError('binary-dxf', 'Binary DXF is not supported yet. Please save the drawing as an ASCII DXF and open that instead.');
     case 'dwg':
-      throw new FormatError('dwg', 'DWG support is coming. For now, export the drawing to DXF (File › Save As › DXF in most CAD programs) and open the DXF.');
+      throw new FormatError('dwg-async', 'Use parseDrawingAsync for DWG.');
     case 'dgn-v8':
       throw new FormatError('dgn-v8', 'This looks like a DGN v8 file. Only DGN v7 is supported in this version. Save it as DGN v7 or export to DXF.');
     default:
-      throw new FormatError('unknown', `"${name || 'This file'}" is not a drawing this app can open. Supported: DXF (ASCII) and DGN v7.`);
+      throw new FormatError('unknown', `"${name || 'This file'}" is not a drawing this app can open. Supported: DXF (ASCII), DWG (R13 to 2018) and DGN v7.`);
   }
+}
+
+/** Async version: a DWG loads the DWG reader on first use. */
+export async function parseDrawingAsync(bytes, name = '', opts = {}) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  return b.length && detectFormat(b, name) === 'dwg' ? (await import('./dwg.js')).parseDwg(b, opts) : parseDrawing(b, name, opts);
 }

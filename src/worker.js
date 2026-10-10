@@ -4,7 +4,7 @@
 // After 'done', the drawing model (needed for editing and saving) follows in small pieces so the
 // main thread never spends long deserialising it: { id, type: 'model-part', entities } ... then
 // { id, type: 'model', meta, paperEntities, bytes? } (bytes = the original file, DGN only).
-import { parseDrawing } from './formats/detect.js';
+import { parseDrawingAsync } from './formats/detect.js';
 import { buildScene, sceneTransferables, packTexts } from './scene.js';
 import { buildChunks, chunkTransferables } from './view/batches.js';
 
@@ -25,7 +25,8 @@ export async function loadInWorkerScope(msg, post) {
     last = now;
     post({ id, type: 'progress', phase, fraction: base + span * f });
   };
-  const model = parseDrawing(bytes, name, { onProgress: progress('Reading', 0, 0.7) });
+  const onPhase = (phase, fraction, watch) => post({ id, type: 'progress', phase, fraction, watch });
+  const model = await parseDrawingAsync(bytes, name, { onProgress: progress('Reading', 0, 0.7), onPhase });
   const scene = buildScene(model, { fileName: name, onProgress: progress('Preparing', 0.7, 0.3) });
   scene.fileSize = bytes.length;
   return { scene, model, bytes: model.format === 'DGN' ? bytes : null };

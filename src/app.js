@@ -350,8 +350,11 @@ function getWorker() {
       if (m.type === 'model-part' || m.type === 'model') { modelMessage(m); return; }
       const job = jobs.get(m.id);
       if (!job) return;
-      if (m.type === 'progress') job.progress(m.phase, m.fraction);
-      else { jobs.delete(m.id); if (m.type === 'done') job.resolve(Object.assign(unpackTexts(m.scene), { jobId: m.id })); else job.reject(Object.assign(new Error(m.message), { code: m.code })); }
+      if (m.type === 'progress') {
+        job.progress(m.phase, m.fraction);
+        // a DWG read blocks the worker: limit its time (a new worker starts next time)
+        if (m.watch) job.timer = setTimeout(() => { worker?.terminate?.(); worker = null; jobs.clear(); job.reject(Object.assign(new Error('This DWG took too long to read; save it as DXF and open that.'), { code: 'dwg-timeout' })); }, app.readTimeLimitMs);
+      } else { jobs.delete(m.id); clearTimeout(job.timer); if (m.type === 'done') job.resolve(Object.assign(unpackTexts(m.scene), { jobId: m.id })); else job.reject(Object.assign(new Error(m.message), { code: m.code })); }
     };
     worker.onerror = (e) => {
       e.preventDefault?.();
@@ -364,6 +367,8 @@ function getWorker() {
   }
   return worker || null;
 }
+
+app.readTimeLimitMs = 120000;
 
 // the drawing model (for editing/saving) follows the scene in pieces; see worker.js
 const modelParts = new Map();
@@ -422,7 +427,7 @@ async function openDrawing(name, buffer, size, sample) {
     setDocument(scene, name, size ?? scene.fileSize, performance.now() - t0);
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
-    toast(msg, { kind: 'error', detail: e && e.code === 'dwg' ? 'DWG files are not opened in this version.' : undefined });
+    toast(msg, { kind: 'error' });
   } finally {
     app.loading = false;
     hideProgress();

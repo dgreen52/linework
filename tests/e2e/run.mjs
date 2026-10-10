@@ -16,7 +16,8 @@ mkdirSync(OUT, { recursive: true });
 const FIX = (n) => (existsSync(join(ROOT, 'samples', n)) ? join(ROOT, 'samples', n) : join(ROOT, 'tests', 'fixtures', n));
 const filter = process.argv[2] || '';
 
-const server = await startServer(0);
+const requests = []; // every URL path the server was asked for (to check what loads when)
+const server = await startServer(0, '127.0.0.1', { onRequest: (p) => requests.push(p) });
 const BASE = `http://127.0.0.1:${server.address().port}/`;
 const browser = await launch();
 const results = [];
@@ -41,7 +42,7 @@ async function newPage(opts = {}) {
   return page;
 }
 async function close(page) {
-  const errs = page.errors.filter((e) => !/Failed to load resource.*(favicon)/.test(e));
+  const errs = page.errors.filter((e) => !/Failed to load resource.*(favicon)/.test(e) && !(page.allowErrors || []).some((re) => re.test(e)));
   await page.ctx.close();
   assert(!errs.length, 'no console errors: ' + errs.join(' | '));
 }
@@ -138,7 +139,7 @@ test('open every fixture; friendly errors for unsupported files', async () => {
   await openFixture(page, 'edge-crlf-cp1252.dxf');
   await openFixture(page, 'edge-truncated.dxf');
   // errors never crash the app; the previous drawing stays open
-  for (const [file, re] of [['edge-fake.dwg', /DWG support is coming/], ['edge-binary.dxf', /Binary DXF is not supported/], ['edge-garbage.dxf', /not a drawing|not a DXF/]]) {
+  for (const [file, re] of [['edge-fake.dwg', /This DWG could not be read; save it as DXF and open that/], ['edge-binary.dxf', /Binary DXF is not supported/], ['edge-garbage.dxf', /not a drawing|not a DXF/]]) {
     await clearToasts(page);
     await page.setInputFiles('#file-input', FIX(file));
     await page.waitForSelector('.toast.error');
@@ -1204,6 +1205,151 @@ test('edit: double-click a text inside a cell (DGN title block) or a block attri
   await zoomTo(page, at.shared.at[0] - sw * 3, at.shared.at[1] - sw * 2, at.shared.at[0] + sw * 3, at.shared.at[1] + sw * 2);
   await page.mouse.dblclick(...(await client(page, ...at.shared.at)));
   await page.waitForFunction(() => /shared by every copy/.test(document.querySelector('#tool-hint').textContent));
+  await close(page);
+});
+
+// ------------------------------------------------------------------ v0.3: DWG (LibreDWG WebAssembly)
+const SW_SRC = readFileSync(join(ROOT, 'sw.js'), 'utf8');
+const READER_CACHE = /READER_CACHE = '([^']+)'/.exec(SW_SRC)[1];
+const readerRequests = () => requests.filter((p) => /\/vendor\/libredwg\/|\/src\/formats\/dwg\.js$/.test(p)).map((p) => p.split('/').pop());
+
+test('DWG: the reader loads only when a DWG is opened; open + measure under the deployed CSP (wasm-unsafe-eval, no unsafe-eval)', async () => {
+  const page = await newPage();
+  const csp = await page.evaluate(async () => (await fetch('index.html', { method: 'HEAD' })).headers.get('content-security-policy'));
+  assert(/script-src 'self' 'wasm-unsafe-eval';/.test(csp) && !/'unsafe-eval'/.test(csp.replace(/'wasm-unsafe-eval'/g, '')), 'page served with the deployed CSP: ' + csp);
+  // the CSP is enforced: code compiled from a string by the page itself is refused (DevTools'
+  // page.evaluate is exempt, so the string goes through a timer)
+  const evalBlocked = await page.evaluate(() => new Promise((res) => {
+    document.addEventListener('securitypolicyviolation', (e) => res(`${e.violatedDirective} ${e.blockedURI}`), { once: true });
+    setTimeout('window.__ranFromString = true', 0); // eslint-disable-line no-implied-eval
+    setTimeout(() => res(window.__ranFromString ? 'ran' : 'no report'), 1000);
+  }));
+  assert(/^script-src/.test(evalBlocked) && /eval/.test(evalBlocked), 'the CSP blocks eval: ' + evalBlocked);
+  page.allowErrors = [/Evaluating a string as JavaScript violates|Refused to evaluate a string/]; // the expected report of that test
+  requests.length = 0;
+  await openFixture(page, 'house-plan.dxf');
+  const dxfItems = await page.evaluate(() => window.__linework.scene.n + window.__linework.scene.textCount);
+  await openFixture(page, 'site-plan.dgn');
+  eq(readerRequests().length, 0, 'DXF and DGN never load the DWG reader');
+  await page.evaluate(() => { window.__labels = []; new MutationObserver(() => window.__labels.push(document.querySelector('#progress-label').textContent)).observe(document.querySelector('#progress-label'), { childList: true, characterData: true, subtree: true }); });
+  await openFixture(page, 'dwg-house-plan.dwg');
+  const loaded = readerRequests();
+  assert(['dwg.js', 'libredwg-web.js', 'libredwg-web.wasm'].every((f) => loaded.filter((x) => x === f).length === 1), 'reader loaded once: ' + loaded);
+  assert(await page.evaluate(() => window.__labels.some((l) => /Loading the DWG reader for dwg-house-plan\.dwg/.test(l))), 'progress names the reader download');
+  const info = await page.evaluate(() => { const a = window.__linework; return { fmt: a.scene.format, v: a.scene.version, layers: a.scene.layers.length, n: a.scene.n + a.scene.textCount, title: document.querySelector('#doc-name').title }; });
+  eq(info.fmt, 'DWG', 'format');
+  eq(info.v, 'AC1015', 'version');
+  eq(info.layers, 9, 'layers');
+  eq(info.n, dxfItems, 'same number of items as the same drawing in DXF');
+  assert(/DWG/.test(info.title), 'file info: ' + info.title);
+  assert(!(await page.textContent('#toasts')).includes('not shown'), 'nothing reported as not shown');
+  await shot(page, 'dwg-house-plan-dark-1440');
+  // measure exactly as on the DXF (endpoint snaps -> exact)
+  await clearToasts(page);
+  await page.click('#tab-measure');
+  await page.click('[data-tool="distance"]');
+  await clickWorld(page, 0, 0, 4, -3);
+  await clickWorld(page, 12000, 0, -3, -4);
+  eq((await mcValue(page)).trim(), '12,000.00 mm', 'distance on the DWG');
+  await page.keyboard.press('d');
+  await clickWorld(page, 6000, 0, 5, -2);
+  await clickWorld(page, 6000, 8000, -4, -3);
+  eq((await mcValue(page)).trim(), '8,000.00 mm', 'midpoint snaps on the DWG');
+  // layer toggle works on DWG layers (pixel check, as for DXF)
+  await page.keyboard.press('Escape');
+  const before = await pixelAt(page, 5300, 7350);
+  assert(before[0] > 150 && before[1] < 90, 'door drawn red: ' + before);
+  await page.locator('#layer-list li', { hasText: 'DOORS' }).locator('input').uncheck();
+  await settle(page);
+  const after = await pixelAt(page, 5300, 7350);
+  assert(!(after[0] > 150 && after[1] < 90), 'door hidden: ' + after);
+  // a second DWG: no second download
+  requests.length = 0;
+  await openFixture(page, 'dwg-bracket.dwg');
+  eq(readerRequests().length, 0, 'the reader is downloaded once per session');
+  eq(await page.evaluate(() => window.__linework.scene.format), 'DWG', 'second DWG');
+  await shot(page, 'dwg-bracket-dark-1440');
+  await close(page); // no console errors: a CSP violation would show here
+});
+
+test('DWG under a CSP without wasm-unsafe-eval: the reader is refused and the app says so (proves the CSP applies to it)', async () => {
+  const strict = await startServer(0, '127.0.0.1', { headers: (h) => ({ ...h, 'Content-Security-Policy': h['Content-Security-Policy'].replace(" 'wasm-unsafe-eval'", '') }) });
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(`http://127.0.0.1:${strict.address().port}/?nosw`);
+  await page.waitForFunction(() => !!window.__linework);
+  await page.setInputFiles('#file-input', FIX('dwg-bracket.dwg'));
+  await page.waitForSelector('.toast.error');
+  assert(/DWG reader could not be loaded/.test(await page.textContent('#toasts')), 'friendly message when WebAssembly is not allowed: ' + await page.textContent('#toasts'));
+  await openSample(page, 'samples/bracket.dxf', 'bracket.dxf');
+  eq(await page.evaluate(() => window.__linework.scene.format), 'DXF', 'DXF still works');
+  await ctx.close();
+  strict.close();
+});
+
+test('DWG: edit, Save (as DXF: Linework does not write DWG), re-open the DXF', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'dwg-house-plan.dwg');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 500, 300, 8300, 7500);
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'HALL')))));
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await page.keyboard.press('Control+a'); await page.keyboard.type('HALL 2'); await page.keyboard.press('Enter');
+  assert(await ED.dirty(page), 'unsaved');
+  await page.click('#btn-esaveas');
+  await page.waitForSelector('#dlg-save[open]');
+  assert(/^Opened from a DWG\. Linework does not write DWG: save a DXF copy/.test(await page.textContent('#save-notes li')), 'the dialog says first, plainly, that DWG is not written');
+  assert(await page.isChecked('input[name="fmt"][value="DXF"]'), 'DXF is the default');
+  eq(await page.inputValue('#save-name'), 'dwg-house-plan-edited.dxf', 'default name');
+  assert(/DWG-only data/.test(await page.textContent('#save-notes')), 'and what a DXF copy of a DWG leaves out');
+  await shot(page, 'save-dialog-dwg-dark-1440');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-do-save')]);
+  eq(dl.suggestedFilename(), 'dwg-house-plan-edited.dxf', 'downloads a DXF');
+  const out = join(OUT, 'dwg-house-plan-edited.dxf');
+  await dl.saveAs(out);
+  assert(/Linework does not write DWG, so this is a DXF copy/.test(await page.textContent('#toasts')), 'save toast says so');
+  assert(!(await ED.dirty(page)), 'saved');
+  await page.setInputFiles('#file-input', out);
+  await page.waitForFunction(() => window.__linework.doc.name === 'dwg-house-plan-edited.dxf' && window.__linework.edit.ready);
+  eq(await page.evaluate(() => window.__linework.scene.format), 'DXF', 're-opened as DXF');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((x) => x.s === 'HALL 2')), 'the edit is in the saved file');
+  eq(await page.evaluate(() => window.__linework.scene.layers.length), 9, 'layers kept');
+  // the Save button (same format) on a DWG also gives a DXF
+  await openForEdit(page, 'dwg-bracket.dwg');
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  eq(dl2.suggestedFilename(), 'dwg-bracket-edited.dxf', 'Save on a DWG writes DXF');
+  await close(page);
+});
+
+test('DWG offline: after the first DWG, the reader is cached and DWGs open with no network', async () => {
+  const page = await newPage({ sw: true });
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 30000 });
+  await openFixture(page, 'dwg-schematic.dwg');
+  await page.waitForFunction(async (name) => (await (await caches.open(name)).keys()).length === 2, READER_CACHE, { timeout: 30000 });
+  assert(await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('linework-')).length === 2), 'app cache + reader cache');
+  await page.ctx.setOffline(true);
+  await page.reload();
+  await page.waitForFunction(() => !!window.__linework);
+  await openFixture(page, 'dwg-schematic.dwg');
+  eq(await page.evaluate(() => window.__linework.scene.format), 'DWG', 'DWG opens offline');
+  assert(await page.evaluate(() => window.__linework.scene.n > 100), 'with its content');
+  await page.ctx.setOffline(false);
+  await close(page);
+});
+
+test('DWG guard rails: a time limit stops a stuck read (friendly message, previous drawing kept, next DWG opens)', async () => {
+  const page = await newPage();
+  await openFixture(page, 'house-plan.dxf');
+  await page.evaluate(() => { window.__linework.readTimeLimitMs = 1; });
+  await clearToasts(page);
+  await page.setInputFiles('#file-input', FIX('dwg-bracket.dwg'));
+  await page.waitForSelector('.toast.error');
+  assert(/This DWG took too long to read; save it as DXF/.test(await page.textContent('#toasts')), 'friendly time-limit message');
+  eq(await page.textContent('#doc-name'), 'house-plan.dxf', 'previous drawing still open');
+  await page.evaluate(() => { window.__linework.readTimeLimitMs = 120000; });
+  await openFixture(page, 'dwg-bracket.dwg');
+  eq(await page.evaluate(() => window.__linework.scene.format), 'DWG', 'a fresh reader opens the next DWG');
   await close(page);
 });
 

@@ -36,11 +36,19 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   handles; draw lines, polylines, rectangles, circles and text on any layer; change layer, colour
   and line weight; **copy and paste between drawings** (DGN ↔ DGN, DXF ↔ DGN, across tabs) and
   **duplicate**; one undo history for edits and markups.
-* **Saves** the edited drawing as **DXF** (R2000) or **DGN v7** — downloaded to your device,
-  never uploaded. A DGN you opened is saved back with every untouched element byte-for-byte.
-  Linework does not write DWG: a DWG you opened is saved as DXF (the default) or DGN v7.
-* **Exports** a PNG of the current view (with markups), and **prints / saves as PDF** with a
-  title strip (title, file, date, author), landscape or portrait, current view or whole drawing.
+* **Saves** the edited drawing as **DXF** (R2000) or **DGN v7** — **over the original file**
+  where the browser allows it (asked once per file, with a backup copy), otherwise downloaded to
+  your device; never uploaded. A DGN you opened is saved back with every untouched element
+  byte-for-byte. Linework does not write DWG: a DWG you opened is saved as DXF (the default) or DGN v7.
+* **Keeps your work**: **recent drawings** reopen in one click, and **unsaved edits survive** a
+  crash, a closed tab or an update reload — open the drawing again and Linework offers them back
+  ([Files](#files-recent-drawings-saving-over-the-original-recovery)).
+* **Compares revisions** (new in v0.4): View › **Compare** lays another revision over the open
+  drawing — only in this one red, only in the other green, the rest dimmed — with counts and a
+  list to step through ([Compare](#compare-two-revisions)).
+* **Exports** a PNG of the current view (with markups), and **prints / saves as PDF to scale**:
+  vector lines and real text, Letter to ANSI D or A4 to A1, Fit or 1:N / 1"=N', current view or
+  extents, black and white, line weights, title line ([Print](#print-to-scale)).
 * **Never crashes on a bad file**: it shows what loaded and a short "N items not shown" note.
   Binary DXF, DGN v8, R12-and-older DWG and unreadable DWG files get a friendly explanation
   instead of an error. A tiny file whose blocks expand to millions of copies is drawn up to a
@@ -193,8 +201,10 @@ edited; markups stay separate.
 * **Undo/redo**: one history for drawing edits and markups — `Ctrl+Z` always undoes the last
   thing you did. "• unsaved" next to the file name shows there are edits to save; the browser
   asks before leaving the page while it is shown.
-* **Save** downloads `<name>-edited.dxf` or `<name>-edited.dgn` (same format as the file you
-  opened); **Save as…** picks DXF or DGN v7. Nothing is uploaded. Markups are never baked into
+* **Save** writes over the file you opened when the browser gave Linework a handle to it (see
+  [Files](#files-recent-drawings-saving-over-the-original-recovery)); otherwise it downloads
+  `<name>-edited.dxf` or `<name>-edited.dgn` (same format as the file you opened). **Save as…**
+  picks DXF or DGN v7 and always downloads. Nothing is uploaded. Markups are never baked into
   the drawing: they stay in their `.markup.json` sidecar.
 
 How saving works:
@@ -245,6 +255,78 @@ How saving works:
   keeps them.
 * Written files are read back in the tests with this app's readers **and** with GDAL/OGR (an
   independent reader). They have **not been tested in AutoCAD or MicroStation** yet.
+
+## Files: recent drawings, saving over the original, recovery
+
+Browsers with the File System Access API (Chrome, Edge and other Chromium browsers on desktop)
+hand Linework a *file handle* when you open a drawing with **Open** (the file picker), with the
+installed app's "Open with", or by dropping it on the window. With a handle:
+
+* **Edit › Save** (`Ctrl+S` in Edit) writes over the original file. The first time for each file
+  Linework asks: *Save over the original*, *Download a copy* (the old behaviour) or *Cancel*.
+  A DXF is written again from what Linework read (R2000), so the question says what a DXF loses
+  (layouts, dimension styles, extended data, plot settings); a DGN keeps every untouched element
+  byte for byte, as in every DGN save. A DWG is never overwritten (Save writes a DXF copy).
+* **Backup copy** (on by default): before the first save over a file in a session, the file as it
+  was is copied to `name.bak.dgn` (`.bak.dxf`) next to it. Browsers give access to the file, not to
+  its folder, so the question offers *Allow the folder…*; Linework checks that the chosen folder
+  holds the file and remembers it with the recent entry. Without folder access the save goes ahead
+  and the note says no backup was made.
+* **Safe writing**: the new file is first read back by Linework's own reader (nothing is written
+  if it does not open), the file on disk is checked for changes made by another program since it
+  was opened (Linework asks before overwriting them), and the browser writes to a temporary file
+  that replaces the original only when complete. Afterwards the drawing continues from the saved
+  file (view, hidden layers and markups kept; undo starts again from the saved state).
+* **Recent drawings**: the empty screen and the arrow next to **Open** list the last 12 drawings
+  (name, format, size, when; "unsaved edits kept" when there are some). With a handle one click
+  reopens the file (the browser may ask once for permission); samples reopen too; other entries
+  open the file picker. **Clear list** forgets the list (the files are not touched). Only names,
+  sizes, dates and the browser's handles are kept — never the files' contents.
+* **Unsaved-edit recovery**: every edit is also written to this browser (IndexedDB) as the edit
+  history — the change list behind undo, not the file — keyed by the content hash of the file it
+  applies to. After a crash, a closed tab or an update reload, opening the same file (any way:
+  picker, recent list, drop, plain chooser) offers *Restore N unsaved edits?*: Restore re-applies
+  them (each one undoable), Discard forgets them. The journal is checked against the drawing
+  before anything is applied, is cleared when you save or undo back to the start, keeps at most
+  32 MB per drawing (it says so when a session is too large) and at most 6 drawings.
+
+Other browsers (Firefox, Safari, phones) keep the previous behaviour: the plain file chooser, Save
+downloads a copy, and recent entries open the chooser; recovery works there too.
+
+## Compare two revisions
+
+View › **Compare** asks for another revision of the drawing (same kind: DGN with DGN, DXF or DWG
+with DXF or DWG), reads it in this tab with the same reader (nothing leaves the device, it works
+offline) and lays it over the open drawing (A):
+
+* **Only in A** (red), **only in B** (green), **unchanged** (the drawing dimmed) — each a toggle
+  with its count.
+* Items are the drawing's top-level items. In DGN files an item that is still exactly as read from
+  the file is matched by the **bytes of its elements**, wherever it sits in the file (so elements
+  that MicroStation or Linework moved to the end of the file are still unchanged); everything else
+  is matched by **geometry and attributes** (layer / level, colour, line style, weight, text,
+  coordinates rounded to a billionth of the drawing size).
+* What is left is listed top to bottom: an item with the same shape elsewhere is **Moved**, one of
+  the same kind on the same layer in the same place is **Changed** (texts show old → new), the
+  rest are **Only in A** / **Only in B**. Previous / Next or a click zooms to each.
+* Edits made while comparing update the comparison; opening another drawing or the close button
+  ends it.
+
+## Print to scale
+
+`Ctrl+P` (or Print / PDF) builds the sheet as SVG — the browser's *Save as PDF* turns it into a
+vector PDF with sharp lines and real (searchable) text:
+
+* **Sheet**: Letter, Legal, Tabloid (11×17), ANSI C, ANSI D, A4, A3, A1; landscape or portrait
+  (8 mm margins, a title line with title, file, scale, sheet, date and author).
+* **Scale**: *Fit*, or a ratio (`1:50`, `1/100`, `2:1`), or an imperial scale (`1"=20'`,
+  `1/4"=1'-0"`), in the drawing's units (a drawing without units prints 1 unit as 1 mm). The dialog
+  says what will print and when the area does not fit the sheet at that scale. Print at 100 %
+  (not "Fit to page") to keep the scale on paper.
+* **What to print**: the current view or the extents; hidden layers stay hidden.
+* **Black and white** option; **line weights** printed as weights (DXF lineweights in their
+  millimetres, DGN weights like on screen, 0.18 mm by default); line styles as dashes; fills and
+  markups / measurements as vector too.
 
 ## Supported formats and entities
 
@@ -315,16 +397,20 @@ the first frame, so opening a large file never blocks the page.
 * Drawings are read with `FileReader`/`File.arrayBuffer` and parsed in a Web Worker in the same
   browser tab. The service worker caches only the app's own files and never sees your drawings.
 * Markups stay in the sidecar file you save and in this browser's local storage.
+* This browser's IndexedDB keeps the recent drawings list (names, sizes, dates and the browser's
+  file handles — never the contents) and the history of unsaved edits until they are saved or
+  discarded. Clear list / Discard remove them; clearing the site's data removes everything.
 * Copied drawing items go to the system clipboard as plain text (and stay in the open tab), only
   when you copy; nothing is sent anywhere.
-* Saving an edited drawing creates the file in the page and hands it to the browser as a
-  download (a `Blob`); it never leaves the device.
+* Saving an edited drawing creates the file in the page and either writes it to the file you
+  opened (through the browser's file handle, after you agreed once) or hands it to the browser as
+  a download (a `Blob`); it never leaves the device. Compare reads the second file the same way.
 
 ## Tests
 
 ```bash
-npm test                                  # 191 Node unit tests (node --test, no dependencies)
-NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 27 Playwright end-to-end tests
+npm test                                  # 204 Node unit tests (node --test, no dependencies)
+NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 46 Playwright end-to-end tests
 ```
 
 Some unit tests read the files the writers produce with GDAL/OGR through Python (`from osgeo
@@ -374,6 +460,22 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   two tabs (DGN cell, retyped, original bytes kept), Ctrl+D / Ctrl+drag / ribbon Duplicate with
   one-step undo, line weight changes drawn thicker (pixel check) and saved, touch at 390 px.
   Screenshots (dark + paper at 1440/1024/390) go to `tests/e2e/out/`.
+* Files, recovery, compare, print (v0.4): recent list rules (one entry per file, 12 at most,
+  nothing but names / sizes / dates / handles), journal of unsaved edits (only while unsaved,
+  incremental writes, size cap, at most 6 drawings) and a "crash" after a session with undo /
+  redo that restores the same drawing and the same saved DGN bytes, a journal that does not fit
+  is refused before anything is applied; compare of every fixture with itself, a DGN revision
+  written by the round-trip writer (moved / changed / added / removed, untouched elements matched
+  by bytes), a byte-identical element moved in the file, DXF revisions and an edited live scene;
+  scale parsing, sheet layout, SVG lines at the right millimetres at 1:1 and 1:2, arcs, text,
+  weights, hidden layers, monochrome, markups recorded as vector. End to end (the file pickers
+  are given real handles from the origin-private file system): Open with a handle, Save over the
+  original (asked once, backup in the folder, untouched DGN bytes kept, read back, changed-on-disk
+  question), recent drawings after a reload, Clear list, DXF warning and Download a copy, the
+  fallback without the API (plain chooser, downloads); crash + reopen → Restore (same drawing,
+  undo) / Discard, Save clears the journal; compare overlay pixels, toggles, stepping and zoom,
+  edits while comparing, mixed kinds refused, DXF revisions, 390 px; vector print at A3 1:2 and
+  Letter 1"=20' black and white checked in the PDF (page size, one page, paths and text, no images).
 * DWG: every DWG fixture is one of the synthetic DXF files converted to DWG R2000, and must read
   exactly like its DXF (entity counts, layers, blocks, insert transforms, extents, every drawn
   item and text) — through the direct mapping and through LibreDWG's DXF fallback; version
@@ -398,9 +500,12 @@ deploy/_headers         HTTP headers for the static host (CSP etc.)
 src/scene.js            blocks → flat primitives, colours, local origin, spatial grid
 src/edit/               edit operations, edit document (changes, undo, selection), live scene
 src/view/               viewport, Canvas2D renderer (WebGL-replaceable interface), batches, colours
-src/tools/              snaps, measurement
+src/tools/              snaps, measurement, revision compare (compare.js)
 src/markup/             markup model, revision clouds, sidecar format, undo history, drawing
-src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, export/print
+src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, PNG export; loaded
+                        after start-up or on first use: files.js + store.js (file picker, save
+                        over the original, recent drawings, unsaved-edit journal), compare.js
+                        (compare overlay + panel), print-svg.js (vector print to scale)
 src/worker.js           parse worker
 samples/                synthetic sample drawings (+ generators in samples/gen/)
 tools/                  fixture generators (DXF, DGN, DWG), DWG reader vendoring/build scripts,
@@ -427,9 +532,10 @@ Trade-offs, for the owner to decide before the first public release:
 * **v0.2** — Edit mode and saving as DXF / DGN v7.
 * **v0.3 (this version)** — DWG (R13–2018) via LibreDWG compiled to WebAssembly, lazy-loaded
   ([details](DWG.md)); copy / paste between drawings, duplicate and line weights.
-* **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; vector PDF
-  export (true lines and text instead of an image); measurement export (CSV); editing the
-  geometry inside blocks/cells and shared block-definition text; mirror.
+* **v0.4 (files and review)** — save over the original file (backup copy), recent drawings,
+  unsaved-edit recovery, revision compare, vector print to scale.
+* **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; measurement
+  export (CSV); editing the geometry inside blocks/cells and shared block-definition text.
 * **v0.4** — WebGL renderer for very large drawings; true linetype scaling; hatch patterns;
   layouts / paper space tabs; markup resize handles and markup list panel.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
@@ -449,7 +555,11 @@ inside cells and block attributes can be edited since 0.2.2).
 * 3D drawings are shown in plan (top) view only; DGN 3D cells and views are not interpreted.
 * DGN cell components are drawn at their stored (already placed) positions; shared cells (35),
   B-spline elements and raster references are reported as not shown.
-* Printing is a high-resolution image, not to scale.
+* Printing to scale relies on the browser printing at 100 %; text uses the system sans-serif
+  font on paper too. Browsers without the File System Access API cannot save over the original
+  file or reopen recent files by themselves (they download / open the chooser instead).
+* Compare matches top-level items: a cell or block with one changed component shows as changed as
+  a whole. Edited items compare by geometry, not bytes.
 * DWG: R12 and older are refused; 3D solids, images, MLINE/MULTILEADER and proxy objects are
   reported as not shown; only R2000 files are covered by the synthetic tests so far (see DWG.md).
   Very large DWGs need several times their size in browser memory (limit 120 MB per file).

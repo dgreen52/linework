@@ -1096,10 +1096,22 @@ test('performance: Edit mode on the 53k stress drawing (box-select ~500 items, d
   const after = await page.evaluate(async () => { const a2 = window.__linework; await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); const ms = []; for (let i = 0; i < 6; i++) ms.push(a2.renderer.render(a2.view, a2.renderOpts()).ms); ms.sort((x, y) => x - y); return +ms[3].toFixed(2); });
   const undoMs = await page.evaluate(() => { const t0 = performance.now(); window.__linework.undo(); return +(performance.now() - t0).toFixed(1); });
   const lt = await page.evaluate(() => window.__lt);
-  perf.editStress = { selected: sel.count, boxSelectMs: +sel.ms.toFixed(1), boxDragFrames: boxSelect, moveDragFrames: drag, commitMs: +commit.ms.toFixed(1), renderAfterCommitMs: after, undoMs, longTasks: lt };
+  // copy the ~500 items, paste them: the ghost follows the cursor smoothly, one quick commit
+  const copyMs = await page.evaluate(() => { const t0 = performance.now(); window.__linework.edit.n = window.__linework.edit.doc.model.entities.length; document.execCommand('copy'); return +(performance.now() - t0).toFixed(1); });
+  await page.mouse.move(g[0], g[1]);
+  await page.keyboard.press('Control+v');
+  await page.waitForFunction(() => !!window.__linework.edit.place);
+  const ghost = await record(async () => { for (let i = 1; i <= 40; i++) await page.mouse.move(g[0] - i * 5, g[1] - i * 3); });
+  const t1 = Date.now();
+  await page.mouse.click(g[0] - 200, g[1] - 120);
+  const pasted = await page.evaluate(() => ({ n: window.__linework.edit.doc.model.entities.length - window.__linework.edit.n, ms: window.__linework.edit.lastCommit.ms }));
+  eq(pasted.n, sel.count, 'pasted every copied item');
+  perf.editStress = { selected: sel.count, boxSelectMs: +sel.ms.toFixed(1), boxDragFrames: boxSelect, moveDragFrames: drag, commitMs: +commit.ms.toFixed(1), renderAfterCommitMs: after, undoMs, longTasks: lt,
+    copyMs, pasteGhostFrames: ghost, pasteCommitMs: +pasted.ms.toFixed(1), pasteClickToDoneMs: Date.now() - t1 };
   await shot(page, 'perf-edit-stress');
   assert(drag.p95Ms < 50, `dragging ~500 items stays smooth (p95 ${drag.p95Ms} ms)`);
   assert(commit.ms < 300, `committing the move is quick (${commit.ms} ms)`);
+  assert(copyMs < 300 && ghost.p95Ms < 50 && pasted.ms < 400, `copy ${copyMs} ms, paste ghost p95 ${ghost.p95Ms} ms, paste commit ${pasted.ms} ms`);
   await close(page);
 });
 
@@ -1204,6 +1216,300 @@ test('edit: double-click a text inside a cell (DGN title block) or a block attri
   await zoomTo(page, at.shared.at[0] - sw * 3, at.shared.at[1] - sw * 2, at.shared.at[0] + sw * 3, at.shared.at[1] + sw * 2);
   await page.mouse.dblclick(...(await client(page, ...at.shared.at)));
   await page.waitForFunction(() => /shared by every copy/.test(document.querySelector('#tool-hint').textContent));
+  await close(page);
+});
+
+// ------------------------------------------------------------------ copy / paste, duplicate, line weights
+const CLIP = { context: { permissions: ['clipboard-read', 'clipboard-write'] } };
+const clipText = (page) => page.evaluate(() => navigator.clipboard.readText());
+const entCount = (page) => page.evaluate(() => window.__linework.edit.doc.model.entities.filter(Boolean).length);
+/** Line thickness (CSS px) where a column of the drawing canvas crosses the world point (x, y). */
+async function strokeWidthAt(page, x, y) {
+  return page.evaluate(([x, y]) => {
+    const a = window.__linework, [sx, sy] = a.worldToScreen(x, y), d = a.dpr;
+    const g = document.querySelector('#cv-drawing').getContext('2d').getImageData(Math.round(sx * d), Math.round(sy * d) - 40, 1, 81).data;
+    let n = 0;
+    for (let i = 0; i < g.length; i += 4) if (Math.abs(g[i] - g[0]) + Math.abs(g[i + 1] - g[1]) + Math.abs(g[i + 2] - g[2]) > 90) n++;
+    return n / d;
+  }, [x, y]);
+}
+
+test('copy / paste: a DGN line into a DXF (m -> mm), placed with a snapped click; save + reopen; Ctrl+Shift+V in place; one undo step', async () => {
+  const page = await newPage(CLIP);
+  await openForEdit(page, 'site-plan.dgn');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, true);
+  await zoomTo(page, 0, -2, 20, 12);
+  await clickWorld(page, 8.6, 5.2);
+  const src = await page.evaluate(() => { const E = window.__linework.edit; return JSON.parse(JSON.stringify(E.doc.model.entities[[...E.sel][0]])); });
+  eq(src.type + ' ' + src.layer, 'line Level 5', 'selected the survey line');
+  await page.keyboard.press('Control+c');
+  const text = await clipText(page);
+  assert(text.startsWith('LINEWORK-CLIPBOARD 1\n{'), 'system clipboard: header line + JSON');
+  assert(!/"dgn":/.test(text), 'no DGN byte ranges on the clipboard');
+  assert(/Copied 1 item/.test(await page.textContent('#toasts')), 'copy toast');
+  // another drawing in the same tab: Ctrl+V, the line follows the cursor, a click places it (snapped)
+  await openForEdit(page, 'house-plan.dxf');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 500, 300, 8300, 7500);
+  const n0 = await entCount(page);
+  const corner = await client(page, 5100, 3500);
+  await page.mouse.move(corner[0] + 30, corner[1] + 30);
+  await page.keyboard.press('Control+v');
+  await page.waitForFunction(() => !!window.__linework.edit.place);
+  assert(/Click to place 1 item/.test(await page.textContent('#tool-hint')), 'placing hint');
+  await page.mouse.move(corner[0] + 3, corner[1] - 2, { steps: 4 });
+  await shot(page, 'paste-ghost-dark-1440');
+  await page.mouse.click(corner[0] + 3, corner[1] - 2);
+  eq(await entCount(page), n0 + 1, 'one item pasted');
+  const p = await ED.last(page);
+  assert(nearPt(p.a, [5100, 3500], 1e-6), 'base point (lower-left) snapped exactly onto the wall corner: ' + JSON.stringify(p.a));
+  assert(nearPt(p.b, [5100 + (src.b[0] - src.a[0]) * 1000, 3500 + (src.b[1] - src.a[1]) * 1000], 1e-6), 'scaled from m to mm');
+  eq(p.layer, 'Level 5', 'DGN level kept as a layer name');
+  assert(/Scaled from m to mm/.test(await page.textContent('#toasts')), 'toast says it was scaled');
+  eq(JSON.stringify(await ED.sel(page)), JSON.stringify([await page.evaluate(() => window.__linework.edit.doc.model.entities.length - 1)]), 'the pasted item is selected');
+  assert(await page.evaluate(() => window.__linework.scene.layers.some((l) => l.name === 'Level 5' && !l.removed)), 'layer created');
+  // save, reopen: still there
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.keyboard.press('Control+s')]);
+  const out = join(OUT, 'house-plan-pasted.dxf');
+  await dl.saveAs(out);
+  await page.setInputFiles('#file-input', out);
+  await page.waitForFunction(() => window.__linework.doc.name === 'house-plan-pasted.dxf' && window.__linework.edit.ready);
+  assert(await page.evaluate(() => window.__linework.edit.doc.model.entities.some((e) => e && e.type === 'line' && e.layer === 'Level 5' && e.a[0] === 5100 && e.a[1] === 3500)), 'pasted line saved');
+  // paste in place (original coordinates, scaled about the origin), one undo step
+  await page.click('#tab-edit'); await page.click('[data-tool="eselect"]');
+  const n1 = await entCount(page);
+  await page.keyboard.press('Control+Shift+v');
+  await page.waitForFunction((n) => window.__linework.edit.doc.model.entities.filter(Boolean).length === n + 1, n1);
+  const q = await ED.last(page);
+  assert(nearPt(q.a, [src.a[0] * 1000, src.a[1] * 1000], 1e-6), 'in place: ' + JSON.stringify(q.a));
+  await page.keyboard.press('Control+z');
+  eq(await entCount(page), n1, 'undo removes the paste in one step');
+  // nothing open / typing: ignored
+  await page.evaluate(() => { document.querySelector('#layer-filter').focus(); });
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(250);
+  assert(!(await page.evaluate(() => window.__linework.edit.place)), 'a paste into a text box is left to the text box');
+  await close(page);
+});
+
+test('copy / paste across two tabs (DGN title block cell -> site plan DGN), retype text in the pasted cell, save: original bytes untouched', async () => {
+  const a = await newPage(CLIP);
+  await openForEdit(a, 'dgn-titleblock.dgn');
+  await a.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(a, 46, -2, 93, 20);
+  await clickWorld(a, 60, 2);
+  const ci = await a.evaluate(() => [...window.__linework.edit.sel][0]);
+  eq((await ED.ent(a, ci)).name, 'TITLE', 'cell selected');
+  await a.keyboard.press('Control+c');
+  // a second tab in the same browser
+  const b = await a.ctx.newPage();
+  b.errors = [];
+  b.on('pageerror', (e) => b.errors.push(e.message));
+  b.on('console', (m) => { if (m.type() === 'error') b.errors.push(m.text()); });
+  await b.goto(BASE + '?nosw');
+  await b.waitForFunction(() => !!window.__linework);
+  b.ctx = a.ctx;
+  await openForEdit(b, 'site-plan.dgn');
+  await b.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(b, false);
+  await zoomTo(b, -10, -20, 110, 70);
+  const n0 = await entCount(b);
+  const at = await client(b, 0, 60);
+  await b.mouse.move(at[0], at[1]);
+  await b.keyboard.press('Control+v');
+  await b.waitForFunction(() => !!window.__linework.edit.place);
+  await b.mouse.click(at[0], at[1]);
+  eq(await entCount(b), n0 + 1, 'pasted in the other tab (system clipboard)');
+  const cell = await ED.last(b);
+  eq(cell.type + ' ' + cell.name, 'cell TITLE', 'still a cell');
+  assert(!JSON.stringify(cell).includes('"dgn":'), 'no source byte ranges');
+  assert(Math.abs(cell.origin[0] - 0) < 0.05 && Math.abs(cell.origin[1] - 60) < 0.05, 'lower-left at the click: ' + cell.origin);
+  await shot(b, 'paste-cell-dgn-dark-1440');
+  // the text inside the pasted cell can be retyped
+  await zoomTo(b, -4, 56, 44, 78);
+  await b.mouse.dblclick(...(await client(b, ...(await textAt(b, 'DRAWING TITLE')))));
+  await b.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await b.keyboard.press('Control+a'); await b.keyboard.type('PASTED TITLE'); await b.keyboard.press('Enter');
+  eq((await ED.last(b)).children[2].text, 'PASTED TITLE', 'retyped inside the pasted cell');
+  const [dl] = await Promise.all([b.waitForEvent('download'), b.click('#btn-esave')]);
+  const out = join(OUT, 'site-plan-pasted.dgn');
+  await dl.saveAs(out);
+  const orig = readFileSync(FIX('site-plan.dgn')), nb = readFileSync(out);
+  let eod = 0;
+  for (let o = 0; o + 2 <= orig.length;) { if (orig[o] === 0xff && orig[o + 1] === 0xff) { eod = o; break; } o += 4 + 2 * orig.readUInt16LE(o + 2); }
+  assert(eod > 0 && nb.subarray(0, eod).equals(orig.subarray(0, eod)), 'every original element byte-identical');
+  await b.setInputFiles('#file-input', out);
+  await b.waitForFunction(() => window.__linework.doc.name === 'site-plan-pasted.dgn' && window.__linework.edit.ready);
+  const back = await b.evaluate(() => { const c = window.__linework.edit.doc.model.entities.find((e) => e && e.type === 'cell' && e.name === 'TITLE'); return c && c.children.map((k) => k.text || k.type); });
+  assert(back && back.includes('PASTED TITLE') && back.includes('cell'), 'reopened: the pasted cell (with its nested cell) and the new text: ' + back);
+  assert(!b.errors.length, 'no console errors in the second tab: ' + b.errors.join(' | '));
+  await close(a);
+});
+
+test('duplicate: Ctrl+D (click places), Ctrl+drag copy, ribbon Duplicate; each is one undo step (DGN)', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'site-plan.dgn');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, false);
+  await zoomTo(page, 10, 5, 50, 35);
+  await clickWorld(page, 30, 12);
+  const i = await page.evaluate(() => [...window.__linework.edit.sel][0]);
+  const orig = await ED.ent(page, i);
+  eq(orig.layer, 'Level 2', 'building selected');
+  const n0 = await entCount(page);
+  // Ctrl+D: the copy follows the cursor; a click places its lower-left corner there
+  const to = await client(page, 20, 20);
+  await page.mouse.move(to[0] - 20, to[1]);
+  await page.keyboard.press('Control+d');
+  await page.waitForFunction(() => !!window.__linework.edit.place);
+  await page.mouse.move(to[0], to[1], { steps: 3 });
+  await page.mouse.click(to[0], to[1]);
+  eq(await entCount(page), n0 + 1, 'Ctrl+D + click: one copy');
+  const d = await ED.last(page);
+  assert(nearPt([d.pts[0], d.pts[1]], [20, 20], 0.05), 'placed at the click: ' + d.pts.slice(0, 2));
+  eq(JSON.stringify(await ED.ent(page, i)), JSON.stringify(orig), 'original untouched');
+  eq(d.ci, orig.ci, 'same colour-table entry');
+  await page.keyboard.press('Control+z');
+  eq(await entCount(page), n0, 'undo: one step');
+  // Esc cancels a duplicate
+  await page.keyboard.press('Control+d');
+  await page.keyboard.press('Escape');
+  assert(!(await page.evaluate(() => window.__linework.edit.place)), 'Esc cancels');
+  eq(await entCount(page), n0, 'nothing added');
+  // Ctrl+drag: drop a copy, the original stays
+  await clickWorld(page, 30, 12);
+  const g = await client(page, 30, 12);
+  await page.keyboard.down('Control');
+  await page.mouse.move(g[0], g[1]); await page.mouse.down();
+  await page.mouse.move(g[0] + 40, g[1] - 60, { steps: 8 });
+  assert(/Copy/.test(await page.textContent('#tool-hint')), 'hint says Copy while Ctrl is held');
+  eq(await page.evaluate(() => document.querySelector('#cv-overlay').className), 'copy', 'copy cursor');
+  await page.mouse.up();
+  await page.keyboard.up('Control');
+  eq(await entCount(page), n0 + 1, 'Ctrl+drag: a copy');
+  eq(JSON.stringify(await ED.ent(page, i)), JSON.stringify(orig), 'original not moved');
+  const s = await ED.scale(page);
+  const c = await ED.last(page);
+  assert(Math.abs(c.pts[0] - orig.pts[0] - 40 / s) < 1e-6 && Math.abs(c.pts[1] - orig.pts[1] - 60 / s) < 1e-6, 'copy moved by the drag');
+  await page.keyboard.press('Control+z');
+  eq(await entCount(page), n0, 'undo: one step');
+  // the ribbon button
+  await clickWorld(page, 30, 12);
+  await page.click('#btn-edup');
+  await page.waitForFunction(() => !!window.__linework.edit.place);
+  await page.mouse.click(to[0], to[1]);
+  eq(await entCount(page), n0 + 1, 'ribbon Duplicate');
+  await close(page);
+});
+
+test('line weight: ribbon Weight changes the selection (DXF lineweight, DGN weight); drawn thicker; saved and reopened', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'house-plan.dxf');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 500, 5000, 4000, 8000);
+  const w0 = await strokeWidthAt(page, 2300, 6600);
+  await clickWorld(page, 2300, 6600);
+  eq(JSON.stringify(await ED.sel(page)), '[33]', 'line selected');
+  assert(/Weight ByLayer/.test(await page.textContent('#st-info')), 'status shows the weight');
+  await page.click('#btn-eweight');
+  const labels = await page.$$eval('#color-pop button', (bs) => bs.map((x) => x.textContent.trim()));
+  eq(labels.length, 25, 'ByLayer + 24 standard lineweights');
+  eq(labels[0] + '|' + labels[labels.length - 1], 'ByLayer|2.11 mm', 'list');
+  await shot(page, 'edit-weight-menu-dark-1440');
+  await page.click('#color-pop button:has-text("2.00 mm")');
+  eq((await ED.ent(page, 33)).lw, 200, 'lineweight set');
+  assert(/Weight 2\.00 mm/.test(await page.textContent('#st-info')), 'status: ' + await page.textContent('#st-info'));
+  await page.keyboard.press('Escape');
+  await settle(page);
+  const w1 = await strokeWidthAt(page, 2300, 6600);
+  assert(w0 <= 2.5 && w1 >= 6, `drawn thicker: ${w0} px -> ${w1} px`);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  const out = join(OUT, 'house-plan-weight.dxf');
+  await dl.saveAs(out);
+  assert(/\n370\r?\n200\r?\n/.test(readFileSync(out, 'latin1')), 'group 370 written');
+  await page.setInputFiles('#file-input', out);
+  await page.waitForFunction(() => window.__linework.doc.name === 'house-plan-weight.dxf' && window.__linework.edit.ready);
+  await zoomTo(page, 500, 5000, 4000, 8000);
+  eq((await ED.ent(page, 33)).lw, 200, 'reopened: lineweight kept');
+  assert((await strokeWidthAt(page, 2300, 6600)) >= 6, 'and drawn thick');
+  // DGN: weight 0-31
+  await openForEdit(page, 'site-plan.dgn');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await setSnap(page, false);
+  await zoomTo(page, 10, 5, 50, 35);
+  const v0 = await strokeWidthAt(page, 30, 12);
+  await clickWorld(page, 30, 12);
+  const i = await page.evaluate(() => [...window.__linework.edit.sel][0]);
+  await page.click('#btn-eweight');
+  eq(await page.locator('#color-pop button').count(), 32, 'DGN weights 0-31');
+  await page.click('#color-pop button:text-is("6")');
+  eq((await ED.ent(page, i)).weight, 6, 'weight set');
+  await page.keyboard.press('Escape');
+  await settle(page);
+  const v1 = await strokeWidthAt(page, 30, 12);
+  assert(v1 >= v0 + 3, `DGN: drawn thicker: ${v0} px -> ${v1} px`);
+  // new items get the current weight
+  await page.click('[data-tool="eline"]');
+  await clickWorld(page, 12, 30); await clickWorld(page, 25, 30); await page.keyboard.press('Escape');
+  eq((await ED.last(page)).weight, 6, 'a new line has the current weight');
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  const out2 = join(OUT, 'site-plan-weight.dgn');
+  await dl2.saveAs(out2);
+  await page.setInputFiles('#file-input', out2);
+  await page.waitForFunction(() => window.__linework.doc.name === 'site-plan-weight.dgn' && window.__linework.edit.ready);
+  const ws = await page.evaluate(() => window.__linework.edit.doc.model.entities.filter((e) => e && e.weight === 6).map((e) => e.type));
+  eq(JSON.stringify(ws.sort()), JSON.stringify(['line', 'polyline']), 'reopened: weights kept');
+  await close(page);
+});
+
+test('copy / paste / duplicate at 390 px with touch: ribbon buttons, tap to place, long-press menu Duplicate', async () => {
+  const page = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 } });
+  await openFixture(page, 'site-plan.dgn');
+  await clearToasts(page);
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await page.tap('#tab-edit');
+  await page.tap('[data-tool="eselect"]');
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 10, 5, 50, 35);
+  const cdp = await page.ctx.newCDPSession(page);
+  const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], i) => ({ x, y, id: i + 1, radiusX: 4, radiusY: 4, force: 1 })) });
+  const tap = async (pt) => { await touch('touchStart', [pt]); await touch('touchEnd', []); };
+  const m = await client(page, 30, 12);
+  await tap(m);
+  const i = await page.evaluate(() => [...window.__linework.edit.sel][0]);
+  assert(i >= 0, 'tap selects');
+  const n0 = await entCount(page);
+  await page.tap('#btn-ecopy');
+  await page.tap('#btn-epaste');
+  await page.waitForFunction(() => !!window.__linework.edit.place);
+  assert(/Tap to place/.test(await page.textContent('#tool-hint')), 'touch hint');
+  assert(await page.isVisible('#finish-bar'), 'Finish / Cancel bar while placing');
+  await shot(page, 'paste-ghost-dark-390');
+  const t = await client(page, 15, 25);
+  await tap(t);
+  eq(await entCount(page), n0 + 1, 'tap places the paste');
+  assert(nearPt((await ED.last(page)).pts.slice(0, 2), [15, 25], 0.1), 'at the tap');
+  // long-press > Duplicate, then Finish places it where it is shown
+  await touch('touchStart', [m]); await page.waitForTimeout(750); await touch('touchEnd', []);
+  await page.waitForSelector('#ctx-menu:not([hidden])');
+  await shot(page, 'edit-longpress-menu-dark-390');
+  await page.tap('#ctx-menu button:has-text("Duplicate")');
+  await page.waitForFunction(() => !!window.__linework.edit.place);
+  await page.tap('#btn-finish');
+  eq(await entCount(page), n0 + 2, 'Duplicate from the long-press menu');
+  await page.tap('#btn-eundo');
+  eq(await entCount(page), n0 + 1, 'Undo: one step');
+  // long-press on empty space: Paste here
+  const e = await client(page, 48, 33);
+  await touch('touchStart', [e]); await page.waitForTimeout(750); await touch('touchEnd', []);
+  await page.waitForSelector('#ctx-menu:not([hidden])');
+  await page.tap('#ctx-menu button:has-text("Paste here")');
+  eq(await entCount(page), n0 + 2, 'Paste here');
+  const layout = await page.evaluate(() => [window.innerWidth, document.documentElement.scrollWidth]);
+  assert(layout[1] <= 390, 'no horizontal overflow at 390px');
+  await page.tap('#btn-eweight');
+  await shot(page, 'edit-weight-menu-dark-390');
   await close(page);
 });
 

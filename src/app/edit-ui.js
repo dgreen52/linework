@@ -253,8 +253,9 @@ export function initEdit(app, api) {
     if (P && P.at) { // the items being pasted / duplicated, at the cursor
       ctx.save();
       ctx.translate(P.at[0] - P.r.base[0], P.at[1] - P.r.base[1]);
-      if (P.r.ents.length <= 150) stroke(P.path, halo, 5, 0.9);
-      stroke(P.path, acc, 2, 1, [7, 4]);
+      const big = P.r.ents.length > 150; // dashes and halos cost per frame: keep big pastes cheap
+      if (!big) stroke(P.path, halo, 5, 0.9);
+      stroke(P.path, acc, big ? 1.5 : 2, 1, big ? null : [7, 4]);
       ctx.restore();
     }
     if (E.draft) {
@@ -700,7 +701,7 @@ export function initEdit(app, api) {
     const ids = [...E.sel];
     E.clip = makePayload(model(), ids, { ext: extOf(ids) });
     const t = clipText(E.clip), big = t.length > CLIP_MAX;
-    toast(`Copied ${plural(ids.length)}`, { timeout: 2000, detail: big ? 'Too large for the system clipboard: paste it in this tab.' : 'Ctrl+V pastes it here or in another drawing.' });
+    toast(`Copied ${plural(ids.length)}`, { timeout: 2000, detail: big ? 'Too large for the system clipboard: paste it in this tab.' : 'Paste it here or in another drawing (Ctrl+V).' });
     updateRibbon();
     return big ? CLIP_HEADER + '\n{"v":1,"ents":[],"big":1}' : t;
   }
@@ -1238,7 +1239,7 @@ export function initEdit(app, api) {
   function pasteKey(inPlace) {
     pk = { inPlace };
     const me = pk;
-    setTimeout(() => { if (pk === me) { pk = null; paste(null, inPlace); } }, 150);
+    setTimeout(() => { if (pk === me) { pk = null; paste(null, inPlace); } }, 400);
   }
   /** Text from a paste event: pasted when it is a Linework copy, ignored otherwise. */
   function pasteText(t) {
@@ -1252,6 +1253,7 @@ export function initEdit(app, api) {
     reset, setModel, revert, reapply, drawOverlay, down, move, up, dbl, context, key, toolChanged, cancelGesture,
     finishDraft, undoDraftPoint, cancelDraft, deleteSel, rotateSel, selectAll, quickSave, openSaveAs, save, editEntity,
     copy: copySel, copyButton, paste, pasteKey, pasteText, duplicate: duplicateSel,
+    get placing() { return !!E.place; },
     get draftActive() { return !!(E.place || (E.draft && (E.draft.tool === 'epoly' || E.draft.tool === 'eline') && E.draft.pts.length)); },
     get dirty() { return !!(E.doc && E.doc.dirty); },
     get ready() { return E.ready; },

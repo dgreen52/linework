@@ -683,6 +683,9 @@ function cancelDrafts() {
 function updateFinishBar() {
   const active = (app.mdraft && app.mdraft.mode !== 'distance' && app.mdraft.pts.length > 0) || (app.draft && app.draft.type === 'cloud-poly') || (edit && edit.draftActive);
   $('#finish-bar').hidden = !active;
+  const placing = !!(edit && edit.placing); // pasted / duplicated items following the cursor
+  $('#btn-undo-point').hidden = placing;
+  $('#btn-finish').lastChild.textContent = placing ? 'Place' : 'Finish';
 }
 
 function updateMeasureCard() {

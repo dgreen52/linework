@@ -17,6 +17,9 @@ const R2D = 180 / Math.PI;
 
 /** Shortest exact decimal for a number (DXF readers accept exponents). */
 export const num = (v) => (Number.isFinite(v) ? (Number.isInteger(v) ? v.toFixed(1) : String(v)) : '0.0');
+/** Integer group codes (flags, colours, counts, lineweights...) must be written without a decimal point. */
+const isInt = (c) => (c >= 60 && c < 100) || (c >= 170 && c < 180) || (c >= 270 && c < 290) || (c >= 370 && c < 390) || (c >= 400 && c < 410) || (c >= 1060 && c < 1072);
+const val = (c, v) => (typeof v !== 'number' ? String(v) : isInt(c) ? String(Math.round(v) || 0) : num(v));
 
 /** Nearest ACI index (1..255) to an RGB colour; white/black map to 7 (foreground). */
 export function nearestAci(rgb) {
@@ -140,7 +143,7 @@ export function writeDxf(model, opts = {}) {
   let handle = 0x20;
   const H = () => (handle++).toString(16).toUpperCase();
   const out = [];
-  const P = (c, v) => { out.push(String(c), typeof v === 'number' ? num(v) : String(v)); };
+  const P = (c, v) => { out.push(String(c), val(c, v)); };
   const stats = { entities: 0, splines: 0, cellsFlattened: 0, dimsMoved: 0, degenerate: 0 };
   const isDgn = model.format === 'DGN';
 
@@ -159,7 +162,7 @@ export function writeDxf(model, opts = {}) {
 
   // ---- entity writer (into a separate buffer so tables can list everything that was used)
   const body = [];
-  const E = (c, v) => { body.push(String(c), typeof v === 'number' ? num(v) : String(v)); };
+  const E = (c, v) => { body.push(String(c), val(c, v)); };
   const xyz = (c, p) => { E(c, p[0]); E(c + 10, p[1]); E(c + 20, 0); };
   const colorGroups = (e) => {
     if (e.rgb != null) {

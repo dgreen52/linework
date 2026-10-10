@@ -318,6 +318,10 @@ test('DGN -> DXF: levels become layers "Level N", colours ACI or true colour, we
   const f = join(TMP, 'dgn-into-dxf.dxf');
   writeFileSync(f, out.text);
   if (!ogrSkip) { const r = ogrDump([f])[f]; assert.ok(r && !r.error && r.features.filter((x) => /^Level /.test(x.Layer)).length >= flatEntities(P.ents).length); }
+  // and that DXF drawing saved as a new DGN: the pasted cells are written as cells (new headers)
+  const g = parseDgn(writeDgn(t.model, { extents: [-1000, -3000, 14000, 10000] }).bytes);
+  assert.deepEqual(g.entities.filter((e) => e.type === 'cell').map((e) => e.name).sort(), ['NORTH', 'TREE', 'TREE', 'TREE', 'TREE']);
+  if (!ogrSkip) { const h = join(TMP, 'dgn-into-dxf-as.dgn'); writeFileSync(h, writeDgn(t.model, { extents: [-1000, -3000, 14000, 10000] }).bytes); ogrAgrees(h, g); }
 });
 
 test('DXF -> DXF: layers, line types, styles and blocks copied in; a block name with other content is renamed (NAME_2, *D5)', () => {

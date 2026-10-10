@@ -101,7 +101,9 @@ const cvDrawing = $('#cv-drawing');
 const cvOverlay = $('#cv-overlay');
 const octx = cvOverlay.getContext('2d');
 app.renderer = new Canvas2DRenderer(cvDrawing);
-const layersPanel = new LayersPanel((vis) => { app.layerVisible = vis; app.hover = null; if (edit) edit.visibilityChanged(); invalidate(true); });
+const layersPanel = new LayersPanel((vis) => { app.layerVisible = vis; app.hover = null; if (edit) edit.visibilityChanged(); invalidate(true); }, {
+  label: (n) => app.layerLabel(n), names: (...a) => { if (app.doc) tools('names', ...a); },
+});
 
 // ------------------------------------------------------------------ coordinates
 const origin = () => (app.scene ? app.scene.origin : [0, 0]);
@@ -223,6 +225,7 @@ function drawOverlay() {
   drawAnnotations(ctx, app.view, { theme: app.theme, live: true });
   edit.drawOverlay(ctx);
   fire('draw', ctx);
+  if (app.tools) app.tools.drawOverlay(ctx);
 }
 
 function drawAnnotations(ctx, view, opts = {}) {
@@ -548,7 +551,8 @@ function setDocument(scene, name, size, ms, src = {}) {
   app.doc = { ...src, name, size, format: scene.format, hash: scene.hash || '', keep: !!keep };
   app.renderer.setScene(scene);
   app.layerVisible = Uint8Array.from(scene.layers.map((l) => (l.visible ? 1 : 0)));
-  layersPanel.setLayers(scene.layers);
+  app.levelNames = loadLevelNames();
+  layersPanel.setLayers(scene.layers, scene.format === 'DGN');
   const wide = window.innerWidth >= 1100;
   if (!keep) setLayersOpen(wide && scene.layers.filter((l) => l.count).length > 1);
   $('#empty').hidden = true;
@@ -561,6 +565,7 @@ function setDocument(scene, name, size, ms, src = {}) {
   app.history.clear();
   app.markups = keep ? keep.markups : [];
   edit.reset();
+  if (app.tools) app.tools.docChanged();
   if (EDIT_TOOLS.has(app.tool)) setTool(app.tool);
   $('#empty').hidden = true;
   $('#docinfo').hidden = false;
@@ -767,6 +772,7 @@ function setTool(t) {
   cvOverlay.className = t === 'pan' ? '' : t === 'select' || t === 'eselect' ? 'pointer' : 'crosshair';
   restoreHint();
   edit.toolChanged(t);
+  if (app.tools) app.tools.toolChanged();
   updateMeasureCard();
   updateFinishBar();
   updateSelectionStatus();
@@ -895,11 +901,12 @@ function updateHover(sx, sy) {
   if (!h) { $('#st-info').textContent = ''; return; }
   if (h.isText) {
     const t = s.texts[h.id - TEXT_ID];
-    $('#st-info').textContent = `Text “${t.s.slice(0, 60)}” · Layer ${s.layers[t.layer].name}${t.blk ? ' · Block ' + s.blockNames[t.blk] : ''}`;
+    $('#st-info').textContent = `Text “${t.s.slice(0, 60)}” · Layer ${app.layerLabel(s.layers[t.layer].name)}${t.blk ? ' · Block ' + s.blockNames[t.blk] : ''}`;
   } else {
     const type = (s.srcNames[s.src[h.id]] || '').replace(/_/g, ' ');
-    $('#st-info').textContent = `${type.charAt(0) + type.slice(1).toLowerCase()} · Layer ${s.layers[s.layer[h.id]].name}${s.blk[h.id] ? ' · Block ' + s.blockNames[s.blk[h.id]] : ''}`;
+    $('#st-info').textContent = `${type.charAt(0) + type.slice(1).toLowerCase()} · Layer ${app.layerLabel(s.layers[s.layer[h.id]].name)}${s.blk[h.id] ? ' · Block ' + s.blockNames[s.blk[h.id]] : ''}`;
   }
+  if (app.tools) app.tools.selChanged();
 }
 
 function updateSelectionStatus() {
@@ -1239,6 +1246,7 @@ document.addEventListener('keydown', (e) => {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (mod) {
     if (k === 'o') { e.preventDefault(); pickFile(); return; }
+    if (k === 'f' && !e.shiftKey) { e.preventDefault(); if (app.scene) tools('find'); return; }
     if (typing) return;
     if (k === 's') {
       e.preventDefault();
@@ -1257,6 +1265,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'p') { e.preventDefault(); if (app.doc) openPrintDialog(); return; }
     return;
   }
+  if (e.key === 'F3' && app.tools && app.tools.find.open) { e.preventDefault(); app.tools.findStep(e.shiftKey ? -1 : 1); return; }
   if (typing || e.altKey) return;
   // Space / Enter on a focused button or checkbox press it, unless something is being drawn
   if (e.key === ' ' && isControl(e.target)) return;
@@ -1287,6 +1296,7 @@ document.addEventListener('keydown', (e) => {
   if (k === 'b') { toggleTheme(); return; }
   if (k === 's') { toggleSnap(); return; }
   if (k === 'e') { setTool('eselect'); return; }
+  if (k === 'i' && !e.shiftKey) { tools('info'); return; }
   if (KEY_TOOLS[k]) { setTool(KEY_TOOLS[k]); }
 });
 // copy / paste of drawing items (Edit mode): plain text on the system clipboard, no permission needed
@@ -1358,6 +1368,8 @@ const actions = {
   'e-dup': () => edit.duplicate(),
   'e-save': () => edit.quickSave(),
   'e-saveas': () => edit.openSaveAs(),
+  find: () => { if (app.scene) tools('find'); else toast('Open a drawing first.', { kind: 'warn' }); },
+  'e-tools': () => { if (app.scene) tools('menu'); },
 };
 for (const b of $$('[data-action]')) b.addEventListener('click', () => { $('#menu-more').hidden = true; actions[b.dataset.action]?.(); });
 
@@ -1479,8 +1491,39 @@ function layersChanged() {
   if (!app.scene) return;
   app.layerVisible = layersPanel.refresh();
 }
+// ------------------------------------------------------------------ editing tools (loaded on first use)
+// Find / replace (Ctrl+F), key-ins, mirror / scale / array, select same, match attributes and element
+// info (I) live in src/app/tools-ui.js, fetched the first time one of them is used.
+let toolsP = null;
+function tools(cmd, ...args) {
+  if (!app.tools && cmd === 'keyin' && args[0] == null) return;
+  if (!toolsP) {
+    toolsP = import('./app/tools-ui.js').then((m) => (app.tools = m.initTools(app, { edit, invalidate, setTool, accent, layersPanel })));
+    toolsP.catch(() => { toolsP = null; toast('This tool could not be loaded. Check the connection and try again.', { kind: 'error' }); });
+  }
+  return toolsP.then((T) => T.run(cmd, ...args));
+}
+app.loadTools = tools;
+
+// Level names (DGN v7 has none): kept in this browser per drawing name, never written into the file.
+const LEVELS = 'linework:levels:';
+function loadLevelNames() {
+  const m = new Map();
+  if (!app.doc || app.doc.format !== 'DGN') return m;
+  try { for (const [k, v] of Object.entries(JSON.parse(storage.get(LEVELS + app.doc.name, '{}')))) if (+k >= 1 && +k <= 63 && typeof v === 'string' && v.trim()) m.set(+k, v.trim().slice(0, 64)); } catch { /* damaged: none */ }
+  return m;
+}
+/** "Level 5" -> "Level 5 · Power" when level 5 has a name. */
+app.layerLabel = (n) => { const m = app.levelNames && app.levelNames.size && /^Level (\d+)$/.exec(n); const v = m && app.levelNames.get(+m[1]); return v ? `${n} · ${v}` : n; };
+/** New level names: kept, and shown in the Layers panel, the Level box and the status bar. */
+app.setLevelNames = (names) => {
+  app.levelNames = names;
+  if (app.doc) { if (names.size) storage.set(LEVELS + app.doc.name, JSON.stringify(Object.fromEntries(names))); else storage.del(LEVELS + app.doc.name); }
+  layersPanel.render();
+  edit.refreshLayers();
+};
 edit = initEdit(app, {
-  invalidate, setTool, accent, drawSnapGlyph, updateUndoButtons, updateFinishBar, layersChanged, restoreHint,
+  invalidate, setTool, accent, drawSnapGlyph, updateUndoButtons, updateFinishBar, layersChanged, restoreHint, tools,
   showLayers: (indices) => layersPanel.show(indices),
   setInfo: (t) => { $('#st-info').textContent = t; },
   setCursor: (c) => { if (!cvOverlay.classList.contains('dragging')) cvOverlay.className = c === 'grab' ? '' : c; },

@@ -36,6 +36,11 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   handles; draw lines, polylines, rectangles, circles and text on any layer; change layer, colour
   and line weight; **copy and paste between drawings** (DGN ↔ DGN, DXF ↔ DGN, across tabs) and
   **duplicate**; one undo history for edits and markups.
+* **Editing tools** (new in v0.4, see [Editing tools](#editing-tools-v04)): **find and replace text**
+  (`Ctrl+F`, also inside cells and blocks), **MicroStation-style key-ins** (`XY=`, `DL=`, `DI=`,
+  `AA=`) for exact points, moves, copies and rotations, **mirror, scale and array**, **select same**
+  level / colour / weight / type, **match attributes**, an **element information** panel (`I`: DGN
+  element type and file offset too) and **DGN level names** (kept in the browser, never in the file).
 * **Saves** the edited drawing as **DXF** (R2000) or **DGN v7** — **over the original file**
   where the browser allows it (asked once per file, with a backup copy), otherwise downloaded to
   your device; never uploaded. A DGN you opened is saved back with every untouched element
@@ -127,11 +132,72 @@ for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/d
 | `Delete` | delete the selection |
 | `Ctrl+S` / `Ctrl+Shift+S` | save the drawing (in Edit) / save as DXF or DGN |
 
+| Editing tools (v0.4) | |
+|---|---|
+| `Ctrl+F` | find text (any mode; the View tab has a Find button): `Enter` / `Shift+Enter` or `F3` / `Shift+F3` next / previous, `Esc` closes; in Edit also Replace / Replace all |
+| `XY=x,y` `DL=dx,dy` `DI=d,a` | in a draw tool: start typing (`X`, `D`) and press `Enter` for an exact point; with a selection: move it (tick Copy to copy it); `XY=` moves its lower-left corner there |
+| `AA=angle` | with a selection: rotate it about its centre; otherwise the angle of new text |
+| A number | while drawing a line or polyline: the length; a circle: the radius |
+| `I` | element information (selection, or the item under the cursor) |
+| Edit › **More** | find and replace, key-in, move / copy / rotate by a value, mirror, scale, array, select same, match attributes, element info |
+
 On touch screens: tap to select, drag to move, long-press for a menu (edit, copy, duplicate, rotate,
 delete, paste here / in place, add or delete a point); the ribbon has Copy, Paste and Duplicate, and a
 tap places pasted items; two fingers still pan and zoom.
 
 Press `?` in the app for the same sheet.
+
+## Editing tools (v0.4)
+
+Made for MicroStation users working in DGN v7 wiring schematics and title blocks; they work on DXF and
+DWG drawings too. Each change is one undo step, and a DGN keeps its original bytes (see *How saving
+works* below). The tools load the first time one is used (a few KB, cached for offline use).
+
+* **Find and replace** (`Ctrl+F` in any mode, or View › Find): a search box with the match count;
+  `Enter` / `Shift+Enter` (or `F3` / `Shift+F3`, or the arrows) zoom to the next / previous match and
+  highlight it (all matches are outlined). Text inside cells, nested cells and block attributes is
+  found too. Options: **Aa** match case, **Word** whole words only, **Visible** only levels / layers that
+  are shown (on by default). In Edit mode the found item is selected and **Replace** / **Replace all**
+  appear: a replacement goes through the same path as typing over a text (a DGN cell is rebuilt from its
+  original bytes with only that text changed), **Replace all** is one undo step, a text is never left
+  empty, and text in a DXF block definition (shared by every copy) is left alone, with a note.
+* **Key-ins** (as in MicroStation; drawing master units, angles in degrees counter-clockwise from +X):
+  in a draw tool (line, polyline, rectangle, circle, text) type `XY=x,y` for a point at x,y,
+  `DL=dx,dy` for a point relative to the last one, `DI=distance,angle` for a point at a distance and
+  direction from the last one; a plain number is the length of the next line segment (towards the
+  cursor) or a circle's radius. Typing `X`, `D` or `A` opens the key-in box; it shows what the key-in
+  will do (and draws it) before `Enter` commits; `Esc` cancels; a mistake keeps the box open and says
+  what is wrong. With a **selection**: `DL=` / `DI=` move it by that vector, `XY=` moves its lower-left
+  corner to the point (tick **Copy** to drop a copy instead), `AA=angle` rotates it about its centre.
+  Without a selection `AA=` sets the angle new text is placed at. `@dx,dy` and `@d<a` also work. Edit ›
+  More › *Move by a distance…*, *Copy by a distance…*, *Rotate by an angle…* open the box ready to type.
+  While pasting (or picking a point for a tool) `XY=` places at an exact point.
+* **Mirror** (Edit › More): left ↔ right or up ↕ down about the selection's centre, or about a point you
+  click (or type with `XY=`). Text stays readable (also in cells and block attributes): it moves to its
+  mirrored place without being reversed.
+  DGN elements cannot be mirrored in place, so on Save mirrored items (other than text) are written from
+  what Linework shows, and the save notes say so.
+* **Scale** (factor about the selection's centre or a clicked point) and **Array** (*n* copies, each
+  offset by a typed X, Y from the previous one; the copies are selected). Both are one undo step; in a
+  DGN a scaled item keeps its bytes (the scale is applied to them in place) and array copies are copies
+  of the original bytes, moved.
+* **Select same** (Edit › More, or right-click › *Select same…*): every item on a shown level / layer
+  with the same level, colour, weight and/or type as the selection, or as picked from lists of the
+  values in the drawing (with counts); the dialog shows how many items match before selecting.
+* **Match attributes**: click the item to copy from, then click the items to change (`Esc` when done);
+  level, colour, weight and line style are copied (cells: all their components). If items were selected
+  when you started, they are changed straight away.
+* **Element info** (`I`, Edit › More, right-click › *Element info*): type, level / layer (with its
+  name), colour (index and swatch), weight, line style, cell or block name; text, font, justification,
+  height, width factor and angle; coordinates, length, perimeter, area, radius…; for DGN the element
+  type number, its size and **file offset** (decimal and hex) and whether it will be saved unchanged or
+  rebuilt from those bytes; a cell's components. Several items: counts per type, level, colour and
+  weight, and the extents. Outside Edit it shows the item under the cursor.
+* **Level names** (DGN): DGN v7 levels have no names. Give them names with the pen next to a level in
+  the Layers panel, or **Import…** a text / CSV file with one `number,name` per line (comma, semicolon,
+  tab or spaces; quotes allowed; a header line and `#` comments are skipped). Names show in the Layers
+  panel (the filter finds them), the Level box and the status bar, are kept in this browser per drawing
+  name, and can be **Export**ed as CSV or cleared. They are never written into the DGN file.
 
 ## Edit mode
 
@@ -476,6 +542,17 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   undo) / Discard, Save clears the journal; compare overlay pixels, toggles, stepping and zoom,
   edits while comparing, mixed kinds refused, DXF revisions, 390 px; vector print at A3 1:2 and
   Letter 1"=20' black and white checked in the PDF (page size, one page, paths and text, no images).
+* Editing tools (`tools.test.mjs`, synthetic wiring sheet `dgn-wiring.dgn`, read like GDAL/OGR):
+  find (substring, whole word, case, visible levels, text in cells, reading order), replace one / all
+  as one change list with every other element byte-identical and the cell rebuilt from its bytes,
+  shared block text skipped, no empty texts; key-in parsing and points; mirror (readable text), scale,
+  array; scale / rotate keep DGN bytes (in place), a mirror is noted, array copies are moved original
+  bytes; GDAL/OGR reads the result; select same and match attributes (DGN and DXF); element info (type
+  number, offset, justification, components); level-name files. End to end: find in View and Edit,
+  replace / replace all / undo / save / reopen, the find bar at 390 px; key-ins in the draw tools and
+  on a selection (move, copy, rotate, AA= text); mirror, mirror about a point, scale, array, select
+  same, match attributes, element info; level names (panel, import, filter, Level box, status bar,
+  export, kept after a reload, the saved DGN unchanged).
 * DWG: every DWG fixture is one of the synthetic DXF files converted to DWG R2000, and must read
   exactly like its DXF (entity counts, layers, blocks, insert transforms, extents, every drawn
   item and text) — through the direct mapping and through LibreDWG's DXF fallback; version
@@ -498,14 +575,16 @@ src/formats/            dxf.js, dgn.js, detect.js (format detection); dwg.js (DW
 vendor/libredwg/        LibreDWG WebAssembly + glue (GPL-3.0-or-later; provenance in its README)
 deploy/_headers         HTTP headers for the static host (CSP etc.)
 src/scene.js            blocks → flat primitives, colours, local origin, spatial grid
-src/edit/               edit operations, edit document (changes, undo, selection), live scene
+src/edit/               edit operations, edit document (changes, undo, selection), live scene,
+                        find / replace, key-ins, transforms, attributes + element info, level names
 src/view/               viewport, Canvas2D renderer (WebGL-replaceable interface), batches, colours
 src/tools/              snaps, measurement, revision compare (compare.js)
 src/markup/             markup model, revision clouds, sidecar format, undo history, drawing
 src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, PNG export; loaded
                         after start-up or on first use: files.js + store.js (file picker, save
                         over the original, recent drawings, unsaved-edit journal), compare.js
-                        (compare overlay + panel), print-svg.js (vector print to scale)
+                        (compare overlay + panel), print-svg.js (vector print to scale),
+                        tools-ui.js (editing tools: find, key-ins, More menu, info, level names)
 src/worker.js           parse worker
 samples/                synthetic sample drawings (+ generators in samples/gen/)
 tools/                  fixture generators (DXF, DGN, DWG), DWG reader vendoring/build scripts,
@@ -530,19 +609,21 @@ Trade-offs, for the owner to decide before the first public release:
 ## Roadmap
 
 * **v0.2** — Edit mode and saving as DXF / DGN v7.
-* **v0.3 (this version)** — DWG (R13–2018) via LibreDWG compiled to WebAssembly, lazy-loaded
+* **v0.3** — DWG (R13–2018) via LibreDWG compiled to WebAssembly, lazy-loaded
   ([details](DWG.md)); copy / paste between drawings, duplicate and line weights.
-* **v0.4 (files and review)** — save over the original file (backup copy), recent drawings,
-  unsaved-edit recovery, revision compare, vector print to scale.
+* **v0.4 (this version)** — editing tools (find / replace text, MicroStation key-ins, mirror,
+  scale, array, element information, select same, match attributes, DGN level names); save over
+  the original file (backup copy), recent drawings, unsaved-edit recovery, revision compare,
+  vector print to scale.
 * **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; measurement
   export (CSV); editing the geometry inside blocks/cells and shared block-definition text.
-* **v0.4** — WebGL renderer for very large drawings; true linetype scaling; hatch patterns;
+* **v0.5** — true linetype scaling; hatch patterns;
   layouts / paper space tabs; markup resize handles and markup list panel.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
   markup review (still file-based, no server).
 
-Deliberately **not** in v0.3: writing DWG, vector PDF, editing geometry inside blocks (text
-inside cells and block attributes can be edited since 0.2.2).
+Deliberately **not** in v0.4: writing DWG, editing geometry inside blocks (text inside cells
+and block attributes can be edited since 0.2.2).
 
 ## Known limitations
 
@@ -588,3 +669,15 @@ Editing and saving (v0.2):
   3D rotations (text, arcs, ellipses) follow GDAL's dgnlib quaternion convention.
 * Splines can be moved, rotated and deleted but not reshaped; zero-size ellipses are left out of
   a saved DXF (they are not valid DXF).
+
+Editing tools (v0.4):
+
+* Find searches the drawn text one line at a time (a match across an MTEXT line break is not found)
+  and does not use wildcards or regular expressions; text in a DXF block definition is found but not
+  replaced (it is shared by every copy of the block).
+* Key-ins take master units (no `master:sub` form) and plan X, Y (a Z is ignored); `AA=` is used by
+  new text and by rotating a selection.
+* Mirrored DGN items other than text are written from what Linework shows (DGN v7 has no mirrored
+  text or arcs); a mirrored cell keeps its components but gets a new cell header.
+* Level names live in this browser (per drawing file name): export them to share them or to use them
+  on another device.

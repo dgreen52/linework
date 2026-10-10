@@ -35,7 +35,7 @@ README.md first (and DWG.md for the DWG reader). These rules are not optional.
 ## Product principles (the acceptance bar)
 
 Lightweight (startup code — index.html, app.css, the modules src/app.js and the parse worker import
-statically — < 150 KB gzipped; everything precached for offline, lazily loaded writers included, < 220 KB; the DWG reader is loaded on demand and cached separately), smooth (60 fps pan/zoom on normal drawings; parsing in
+statically — < 150 KB gzipped; everything precached for offline, lazily loaded writers included, < 260 KB; the DWG reader is loaded on demand and cached separately), smooth (60 fps pan/zoom on normal drawings; parsing in
 a worker with progress), easy (a first-time user can open, measure and mark up in a minute; few
 labelled buttons; undo always available), actually works (robust to real-world quirks; never
 crash on a bad file — show what loaded plus "N items not shown"), and cheap (static hosting).
@@ -54,8 +54,8 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/tools/snap.js`, `measure.js` | Snaps and measurement maths (pure, unit tested). |
 | `src/tools/compare.js` | Revision compare (pure): items described from the scene (+ DGN element-byte hashes), matched, paired as moved / changed. |
 | `src/markup/*` | Markup model, sidecar format (see MARKUP_FORMAT.md), history, drawing. |
-| `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings). |
-| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. Loaded after start-up / on first use (keep them out of the static graph): `files.js` + `store.js` (file picker handles, Save over the original, recent drawings, IndexedDB journal of unsaved edits), `compare.js` (compare overlay), `print-svg.js` (vector print to scale). Modules hook in through `app.hooks` (`open`, `history`, `draw`). |
+| `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings); v0.4 editing tools, pure and unit tested: `find.js` (find / replace text, also in cells), `keyin.js` (XY= DL= DI= AA= key-ins), `xform.js` (mirror, scale, array), `attrs.js` (select same, match attributes, element info), `levels.js` (DGN level-name files). |
+| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. Loaded after start-up / on first use (keep them out of the static graph): `files.js` + `store.js` (file picker handles, Save over the original, recent drawings, IndexedDB journal of unsaved edits), `compare.js` (compare overlay), `print-svg.js` (vector print to scale), and `tools-ui.js` (the editing tools' UI: find bar, key-in preview, More menu, dialogs, info card, level names; imported on first use through `app.loadTools`). Modules hook in through `app.hooks` (`open`, `history`, `draw`). |
 | `src/worker.js` | Parse worker. |
 | `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump the version in `src/version.js`** (the one place it lives; the about line, saved files and the cache name read it). The DWG reader has its own cache (`READER_CACHE`). |
 | `tools/` | Fixture generators (`dwg-r2000.mjs` = test-only DWG writer), DWG reader vendoring/build, palette extraction, icon rendering, static server, `make_dist.mjs`. |
@@ -89,4 +89,7 @@ that looks wrong before reporting.
   for float precision; markups and measurements are stored in absolute drawing coordinates.
 * Colours: `FG` (ACI 7) means white on dark / black on paper; never hard-code white.
 * Keep UI text plain and short, with tooltips and keyboard shortcuts listed in the help sheet.
+* Every drawing change goes through the Edit controller's `commit` (one undo step, DGN bytes kept):
+  build changes with the pure functions of `src/edit/` (e.g. `setText` / `withPart` for text, never a
+  re-encode). DGN level names are display-only (browser storage per drawing name), never written.
 * Commit messages end with the `Co-Authored-By` trailer the owner asks for.

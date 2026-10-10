@@ -57,6 +57,7 @@
     <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2.1-5M19 4v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-saveas" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5Z M8 4v5h7V4 M8 20v-6h8v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-find" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15 15l5.5 5.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-compare" viewBox="0 0 24 24"><rect x="3" y="4" width="11" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="10" y="9" width="11" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.5 2"/></symbol>
@@ -98,6 +99,7 @@
     <button type="button" class="tool" data-tool="pan" aria-pressed="true" title="Pan: drag to move around. Wheel zooms. (H)"><svg class="ic" aria-hidden="true"><use href="#i-pan"/></svg><span>Pan</span></button>
     <button type="button" class="tool" data-tool="zoombox" aria-pressed="false" title="Zoom to a box: drag a rectangle (Z)"><svg class="ic" aria-hidden="true"><use href="#i-zoombox"/></svg><span>Zoom box</span></button>
     <button type="button" class="tool" data-action="fit" title="Fit the whole drawing (F)"><svg class="ic" aria-hidden="true"><use href="#i-fit"/></svg><span>Fit</span></button>
+    <button type="button" class="tool" data-action="find" title="Find text in the drawing, also inside cells and blocks (Ctrl+F)"><svg class="ic" aria-hidden="true"><use href="#i-find"/></svg><span>Find</span></button>
     <span class="sep" aria-hidden="true"></span>
     <button type="button" class="tool" data-action="layers" aria-pressed="false" id="btn-layers" title="Show or hide layers (L)"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg><span>Layers</span></button>
     <button type="button" class="tool" data-action="theme" id="btn-theme" title="Switch between a dark CAD background and white paper (B)"><svg class="ic" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-label">Paper</span></button>
@@ -169,6 +171,7 @@
     <button type="button" class="tool" data-action="e-dup" id="btn-edup" title="Duplicate the selection: the copy follows the cursor, click to place (Ctrl+D; or Ctrl+drag)" disabled><svg class="ic" aria-hidden="true"><use href="#i-dup"/></svg><span>Duplicate</span></button>
     <button type="button" class="tool" data-action="e-rotate" id="btn-erotate" title="Rotate the selection 90° counter-clockwise (Shift+click: clockwise)" disabled><svg class="ic" aria-hidden="true"><use href="#i-rotate"/></svg><span>Rotate 90°</span></button>
     <button type="button" class="tool" data-action="e-delete" id="btn-edelete" title="Delete the selection (Delete)" disabled><svg class="ic" aria-hidden="true"><use href="#i-clear"/></svg><span>Delete</span></button>
+    <button type="button" class="tool" data-action="e-tools" id="btn-etools" aria-haspopup="menu" title="More: find and replace, key-ins (XY= DL= DI= AA=), move / copy / rotate by a value, mirror, scale, array, select same, match attributes, element info"><svg class="ic" aria-hidden="true"><use href="#i-more"/></svg><span>More</span></button>
     <button type="button" class="tool" data-action="undo" id="btn-eundo" title="Undo (Ctrl+Z)" disabled><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
     <button type="button" class="tool" data-action="redo" id="btn-eredo" title="Redo (Ctrl+Y)" disabled><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span>Redo</span></button>
     <span class="sep" aria-hidden="true"></span>
@@ -232,7 +235,7 @@
       <textarea id="ta-edit" rows="1" spellcheck="false" autocomplete="off"></textarea>
     </div>
     <div class="et-hint" id="et-hint" hidden></div>
-    <div class="len-box" id="len-box" hidden><label for="inp-len">Length</label><input id="inp-len" type="text" inputmode="decimal" autocomplete="off" size="8"><span id="len-unit"></span></div>
+    <div class="len-box" id="len-box" hidden><label for="inp-len" id="len-label">Length</label><input id="inp-len" type="text" autocomplete="off" spellcheck="false" size="12"><span id="len-unit"></span><label class="len-copy" hidden><input type="checkbox" id="len-copy">Copy</label><output id="len-prev" for="inp-len"></output></div>
     <div class="menu ctx" id="ctx-menu" role="menu" hidden></div>
     <div class="menu color-pop" id="color-pop" role="menu" hidden></div>
 
@@ -253,6 +256,12 @@
       <button type="button" class="btn sm" id="btn-layers-all">Show all</button>
     </div>
     <ul class="layer-list" id="layer-list" aria-label="Layer visibility"></ul>
+    <div class="panel-foot" id="level-names" hidden title="DGN v7 levels have no names: names are kept in this browser for this drawing, never written into the file">
+      <span>Level names</span>
+      <button type="button" class="btn sm" id="btn-names-import" title="Import level names from a CSV or text file: one “number,name” per line">Import…</button>
+      <button type="button" class="btn sm" id="btn-names-export" title="Download the level names as a CSV file">Export</button>
+      <button type="button" class="btn sm" id="btn-names-clear" title="Forget the level names of this drawing">Clear</button>
+    </div>
   </aside>
 </main>
 
@@ -280,7 +289,9 @@
           <dt><kbd>+</kbd> <kbd>−</kbd></dt><dd>Zoom in / out</dd>
           <dt>Arrow keys</dt><dd>Pan (in Edit, with a selection: nudge it)</dd>
           <dt><kbd>H</kbd></dt><dd>Pan tool</dd>
-          <dt><kbd>L</kbd></dt><dd>Layers panel</dd>
+          <dt><kbd>L</kbd></dt><dd>Layers panel (DGN: name levels with the pen, or import a names file)</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>F</kbd></dt><dd>Find text (<kbd>Enter</kbd> / <kbd>Shift</kbd>+<kbd>Enter</kbd> or <kbd>F3</kbd>: next / previous); in Edit also replace</dd>
+          <dt><kbd>I</kbd></dt><dd>Element info: type, level, colour, weight, text, size, DGN element and offset</dd>
           <dt><kbd>B</kbd></dt><dd>Dark background / white paper</dd>
         </dl>
       </section>
@@ -316,7 +327,9 @@
           <dt>Right-click a point</dt><dd>Delete it · right-click or double-click a side to add one</dd>
           <dt><kbd>N</kbd> <kbd>P</kbd> <kbd>R</kbd> <kbd>O</kbd> <kbd>T</kbd></dt><dd>Line, polyline (<kbd>C</kbd> closes), rectangle, circle, text · <kbd>Esc</kbd> back to Select</dd>
           <dt>Layer, Colour, Weight</dt><dd>For new items; with a selection they show and change the selection</dd>
-          <dt>Type a number</dt><dd>While drawing a line: exact length, then <kbd>Enter</kbd></dd>
+          <dt>Type a number</dt><dd>While drawing a line: exact length (a circle: radius), then <kbd>Enter</kbd></dd>
+          <dt>Key-ins</dt><dd>Type <kbd>XY=</kbd>x,y · <kbd>DL=</kbd>dx,dy · <kbd>DI=</kbd>distance,angle in a draw tool for exact points; with a selection they move it (or copy it), <kbd>AA=</kbd>angle rotates it · <kbd>Esc</kbd> cancels</dd>
+          <dt>More ▾</dt><dd>Mirror, scale, array, move / copy / rotate by a value, select same level / colour / weight / type, match attributes</dd>
           <dt><kbd>Delete</kbd></dt><dd>Delete the selection</dd>
           <dt><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd></dt><dd>Copy / paste, also between drawings and tabs (click places; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>: in place)</dd>
           <dt><kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+drag</dt><dd>Duplicate (click places) / drag a copy (<kbd>Alt</kbd>+drag on a Mac)</dd>
@@ -409,6 +422,7 @@
 
 <input type="file" id="file-input" accept=".dxf,.dgn,.dwg,.json,application/dxf,image/vnd.dxf" hidden>
 <input type="file" id="markup-input" accept=".json,application/json" hidden>
+<input type="file" id="names-input" accept=".csv,.txt,text/csv,text/plain" hidden>
 <div id="print-root" aria-hidden="true"></div>
 <noscript><p class="noscript">This app needs JavaScript. It runs entirely in your browser; nothing is uploaded.</p></noscript>
 </body>

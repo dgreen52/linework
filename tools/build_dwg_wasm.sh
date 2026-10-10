@@ -18,8 +18,8 @@ set -euo pipefail
 export LC_ALL=C TZ=UTC
 
 # ------------------------------------------------------------------ pins (recorded in DWG.md)
-EMSDK_VERSION="${EMSDK_VERSION:-3.1.74}"
-EMSDK_COMMIT="${EMSDK_COMMIT:-3d6d8ee910466516a53e665b86458faa81dae9ba}"               # emsdk tag 3.1.74
+SDK_VERSION="${EMSDK_VERSION:-3.1.74}"   # (emsdk_env.sh clears EMSDK_* variables)
+SDK_COMMIT="${EMSDK_COMMIT:-3d6d8ee910466516a53e665b86458faa81dae9ba}"               # emsdk tag 3.1.74
 LIBREDWG_WEB_REPO="${LIBREDWG_WEB_REPO:-https://github.com/mlightcad/libredwg-web.git}"
 LIBREDWG_WEB_TAG="${LIBREDWG_WEB_TAG:-v0.7.16}"
 LIBREDWG_WEB_COMMIT="${LIBREDWG_WEB_COMMIT:-0d4fd3fbe6eb1a451d7c5ce286d0785e4d65dd29}"   # that tag
@@ -50,18 +50,18 @@ mkdir -p "$WORK"
 printf '{ "type": "commonjs" }\n' > "$WORK/package.json"
 
 # ------------------------------------------------------------------ 1. Emscripten SDK, pinned
-step "Emscripten SDK $EMSDK_VERSION (emsdk $EMSDK_COMMIT)"
+step "Emscripten SDK $SDK_VERSION (emsdk $SDK_COMMIT)"
 [ -d "$WORK/emsdk/.git" ] || git clone -q https://github.com/emscripten-core/emsdk.git "$WORK/emsdk"
-git -C "$WORK/emsdk" cat-file -e "$EMSDK_COMMIT^{commit}" 2>/dev/null || git -C "$WORK/emsdk" fetch -q origin
-git -C "$WORK/emsdk" -c advice.detachedHead=false checkout -q --detach "$EMSDK_COMMIT"
-(cd "$WORK/emsdk" && ./emsdk install "$EMSDK_VERSION" && ./emsdk activate "$EMSDK_VERSION")
+git -C "$WORK/emsdk" cat-file -e "$SDK_COMMIT^{commit}" 2>/dev/null || git -C "$WORK/emsdk" fetch -q origin
+git -C "$WORK/emsdk" -c advice.detachedHead=false checkout -q --detach "$SDK_COMMIT"
+(cd "$WORK/emsdk" && ./emsdk install "$SDK_VERSION" && ./emsdk activate "$SDK_VERSION")
 set +u
 # shellcheck disable=SC1091
 source "$WORK/emsdk/emsdk_env.sh" >/dev/null 2>&1
 set -u
 EMCC_VERSION="$(emcc --version 2>/dev/null | sed -n 1p)"
 echo "$EMCC_VERSION"
-case "$EMCC_VERSION" in *" $EMSDK_VERSION "*) ;; *) fail "emcc is not $EMSDK_VERSION" ;; esac
+case "$EMCC_VERSION" in *" $SDK_VERSION "*) ;; *) fail "emcc is not $SDK_VERSION" ;; esac
 
 # ------------------------------------------------------------------ 2. sources, pinned and verified
 step "libredwg-web $LIBREDWG_WEB_TAG ($LIBREDWG_WEB_COMMIT)"
@@ -111,7 +111,7 @@ mkdir -p "$OUT"
 rm -f "$OUT/libredwg-web.js" "$OUT/libredwg-web.wasm" "$OUT/build-info.json" "$OUT/SHA256SUMS"
 {
   printf '// LibreDWG for Linework: built by tools/build_dwg_wasm.sh from libredwg-web %s (commit %s) with Emscripten %s. Emscripten runtime: MIT licence.\n' \
-    "$LIBREDWG_WEB_TAG" "$LIBREDWG_WEB_COMMIT" "$EMSDK_VERSION"
+    "$LIBREDWG_WEB_TAG" "$LIBREDWG_WEB_COMMIT" "$SDK_VERSION"
   cat libredwg-web.js
 } > "$OUT/libredwg-web.js"
 cp libredwg-web.wasm "$OUT/libredwg-web.wasm"
@@ -123,7 +123,7 @@ if [ -n "${GITHUB_RUN_ID:-}" ]; then
   RUN_IMAGE="${ImageOS:-} ${ImageVersion:-}"
 fi
 AUTOTOOLS="$(autoconf --version 2>/dev/null | sed -n 1p); $(automake --version 2>/dev/null | sed -n 1p); $(libtoolize --version 2>/dev/null | sed -n 1p)"
-export EMSDK_VERSION EMSDK_COMMIT LIBREDWG_WEB_REPO LIBREDWG_WEB_TAG LIBREDWG_WEB_COMMIT JSMN_COMMIT LIBREDWG_BASE_TAG \
+export SDK_VERSION SDK_COMMIT LIBREDWG_WEB_REPO LIBREDWG_WEB_TAG LIBREDWG_WEB_COMMIT JSMN_COMMIT LIBREDWG_BASE_TAG \
   LIBREDWG_BASE_COMMIT VERSION EMCC_VERSION AUTOTOOLS CONFIGURE_FLAGS CFLAGS_WASM LINK_FLAGS RUN_URL RUN_COMMIT RUN_IMAGE
 node - "$OUT/build-info.json" <<'JS'
 const e = process.env;
@@ -133,7 +133,7 @@ const info = {
   jsmn: { commit: e.JSMN_COMMIT },
   libredwgBase: { tag: e.LIBREDWG_BASE_TAG, commit: e.LIBREDWG_BASE_COMMIT },
   version: e.VERSION,
-  emsdk: { version: e.EMSDK_VERSION, commit: e.EMSDK_COMMIT },
+  emsdk: { version: e.SDK_VERSION, commit: e.SDK_COMMIT },
   emcc: e.EMCC_VERSION,
   autotools: e.AUTOTOOLS,
   configure: e.CONFIGURE_FLAGS,

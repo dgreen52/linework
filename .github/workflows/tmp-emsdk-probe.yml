@@ -1,5 +1,5 @@
 # Temporary: finds the Emscripten version whose build of the pinned sources matches the wasm of
-# npm @mlightcad/libredwg-web@0.7.16 (still vendored on this branch). Removed after use.
+# npm @mlightcad/libredwg-web@0.7.16 (still vendored on this branch). Removed after use. (2)
 name: tmp emsdk probe
 
 on:

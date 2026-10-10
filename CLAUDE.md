@@ -34,8 +34,8 @@ README.md first (and DWG.md for the DWG reader). These rules are not optional.
 
 ## Product principles (the acceptance bar)
 
-Lightweight (app shell < 150 KB gzipped — v0.3 is at the limit, so new shell code needs savings
-elsewhere or lazy loading like `dwg.js`), smooth (60 fps pan/zoom on normal drawings; parsing in
+Lightweight (startup code — index.html, app.css, the modules src/app.js and the parse worker import
+statically — < 150 KB gzipped; everything precached for offline, lazily loaded writers included, < 220 KB; the DWG reader is loaded on demand and cached separately), smooth (60 fps pan/zoom on normal drawings; parsing in
 a worker with progress), easy (a first-time user can open, measure and mark up in a minute; few
 labelled buttons; undo always available), actually works (robust to real-world quirks; never
 crash on a bad file — show what loaded plus "N items not shown"), and cheap (static hosting).
@@ -56,7 +56,7 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings). |
 | `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. |
 | `src/worker.js` | Parse worker. |
-| `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump `VERSION`.** The DWG reader has its own cache (`READER_CACHE`). |
+| `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump the version in `src/version.js`** (the one place it lives; the about line, saved files and the cache name read it). The DWG reader has its own cache (`READER_CACHE`). |
 | `tools/` | Fixture generators (`dwg-r2000.mjs` = test-only DWG writer), DWG reader vendoring/build, palette extraction, icon rendering, static server, `make_dist.mjs`. |
 | `tests/unit/` | `node --test` suites. `tests/e2e/run.mjs` is the Playwright suite. |
 

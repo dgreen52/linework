@@ -15,6 +15,7 @@
   "file_handlers": [
     {
       "action": "./",
+      "launch_type": "multiple-clients",
       "accept": {
         "image/vnd.dxf": [".dxf"],
         "image/vnd.dwg": [".dwg"],

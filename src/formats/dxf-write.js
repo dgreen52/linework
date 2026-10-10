@@ -378,11 +378,9 @@ export function writeDxf(model, opts = {}) {
   needBlocks(model.entities); needBlocks(model.paperEntities || []);
   for (const b of blocks) needBlocks(b.entities || []);
   // entities first (they may create moved-dimension blocks)
-  const ents = [];
   for (const e of model.entities) if (e) entity(e, hMS);
   for (const e of model.paperEntities || []) if (e) entity(e, hPS, true);
-  ents.push(...body);
-  body.length = 0;
+  const ents = body.splice(0, body.length); // (never push(...big): it overflows the call stack)
   // blocks (entities owned by their block record)
   const blockBodies = [];
   for (const b of allBlocks()) {

@@ -154,6 +154,7 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 
 .progress { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); width: min(360px, 80%); padding: 16px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 5; }
 .progress-label { margin-bottom: 8px; font-weight: 600; }
+.progress-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
 .bar { height: 6px; border-radius: 3px; background: var(--bg-3); overflow: hidden; }
 .fill { height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
 
@@ -186,7 +187,12 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 #btn-eweight { min-width: 0; }
 .lw { display: inline-block; width: 18px; height: var(--w, 1px); background: currentColor; flex: none; }
 .color-pop button[aria-checked="true"] { background: var(--accent-soft); outline: 1px solid var(--accent); }
-.ctx { position: absolute; z-index: 12; min-width: 170px; }
+.color-pop.grid { gap: 1px; padding: 5px; }
+.color-pop.grid button { padding: 3px; min-height: 0; }
+.color-pop.grid .sw { width: 14px; height: 14px; }
+.sw.mixed { background: linear-gradient(90deg, #e5262b 0 33%, #2f9e44 33% 66%, #1f6feb 66%); }
+.field.for-sel > span { color: var(--accent); }
+.ctx { position: absolute; z-index: 12; min-width: 170px; right: auto; width: max-content; }
 .ctx button { min-height: 40px; }
 .edit-text { position: absolute; left: 0; top: 0; z-index: 8; transform-origin: 0 0; pointer-events: auto; }
 .edit-text textarea {
@@ -227,8 +233,10 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 .statusbar { display: flex; align-items: center; gap: 14px; padding: 3px 12px; padding-bottom: max(3px, env(safe-area-inset-bottom)); min-height: 28px; background: var(--bg-2); border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
 .st.coords { font-variant-numeric: tabular-nums; color: var(--text); min-width: 210px; }
 .st.info { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.toasts { position: absolute; top: 46px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: 9; width: max-content; max-width: min(460px, calc(100% - 24px)); pointer-events: none; }
-.toasts > * { pointer-events: auto; }
+.toasts { position: absolute; top: max(46px, calc(var(--hint-bottom, 0px) + 8px)); left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: 9; width: max-content; max-width: min(460px, calc(100% - 24px)); pointer-events: none; }
+/* a toast never blocks the drawing under it (e.g. starting a markup there); its buttons still work */
+.toast { pointer-events: none; }
+.toast button, .toast summary, .toast details { pointer-events: auto; }
 .toast { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); box-shadow: var(--shadow); animation: toast-in .18s ease-out; }
 .toast.warn { border-left-color: #f0a500; }
 .toast.error { border-left-color: var(--danger); }
@@ -284,7 +292,7 @@ dialog::backdrop { background: rgba(5, 10, 20, .5); }
   .measure-card { left: 8px; bottom: 8px; min-width: 0; }
   .mc-value { font-size: 20px; }
   .st.coords { min-width: 0; }
-  .toasts { top: 8px; }
+  .toasts { top: max(8px, calc(var(--hint-bottom, 0px) + 6px)); }
   .empty-card h1 { font-size: 22px; }
 }
 

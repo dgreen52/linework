@@ -17,6 +17,13 @@ export const FLAG = { CLOSED: 1, FILL: 2, CURVEPTS: 4, EVENODD: 8, FULL: 16, PAT
 export const TEXT_ID = 0x80000000;
 
 const MAX_DEPTH = 24;
+/**
+ * Most items one build may walk inside blocks. A tiny hostile file (a 10000 x 10000 array insert,
+ * blocks nested many levels deep) would otherwise expand forever: past this, block copies are skipped and
+ * reported as not shown.
+ */
+export const MAX_EXPANDED = 1000000;
+export const NS_COPIES = 'Block copies (too many to draw)';
 export const CHAR_W = 0.62; // average glyph advance in cap-height units (layout estimate)
 
 function aciRgb(aci) {
@@ -96,7 +103,7 @@ export class Builder {
     this.base(KIND.CONIC, full ? FLAG.FULL | FLAG.CLOSED : 0, a);
     this.start.push(this.conics.length / 8);
     this.count.push(1);
-    this.conics.push(...v);
+    this.conics.push(cx, cy, ux, uy, vx, vy, t0, t1);
   }
 }
 
@@ -143,8 +150,9 @@ export function sceneTables(model, scene = null) {
  * Emitter: turns model entities into scene primitives/texts (absolute drawing coordinates) in
  * `emitter.B`. emit(entity, entityIndex) handles one top-level entity (blocks expanded).
  */
-export function createEmitter(model, tables) {
+export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}) {
   const B = new Builder();
+  let expanded = 0; // items walked inside blocks (the expansion budget)
   const { layers, ltypes, srcNames, blockNames, layerIdx, ltIdx, srcIdx, blkIdx, notShown } = tables;
   const addNS = (k, n = 1) => { notShown[k] = (notShown[k] || 0) + n; };
   const getLayer = (name) => {
@@ -323,6 +331,7 @@ export function createEmitter(model, tables) {
   }
 
   function walkOne(e, ctx) {
+    if (ctx.depth) expanded++;
     const a = attrsFor(e, ctx);
     // e.mv: a move/rotate applied by an edit to a dimension (its geometry lives in a block)
     const M = compose(e.mv && e.type === 'dimension' ? compose(ctx.M, e.mv) : ctx.M, e.xf);
@@ -418,12 +427,14 @@ export function createEmitter(model, tables) {
         if (ctx.depth >= MAX_DEPTH || ctx.stack.includes(key)) { addNS('Recursive block reference'); break; }
         const stack = [...ctx.stack, key];
         if (e.type === 'dimension') {
-          walkShared(blk.entities, { ...childCtxBase, M, stack });
+          if (expanded >= maxExpanded) addNS(NS_COPIES);
+          else walkShared(blk.entities, { ...childCtxBase, M, stack });
         } else {
           const cols = e.cols || 1, rows = e.rows || 1;
           const c = Math.cos(e.rot || 0), s = Math.sin(e.rot || 0);
-          for (let r = 0; r < rows; r++) {
+          copies: for (let r = 0; r < rows; r++) {
             for (let k = 0; k < cols; k++) {
+              if (expanded >= maxExpanded) { addNS(NS_COPIES, rows * cols - (r * cols + k)); break copies; }
               const ox = k * (e.dc || 0), oy = r * (e.dr || 0);
               const px = e.p[0] + c * ox - s * oy, py = e.p[1] + s * ox + c * oy;
               const Mi = insertMatrix(px, py, e.sx ?? 1, e.sy ?? 1, e.rot || 0, blk.base[0], blk.base[1]);
@@ -670,13 +681,6 @@ function buildGrid(bbox, n, texts, ext) {
     else { items[fill[c]++] = TEXT_ID + (i - n); const b = texts[i - n].bbox; grow(c, b[0], b[1], b[2], b[3]); }
   }
   return { ...g, cellStart, items, loose };
-}
-
-/** Item bbox (scene-local) of a grid id. */
-export function itemBBox(scene, id) {
-  if (id >= TEXT_ID) return scene.texts[id - TEXT_ID].bbox;
-  const o = 4 * id, b = scene.bbox;
-  return [b[o], b[o + 1], b[o + 2], b[o + 3]];
 }
 
 /**

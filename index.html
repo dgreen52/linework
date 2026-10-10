@@ -202,6 +202,7 @@
     <div class="progress" id="progress" hidden role="status" aria-live="polite">
       <div class="progress-label" id="progress-label">Opening…</div>
       <div class="bar"><div class="fill" id="progress-fill"></div></div>
+      <div class="progress-foot"><button type="button" class="btn sm" id="btn-cancel-load" title="Stop opening this file">Cancel</button></div>
     </div>
 
     <div class="card measure-card" id="measure-card" hidden aria-live="polite">
@@ -270,6 +271,7 @@
           <dt><kbd>F</kbd></dt><dd>Fit the whole drawing</dd>
           <dt><kbd>Z</kbd></dt><dd>Zoom to a box</dd>
           <dt><kbd>+</kbd> <kbd>−</kbd></dt><dd>Zoom in / out</dd>
+          <dt>Arrow keys</dt><dd>Pan (in Edit, with a selection: nudge it)</dd>
           <dt><kbd>H</kbd></dt><dd>Pan tool</dd>
           <dt><kbd>L</kbd></dt><dd>Layers panel</dd>
           <dt><kbd>B</kbd></dt><dd>Dark background / white paper</dd>
@@ -297,19 +299,31 @@
       </section>
       <section><h3>Edit the drawing</h3>
         <dl>
-          <dt><kbd>E</kbd></dt><dd>Edit mode: select drawing items</dd>
+          <dt><kbd>E</kbd></dt><dd>Edit mode: select drawing items (or click the Edit tab)</dd>
           <dt>Click / <kbd>Shift</kbd>+click</dt><dd>Select / add or remove</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>A</kbd></dt><dd>Select everything on the visible layers</dd>
           <dt>Drag a box</dt><dd>Left→right: items fully inside · right→left: anything touched</dd>
           <dt>Drag</dt><dd>Move (snaps; <kbd>Shift</kbd> keeps it straight)</dd>
           <dt>Arrow keys</dt><dd>Nudge 1 px (<kbd>Shift</kbd>: 10 px)</dd>
           <dt>Double-click</dt><dd>Edit text in place, or show points to reshape</dd>
           <dt>Right-click a point</dt><dd>Delete it · right-click or double-click a side to add one</dd>
-          <dt><kbd>N</kbd> <kbd>P</kbd> <kbd>R</kbd> <kbd>O</kbd> <kbd>T</kbd></dt><dd>Line, polyline (<kbd>C</kbd> closes), rectangle, circle, text</dd>
+          <dt><kbd>N</kbd> <kbd>P</kbd> <kbd>R</kbd> <kbd>O</kbd> <kbd>T</kbd></dt><dd>Line, polyline (<kbd>C</kbd> closes), rectangle, circle, text · <kbd>Esc</kbd> back to Select</dd>
+          <dt>Layer, Colour, Weight</dt><dd>For new items; with a selection they show and change the selection</dd>
           <dt>Type a number</dt><dd>While drawing a line: exact length, then <kbd>Enter</kbd></dd>
           <dt><kbd>Delete</kbd></dt><dd>Delete the selection</dd>
           <dt><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd></dt><dd>Copy / paste, also between drawings and tabs (click places; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>: in place)</dd>
-          <dt><kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+drag</dt><dd>Duplicate (click places) / drag a copy</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+drag</dt><dd>Duplicate (click places) / drag a copy (<kbd>Alt</kbd>+drag on a Mac)</dd>
+          <dt>Right-click</dt><dd>Menu: edit, copy, duplicate, rotate, delete, paste here / in place</dd>
           <dt><kbd>Ctrl</kbd>+<kbd>S</kbd></dt><dd>Save the drawing (in Edit) · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> save as DXF / DGN</dd>
+        </dl>
+      </section>
+      <section><h3>Touch</h3>
+        <dl>
+          <dt>One finger</dt><dd>Pan (Pan tool), draw or drag with the other tools</dd>
+          <dt>Two fingers</dt><dd>Pan and pinch to zoom, in every tool</dd>
+          <dt>Tap / drag</dt><dd>In Edit: select / move; drag on empty space for a box</dd>
+          <dt>Long-press</dt><dd>In Edit: menu (edit, copy, duplicate, rotate, delete, paste)</dd>
+          <dt>Finish / Cancel</dt><dd>The bar at the bottom ends a polyline, length, area or paste</dd>
         </dl>
       </section>
       <section><h3>Files</h3>
@@ -320,6 +334,7 @@
           <dt><kbd>?</kbd></dt><dd>This help</dd>
         </dl>
         <p class="note">Your drawings and markups stay on this device. Markups are saved as a small <code>.markup.json</code> file you keep next to the drawing; they are also kept in this browser until you clear them.</p>
+        <p><button type="button" class="btn sm" id="btn-clear-stored" title="Forget the markups this browser keeps for every drawing (files you saved are not touched)">Clear stored markups</button></p>
         <p class="note" id="about-line"></p>
       </section>
     </div>

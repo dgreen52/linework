@@ -14,6 +14,7 @@ import { insertMatrix, mul, scale, IDENTITY } from '../geom.js';
 
 export const CLIP_HEADER = 'LINEWORK-CLIPBOARD 1';
 export const CLIP_MAX = 24e6; // characters for the system clipboard (bigger copies stay in this tab)
+export const PASTE_MAX = 200000; // items one paste may add (exploded array inserts included)
 // metres per drawing unit, by $INSUNITS code (0 = unitless: unknown)
 const METRES = [0, 0.0254, 0.3048, 1609.344, 1e-3, 1e-2, 1, 1e3, 2.54e-8, 2.54e-5, 0.9144, 1e-10, 1e-9, 1e-6, 0.1, 10, 100, 1e9,
   1.495978707e11, 9.4607304725808e15, 3.0856775814913673e16, 1200 / 3937, 100 / 3937, 3600 / 3937, 6336000 / 3937];
@@ -75,10 +76,43 @@ export function makePayload(model, ids, { ext = [0, 0, 0, 0] } = {}) {
 }
 
 export const clipText = (p) => CLIP_HEADER + '\n' + JSON.stringify(p);
-/** Payload from clipboard text, or null when the text is not a Linework copy. */
+const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+const SAFE_KEY = (k) => k !== '__proto__' && k !== 'constructor' && k !== 'prototype';
+/** A name -> definition table from the clipboard, without keys that would reach Object.prototype. */
+function cleanTable(o, ok) {
+  const t = {};
+  if (isObj(o)) for (const [k, v] of Object.entries(o)) if (SAFE_KEY(k) && ok(v)) t[k] = v;
+  return t;
+}
+const isEnt = (e) => isObj(e) && typeof e.type === 'string';
+/**
+ * Payload from clipboard text, or null when the text is not a Linework copy. The text comes from
+ * outside (any page can put text on the clipboard): every part is checked and normalised here, so
+ * a malformed payload is never half-pasted and cannot reach Object.prototype.
+ */
 export function parseClip(text) {
   if (typeof text !== 'string' || !text.startsWith(CLIP_HEADER)) return null;
-  try { const p = JSON.parse(text.slice(CLIP_HEADER.length)); return p && p.v === 1 && Array.isArray(p.ents) ? p : null; } catch { return null; }
+  let p;
+  try { p = JSON.parse(text.slice(CLIP_HEADER.length)); } catch { return null; }
+  if (!isObj(p) || p.v !== 1 || !Array.isArray(p.ents)) return null;
+  const ext = Array.isArray(p.ext) && p.ext.length === 4 && p.ext.every(Number.isFinite) ? p.ext : [0, 0, 0, 0];
+  const blocks = cleanTable(p.blocks, (b) => isObj(b) && Array.isArray(b.entities));
+  for (const b of Object.values(blocks)) {
+    if (typeof b.name !== 'string') return null;
+    if (!(Array.isArray(b.base) && b.base.length >= 2 && Number.isFinite(b.base[0]) && Number.isFinite(b.base[1]))) b.base = [0, 0];
+  }
+  return {
+    ...p,
+    format: p.format === 'DGN' ? 'DGN' : 'DXF',
+    units: isObj(p.units) ? p.units : {},
+    dim: p.dim === 3 ? 3 : 2,
+    ext,
+    ents: p.ents.filter(isEnt),
+    blocks,
+    layers: Array.isArray(p.layers) ? p.layers.filter((l) => isObj(l) && typeof l.name === 'string' && SAFE_KEY(l.name)) : [],
+    ltypes: cleanTable(p.ltypes, isObj),
+    styles: cleanTable(p.styles, isObj),
+  };
 }
 
 /** Unit factor source -> target: { k, note } (k = 1 when either is unknown). */
@@ -168,47 +202,76 @@ export function preparePaste(P, target, opts = {}) {
   };
   // ---- DXF blocks: exploded for DGN v7 (no blocks there); else copied in, renamed on a name clash
   let list = P.ents;
+  let capped = list.length > PASTE_MAX;
   if (toDgn && !fromDgn) {
     const out = [];
-    for (const e of list) if (e.type === 'insert' || e.type === 'dimension') { exploded++; explode(e, IDENTITY, P, srcL, out, 0); } else out.push(e);
+    for (const e of list) {
+      if (out.length >= PASTE_MAX) { capped = true; break; }
+      if (e.type === 'insert' || e.type === 'dimension') { exploded++; if (explode(e, IDENTITY, P, srcL, out, 0) === false) capped = true; } else out.push(e);
+    }
     list = out;
   }
+  if (list.length > PASTE_MAX) list = list.slice(0, PASTE_MAX);
   const ren = new Map();
   if (!toDgn) {
-    const tb = target.blocks || {}, used = new Set([...Object.keys(tb), ...Object.keys(P.blocks)]);
+    // A copied block whose name is taken here by a different block gets a new name, and so does
+    // every copied block that uses a renamed one (its content now differs too). Linear: each
+    // block is compared once, renames spread along "used by" links, fresh names come from counters.
+    const tb = target.blocks || {};
+    const has = (K) => Object.prototype.hasOwnProperty.call(tb, K);
+    const used = new Set([...Object.keys(tb), ...Object.keys(P.blocks)]);
     const refs = (l) => l.map((c) => (c && c.block && ren.has(up(c.block)) ? { ...c, block: ren.get(up(c.block)) } : c));
-    const same = (b, t) => JSON.stringify([b.base, refs(b.entities)]) === JSON.stringify([t.base, t.entities.map((c) => c && strip(c))]);
+    const same = (b, t) => JSON.stringify([b.base, b.entities]) === JSON.stringify([t.base, (t.entities || []).map((c) => c && strip(c))]);
+    const anon = new Map(); // "*U" -> highest number in use
+    for (const u of used) { const q = /^(\*[A-Z]+)(\d+)$/i.exec(u); if (q) { const a = up(q[1]); anon.set(a, Math.max(anon.get(a) || 0, +q[2])); } }
     const fresh = (n) => {
       const m = /^(\*[A-Z]+)\d*$/i.exec(n);
-      if (m) { let i = 0; for (const u of used) { const q = new RegExp('^\\' + m[1] + '(\\d+)$', 'i').exec(u); if (q) i = Math.max(i, +q[1]); } n = m[1] + (i + 1); }
+      if (m) { const a = up(m[1]), i = (anon.get(a) || 0) + 1; anon.set(a, i); n = m[1] + i; }
       else { let i = 2; while (used.has(up(n + '_' + i))) i++; n = n + '_' + i; }
       used.add(up(n));
       return n;
     };
-    for (let again = true; again;) {
-      again = false;
-      for (const [K, b] of Object.entries(P.blocks)) if (!ren.has(K) && tb[K] && !same(b, tb[K])) { ren.set(K, fresh(b.name)); again = true; }
+    const usedBy = new Map(); // block -> copied blocks that insert it
+    for (const [K, b] of Object.entries(P.blocks)) {
+      for (const c of b.entities) if (c && typeof c.block === 'string') { const R = up(c.block); if (!usedBy.has(R)) usedBy.set(R, []); usedBy.get(R).push(K); }
+    }
+    const todo = [];
+    for (const [K, b] of Object.entries(P.blocks)) if (has(K) && !same(b, tb[K])) { ren.set(K, fresh(b.name)); todo.push(K); }
+    while (todo.length) {
+      for (const K of usedBy.get(todo.pop()) || []) if (!ren.has(K) && has(K)) { ren.set(K, fresh(P.blocks[K].name)); todo.push(K); }
     }
     for (const [K, b] of Object.entries(P.blocks)) {
-      if (tb[K] && !ren.has(K)) continue; // the same block is already there
+      if (has(K) && !ren.has(K)) continue; // the same block is already there
       const name = ren.get(K) || b.name;
       changes.push({ table: 'blocks', key: up(name), before: null, after: { ...b, name, entities: refs(b.entities) } });
       each(b.entities, (c) => layerFor(c.layer));
     }
     if (ren.size) notes.push(`Block${ren.size > 1 ? 's' : ''} renamed (a different block has that name here): ${[...ren].map(([a, b]) => `${P.blocks[a].name} → ${b}`).slice(0, 4).join(', ')}.`);
-    for (const [n, d] of Object.entries(P.ltypes)) if (!(target.ltypes || {})[n]) changes.push({ table: 'ltypes', key: n, before: null, after: d });
-    for (const [n, d] of Object.entries(P.styles || {})) if (!(target.styles || {})[n]) changes.push({ table: 'styles', key: n, before: null, after: d });
+    const own = (o, n) => !!o && Object.prototype.hasOwnProperty.call(o, n);
+    for (const [n, d] of Object.entries(P.ltypes)) if (!own(target.ltypes, n)) changes.push({ table: 'ltypes', key: n, before: null, after: d });
+    for (const [n, d] of Object.entries(P.styles || {})) if (!own(target.styles, n)) changes.push({ table: 'styles', key: n, before: null, after: d });
     list = list.map((e) => (e.block && ren.has(up(e.block)) ? { ...e, block: ren.get(up(e.block)) } : e));
   }
   const M = k !== 1 ? scale(k) : null;
-  const ents = list.map((e) => { const o = conv(e); o.pasted = 1; return M ? transformEntity(o, M) : o; });
+  // an item that cannot be converted or moved (damaged in the copy) is left out, not half-pasted
+  const ents = [];
+  let bad = 0;
+  for (const e of list) {
+    try { const o = conv(e); o.pasted = 1; const t = transformEntity(o, M || IDENTITY); ents.push(M ? t : o); } catch { bad++; }
+  }
+  if (bad) notes.push(`${bad} copied item${bad === 1 ? '' : 's'} could not be pasted (damaged in the copy).`);
   if (exploded) notes.push(`${exploded} block${exploded === 1 ? ' was' : 's were'} exploded into separate items (DGN v7 has no blocks).`);
   if (toDgn && !fromDgn) notes.push(`Pasted on ${cur} (DGN levels have numbers, not names).`);
   if (flat) notes.push(`${flat} item${flat === 1 ? '' : 's'} from a 3D file flattened to Z = 0 (this drawing is 2D).`);
-  return { ents, changes, base: [P.ext[0] * k, P.ext[1] * k], notes, k };
+  const out = { ents, changes, base: [P.ext[0] * k, P.ext[1] * k], notes, k };
+  if (capped) out.capped = `Only the first ${PASTE_MAX.toLocaleString('en')} items were pasted: the copy expands to more than one paste can hold.`;
+  return out;
 }
 
-/** Block content of a DXF insert / dimension placed in the world (nested blocks too), ByBlock and layer 0 resolved. */
+/**
+ * Block content of a DXF insert / dimension placed in the world (nested blocks too), ByBlock and
+ * layer 0 resolved. Stops at PASTE_MAX items in `out` (returns false then).
+ */
 function explode(e, M0, P, srcL, out, depth) {
   const lay = (n) => srcL.get(up(n)) || {};
   const own = (c) => {
@@ -237,11 +300,13 @@ function explode(e, M0, P, srcL, out, depth) {
     }
   }
   for (const Mi of mats) for (const c of kids) {
+    if (out.length >= PASTE_MAX) return false;
     if (!c || c.invisible) continue;
     const o = own(c);
-    if (o.type === 'insert' || o.type === 'dimension') { if (depth < 16) explode(o, Mi, P, srcL, out, depth + 1); } else out.push(transformEntity(o, Mi));
+    if (o.type === 'insert' || o.type === 'dimension') { if (depth < 16 && explode(o, Mi, P, srcL, out, depth + 1) === false) return false; } else out.push(transformEntity(o, Mi));
   }
   for (const a of e.attribs || []) if (a && !a.invisible) out.push(transformEntity(own(a), M0));
+  return true;
 }
 
 /** Paste for a duplicate inside the same drawing (same model, so nothing is converted). */

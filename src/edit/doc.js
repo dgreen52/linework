@@ -6,7 +6,6 @@
 // restores the original objects (the DGN writer then keeps those elements byte for byte).
 import { replaceEntities, entityItems, entityBBox, makeLive } from './live-scene.js';
 import { KIND, FLAG, TEXT_ID, queryRect, conicPoint } from '../scene.js';
-import { FG, ensureLayer } from '../model.js';
 import { TAU } from '../geom.js';
 
 export class EditDoc {
@@ -73,22 +72,13 @@ export class EditDoc {
     }
     const sl = this.scene.layers;
     let si = sl.findIndex((l) => l.name.toUpperCase() === key);
-    if (si < 0 && rec) { si = sl.length; sl.push({ name: rec.name, color: rec.color, visible: true, frozen: false, ltype: 'CONTINUOUS', count: 0 }); }
+    if (si < 0 && rec) { si = sl.length; sl.push({ name: rec.name, color: rec.color, visible: true, frozen: false, ltype: 'CONTINUOUS', count: 0, added: true }); }
     if (si >= 0) { sl[si].removed = !rec; if (rec) Object.assign(sl[si], { color: rec.color, ltype: rec.ltype || 'CONTINUOUS', lw: rec.lw }); }
   }
 
   /** Layer names that can receive new items (in display order). */
   layerNames() {
     return this.scene.layers.filter((l) => !l.removed).map((l) => l.name);
-  }
-
-  /** Make sure the layer exists in the model (by name), e.g. before drawing on it. */
-  ensureModelLayer(name) { return ensureLayer(this.model, name, FG); }
-
-  /** Entity index of a picked grid item (primitive id or TEXT_ID + text index). */
-  entityOfItem(id) {
-    const s = this.scene;
-    return id >= TEXT_ID ? s.texts[id - TEXT_ID].ent : s.ent[id];
   }
 
   items(i) { return entityItems(this.scene, i); }

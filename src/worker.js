@@ -29,7 +29,24 @@ export async function loadInWorkerScope(msg, post) {
   const model = await parseDrawingAsync(bytes, name, { onProgress: progress('Reading', 0, 0.7), onPhase });
   const scene = buildScene(model, { fileName: name, onProgress: progress('Preparing', 0.7, 0.3) });
   scene.fileSize = bytes.length;
+  scene.hash = hashBytes(bytes);
   return { scene, model, bytes: model.format === 'DGN' ? bytes : null };
+}
+
+/**
+ * Fast 64-bit (two 32-bit lanes) hash of a whole file, as 16 hex digits: tells two revisions of a
+ * drawing apart when they have the same name and size (markups kept in the browser). Not for security.
+ */
+export function hashBytes(b) {
+  let h1 = 0x811c9dc5 ^ b.length, h2 = 0x27d4eb2f;
+  const n = b.length, n4 = n - (n % 4);
+  for (let i = 0; i < n4; i += 4) {
+    const k = b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24);
+    h1 = Math.imul(h1 ^ k, 0x01000193);
+    h2 = Math.imul(h2 ^ k, 0x85ebca6b) ^ (h2 >>> 15);
+  }
+  for (let i = n4; i < n; i++) h1 = Math.imul(h1 ^ b[i], 0x01000193);
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
 }
 
 /** Model without the parts sent separately (and without the Map, rebuilt on arrival). */
@@ -43,6 +60,7 @@ const PART = 3000; // entities per message: each one deserialises in a few ms
 if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof self.postMessage === 'function') {
   self.onmessage = async (ev) => {
     const msg = ev.data;
+    if (msg && msg.type === 'ping') { self.postMessage({ type: 'pong' }); return; } // the page checks the reader runs
     try {
       const { scene: sc, model, bytes } = await loadInWorkerScope(msg, (m) => self.postMessage(m));
       const scene = packTexts(sc);

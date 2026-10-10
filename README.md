@@ -30,7 +30,7 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   delete; undo/redo (Ctrl+Z / Ctrl+Y); your name and a timestamp on every markup.
   Markups are saved to a small sidecar file, `<drawing>.markup.json`
   ([format](MARKUP_FORMAT.md)), stored in drawing coordinates, and also kept in this browser
-  so a reload never loses work.
+  so a reload never loses work (per file revision; Help › *Clear stored markups* forgets them).
 * **Edits the drawing** (new in v0.2, see [Edit mode](#edit-mode)): select, move, nudge, rotate,
   delete; double-click to retype text in place or to reshape lines, polylines and circles with
   handles; draw lines, polylines, rectangles, circles and text on any layer; change layer, colour
@@ -43,7 +43,9 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   title strip (title, file, date, author), landscape or portrait, current view or whole drawing.
 * **Never crashes on a bad file**: it shows what loaded and a short "N items not shown" note.
   Binary DXF, DGN v8, R12-and-older DWG and unreadable DWG files get a friendly explanation
-  instead of an error.
+  instead of an error. A tiny file whose blocks expand to millions of copies is drawn up to a
+  limit ("N block copies not shown"), and **Cancel** on the progress card stops any file that
+  takes too long to open.
 
 ## Run it locally
 
@@ -101,7 +103,7 @@ for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/d
 | Edit the drawing | |
 |---|---|
 | `E` | Edit mode (select tool) — then `V` select, `N` line, `P` polyline, `R` rectangle, `O` circle, `T` text |
-| Click / `Shift`+click | select / add or remove; `Ctrl+A` selects everything |
+| Click / `Shift`+click | select / add or remove; `Ctrl+A` selects everything on the visible layers |
 | Drag a box | left→right: items fully inside (solid box) · right→left: anything touched (dashed box) |
 | Drag | move the selection (snaps; `Shift` keeps it horizontal/vertical); `Ctrl`+drag (`Alt` on a Mac) drops a copy |
 | `Ctrl+C` / `Ctrl+V` | copy the selection / paste it (also into another drawing or tab): the items follow the cursor, click places them, `Esc` cancels |
@@ -112,6 +114,8 @@ for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/d
 | Right-click a handle / a side | delete that point / add a point (double-click a side also adds) |
 | Type a number | while drawing a line: exact length along the cursor, then `Enter` |
 | `C` / `Enter` / double-click | close / finish a polyline |
+| `Esc` | cancel what is in progress; in a draw tool with nothing in progress: back to Select |
+| Right-click | menu: edit, copy, duplicate, rotate 90°, delete, paste here / in place |
 | `Delete` | delete the selection |
 | `Ctrl+S` / `Ctrl+Shift+S` | save the drawing (in Edit) / save as DXF or DGN |
 
@@ -123,7 +127,8 @@ Press `?` in the app for the same sheet.
 
 ## Edit mode
 
-Open the **Edit** tab (or press `E`). The drawing itself is edited; markups stay separate.
+Open the **Edit** tab (or press `E`): it starts with the Select tool. The drawing itself is
+edited; markups stay separate.
 
 * **Select** with a click (hover shows what is under the cursor: type, layer, colour), add with
   `Shift`+click, or drag a box: **left→right** selects what is fully inside, **right→left**
@@ -144,13 +149,18 @@ Open the **Edit** tab (or press `E`). The drawing itself is edited; markups stay
   block, so it stays locked for now (Linework says so).
 * **Draw** lines (click points; type a length + `Enter` for an exact length), polylines
   (`Enter`/double-click finishes, `C` closes), rectangles, circles and text. New items go on the
-  **current layer** (Layer box; "New layer…" creates one with a colour) in the **current colour**
-  (ByLayer or a colour swatch; for DGN drawings the swatches are the file's own colour table).
+  **current layer** (Layer box; "New layer…" creates one with a colour; it starts on a visible
+  layer, and if new items land on a hidden one a message offers to show it) in the **current
+  colour** (ByLayer or a colour swatch; for DGN drawings the swatches are the file's whole colour
+  table, 256 entries, also reachable with the arrow keys). DGN drawings list only real levels.
 * **Line weight**: the **Weight** box next to Colour. DGN drawings: weights 0–31; DXF drawings:
   ByLayer or a standard lineweight (0.00–2.11 mm). It applies to new items and, with a selection,
   changes the selection (a cell's components, a block's attributes too). Line weights are drawn
   (DGN: 1 px + 0.75 px per step; DXF: 0.25 mm ≈ 1 px; both capped) and saved.
-* **Properties**: with a selection, the Layer box, colour swatches and Weight box change the selection.
+* **Properties**: with a selection, the Layer, Colour and Weight boxes show the selection's
+  values ("Varies" when they differ; their labels turn blue) and change only the selection — the
+  current layer, colour and weight for new items stay as they were and come back when the
+  selection is cleared.
 * **Copy and paste** (`Ctrl+C`, `Ctrl+V`; ribbon Copy / Paste; right-click or long-press menu):
   the copied items follow the cursor with snaps on — their lower-left corner goes where you click
   (or tap); `Esc` cancels. `Ctrl+Shift+V` or *Paste in place* keeps the original coordinates. Copies
@@ -428,8 +438,8 @@ Editing and saving (v0.2):
   header with class 0 and no attribute data of its own (its components keep theirs). Hatch pattern
   scales are not changed when a paste is scaled between units.
 * The DXF writer writes the drawing model, not the original file: non-graphical data (layouts,
-  dimension styles, extended data, plot settings, groups) is not carried over, and lineweights
-  are not read. TEXT/MTEXT that you did not edit is written exactly as stored; edited MTEXT
+  dimension styles, extended data, plot settings, groups) is not carried over (lineweights are:
+  see *Line weights* above). TEXT/MTEXT that you did not edit is written exactly as stored; edited MTEXT
   loses its inline formatting (fonts, colours, stacking).
 * DGN: layer names do not exist in DGN v7 (DXF layers become numbered levels); fills are written
   as outlines; curves as line strings; an edited text in a text node becomes a plain text

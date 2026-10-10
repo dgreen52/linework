@@ -12,7 +12,7 @@ import { serializeMarkups, parseMarkups, sidecarName } from './markup/sidecar.js
 import { History } from './markup/history.js';
 import { smoothStroke } from './geom.js';
 import { $, $$, toast, download, readFileAsArrayBuffer, storage, fmtBytes } from './app/ui.js';
-import { LayersPanel } from './app/layers-panel.js';
+import { LayersPanel, listedLayers } from './app/layers-panel.js';
 import { exportPng, buildPrintSheet, clearPrintSheet } from './app/print.js';
 import { initEdit, EDIT_TOOLS, EDIT_HINTS, TOUCH_HINTS } from './app/edit-ui.js';
 
@@ -40,7 +40,17 @@ const HINTS = {
   highlight: 'Drag over the area to highlight',
   ...EDIT_HINTS,
 };
+/** Touch wording (no mouse clicks, Enter or Delete keys on a phone). */
+const TOUCH_TOOL_HINTS = {
+  distance: 'Tap two points to measure the distance between them',
+  length: 'Tap points along the path · Finish when done',
+  area: 'Tap the corners of the shape · Finish (or tap the first point) when done',
+  select: 'Tap a markup to select it · drag to move · double-tap a callout to edit',
+  cloud: 'Drag a box to cloud it, or tap corners and then Finish',
+  ...TOUCH_HINTS,
+};
 const SNAP_LABEL = { endpoint: 'End', midpoint: 'Middle', center: 'Centre', intersection: 'Crossing', nearest: 'On line' };
+const plural = (n, word) => `${fmtNum(n, 0)} ${word}${n === 1 ? '' : 's'}`;
 
 // ------------------------------------------------------------------ state
 const app = {
@@ -88,7 +98,7 @@ const cvDrawing = $('#cv-drawing');
 const cvOverlay = $('#cv-overlay');
 const octx = cvOverlay.getContext('2d');
 app.renderer = new Canvas2DRenderer(cvDrawing);
-const layersPanel = new LayersPanel((vis) => { app.layerVisible = vis; app.hover = null; invalidate(true); });
+const layersPanel = new LayersPanel((vis) => { app.layerVisible = vis; app.hover = null; if (edit) edit.visibilityChanged(); invalidate(true); });
 
 // ------------------------------------------------------------------ coordinates
 const origin = () => (app.scene ? app.scene.origin : [0, 0]);
@@ -337,16 +347,29 @@ function drawSnapGlyph(ctx, x, y, kind) {
 }
 
 // ------------------------------------------------------------------ loading
-let worker = null;
+let worker = null; // null: start one when needed; false: module workers unavailable (read on the main thread)
 let jobSeq = 0;
 const jobs = new Map();
+const failJobs = (message, code) => {
+  for (const [, job] of jobs) job.reject(Object.assign(new Error(message), { code }));
+  jobs.clear();
+  modelParts.clear();
+};
 function getWorker() {
   if (worker === false) return null;
   if (worker) return worker;
   try {
-    worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-    worker.onmessage = (ev) => {
+    const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    // `started` settles true once the reader answers (it then gets the file's bytes without a copy),
+    // false if it cannot run here
+    let settle;
+    w.started = new Promise((res) => { settle = res; });
+    w.stop = () => settle('stopped');
+    w.onmessage = (ev) => {
+      w.alive = true;
+      settle(true);
       const m = ev.data;
+      if (m.type === 'pong') return;
       if (m.type === 'model-part' || m.type === 'model') { modelMessage(m); return; }
       const job = jobs.get(m.id);
       if (!job) return;
@@ -356,16 +379,27 @@ function getWorker() {
         if (m.watch) job.timer = setTimeout(() => { worker?.terminate?.(); worker = null; jobs.clear(); job.reject(Object.assign(new Error('This DWG took too long to read; save it as DXF and open that.'), { code: 'dwg-timeout' })); }, app.readTimeLimitMs);
       } else { jobs.delete(m.id); clearTimeout(job.timer); if (m.type === 'done') job.resolve(Object.assign(unpackTexts(m.scene), { jobId: m.id })); else job.reject(Object.assign(new Error(m.message), { code: m.code })); }
     };
-    worker.onerror = (e) => {
+    w.onerror = (e) => {
       e.preventDefault?.();
-      for (const [, job] of jobs) job.reject(Object.assign(new Error('The background reader failed to start.'), { code: 'worker' }));
-      jobs.clear();
-      worker = false;
+      // never answered: this browser cannot run it, read on the main thread from now on; it crashed on
+      // a file (e.g. out of memory): that file fails, the next one gets a fresh reader
+      if (w.alive) failJobs('The reader stopped while opening this file. It may be damaged or too large for this device.', 'crash');
+      else failJobs('The background reader failed to start.', 'worker');
+      try { w.terminate(); } catch { /* ignore */ }
+      if (worker === w) worker = w.alive ? null : false;
+      settle(false);
     };
+    w.postMessage({ type: 'ping' });
+    worker = w;
   } catch {
     worker = false;
   }
   return worker || null;
+}
+/** Stop the reader (Cancel, or another file replaces the one opening): the next file starts a new one. */
+function stopReader(message) {
+  if (worker) { try { worker.terminate(); } catch { /* ignore */ } worker.stop(); worker = null; }
+  failJobs(message, 'cancelled');
 }
 
 app.readTimeLimitMs = 120000;
@@ -376,14 +410,16 @@ function modelMessage(m) {
   if (m.type === 'model-part') { if (!modelParts.has(m.id)) modelParts.set(m.id, []); modelParts.get(m.id).push(m.entities); return; }
   const parts = modelParts.get(m.id) || [];
   modelParts.delete(m.id);
-  const entities = parts.length === 1 ? parts[0] : [].concat(...parts);
+  const entities = parts.length === 1 ? parts[0] : parts.flat(); // (no spread: thousands of parts)
   const model = { ...m.meta, entities, paperEntities: m.paperEntities || [] };
   if (app.scene && app.scene.jobId === m.id) edit.setModel(model, m.bytes ? new Uint8Array(m.bytes) : null);
 }
 
 async function parseOffThread(name, buffer, sample, progress) {
   const w = getWorker();
-  if (w) {
+  const ok = w && (w.alive || (await w.started));
+  if (ok === 'stopped') throw Object.assign(new Error('Opening was cancelled.'), { code: 'cancelled' });
+  if (ok) {
     try {
       return await new Promise((resolve, reject) => {
         const id = ++jobSeq;
@@ -394,7 +430,8 @@ async function parseOffThread(name, buffer, sample, progress) {
       if (e.code !== 'worker') throw e;
     }
   }
-  // fallback: same code on the main thread (e.g. module workers unsupported)
+  // fallback: same code on the main thread (e.g. module workers unsupported); it cannot be cancelled
+  $('#btn-cancel-load').hidden = true;
   const { loadInWorkerScope } = await import('./worker.js');
   progress('Reading', 0.1);
   await new Promise((r) => setTimeout(r, 30));
@@ -417,30 +454,39 @@ function okToReplace() {
   return !(edit && edit.dirty) || window.confirm('The drawing has unsaved edits. Open another drawing anyway?');
 }
 
+let loadSeq = 0;
 async function openDrawing(name, buffer, size, sample) {
-  if (app.loading) return;
+  if (app.loading) stopReader('Replaced by another file.'); // a new file replaces the one still opening
+  const my = ++loadSeq;
   app.loading = true;
+  $('#btn-cancel-load').hidden = false;
   showProgress(`Opening ${name}…`, 0);
   const t0 = performance.now();
   try {
-    const scene = await parseOffThread(name, buffer, sample, (phase, f) => showProgress(`${phase} ${name}…`, f));
+    const scene = await parseOffThread(name, buffer, sample, (phase, f) => { if (my === loadSeq) showProgress(`${phase} ${name}…`, f); });
+    if (my !== loadSeq) return;
     setDocument(scene, name, size ?? scene.fileSize, performance.now() - t0);
   } catch (e) {
+    if (my !== loadSeq) return;
+    if (e && e.code === 'cancelled') { toast(`Stopped opening ${name}`, { key: 'open', timeout: 2500 }); return; }
     const msg = e && e.message ? e.message : String(e);
     toast(msg, { kind: 'error' });
   } finally {
-    app.loading = false;
-    hideProgress();
+    if (my === loadSeq) { app.loading = false; hideProgress(); }
   }
 }
 app.openDrawing = openDrawing;
+/** Cancel button on the progress card: stop reading, nothing changes. */
+function cancelOpen() { if (app.loading) stopReader('Opening was cancelled.'); }
+app.cancelOpen = cancelOpen;
 
 async function openFile(file) {
   if (!file) return;
   if (/\.json$/i.test(file.name)) { await loadMarkupFile(file); return; }
   if (!okToReplace()) return;
   if (file.size > 400 * 1024 * 1024) { toast('This file is too large to open in the browser (over 400 MB).', { kind: 'error' }); return; }
-  const buf = await readFileAsArrayBuffer(file);
+  let buf;
+  try { buf = await readFileAsArrayBuffer(file); } catch { toast(`Could not read ${file.name}`, { kind: 'error', detail: 'The file could not be read from this device (moved, locked or not allowed).' }); return; }
   await openDrawing(file.name, buf, file.size);
 }
 
@@ -460,7 +506,7 @@ app.openSample = openSample;
 
 function setDocument(scene, name, size, ms) {
   app.scene = scene;
-  app.doc = { name, size, format: scene.format };
+  app.doc = { name, size, format: scene.format, hash: scene.hash || '' };
   app.renderer.setScene(scene);
   app.layerVisible = Uint8Array.from(scene.layers.map((l) => (l.visible ? 1 : 0)));
   layersPanel.setLayers(scene.layers);
@@ -485,7 +531,8 @@ function setDocument(scene, name, size, ms) {
   $('#doc-units').title = `Drawing units: ${scene.units.name}`;
   document.title = `${name} · ${APP_NAME}`;
   for (const b of ['#btn-export', '#btn-print']) $(b).disabled = false;
-  cvOverlay.setAttribute('aria-label', `Drawing ${name}: ${scene.layers.length} layers, ${scene.n + scene.textCount} items. Use the toolbar to pan, zoom, measure and mark up.`);
+  const nLayers = listedLayers(scene.layers).length; // the same count as the Layers panel
+  cvOverlay.setAttribute('aria-label', `Drawing ${name}: ${plural(nLayers, 'layer')}, ${plural(scene.n + scene.textCount, 'item')}. Use the toolbar to pan, zoom, measure and mark up.`);
   restoreAutosave();
   updateUndoButtons();
   invalidate(true);
@@ -495,7 +542,7 @@ function setDocument(scene, name, size, ms) {
   const nsCount = ns.reduce((s, [, v]) => s + v, 0);
   const notes = [...scene.warnings];
   for (const k of ['open', 'skipped']) for (const el of document.querySelectorAll(`#toasts [data-key="${k}"]`)) el.remove();
-  toast(`Opened ${name}`, { key: 'open', detail: `${fmtNum(items, 0)} items · ${scene.layers.length} layers · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
+  toast(`Opened ${name}`, { key: 'open', detail: `${plural(items, 'item')} · ${plural(nLayers, scene.format === 'DGN' ? 'level' : 'layer')} · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
   if (nsCount) {
     toast(`${fmtNum(nsCount, 0)} item${nsCount === 1 ? '' : 's'} not shown`, {
       key: 'skipped', kind: 'warn', detail: 'Everything else loaded normally.', listTitle: 'What was skipped',
@@ -508,16 +555,41 @@ function setDocument(scene, name, size, ms) {
 }
 
 // ------------------------------------------------------------------ markups: storage
-const autosaveKey = () => app.doc && `linework:autosave:${app.doc.name}:${app.doc.size}`;
+// Markups are kept in this browser per drawing: name + size + a hash of the file's content (two
+// revisions of a drawing often have the same name and size).
+const AUTOSAVE = 'linework:autosave:';
+const autosaveKey = () => app.doc && `${AUTOSAVE}${app.doc.name}:${app.doc.size}:${app.doc.hash}`;
+let persistAsked = false, autosaveWarned = false;
 function autosave() {
   const k = autosaveKey();
   if (!k) return;
-  if (!app.markups.length) storage.del(k);
-  else storage.set(k, serializeMarkups(docMeta(), app.markups));
+  if (!app.markups.length) { storage.del(k); return; }
+  if (storage.set(k, serializeMarkups(docMeta(), app.markups))) {
+    // ask once (never blocks) that the browser keeps this storage when space runs low
+    if (!persistAsked && navigator.storage && navigator.storage.persist) { persistAsked = true; navigator.storage.persist().catch(() => {}); }
+  } else if (!autosaveWarned) {
+    autosaveWarned = true;
+    toast('Markups could not be kept in this browser', { key: 'autosave', kind: 'warn', timeout: 10000, detail: 'Its storage is full or blocked. Use Markup › Save to keep them in a file.' });
+  }
 }
+/** Remove every set of markups kept in this browser (Help › Clear stored markups). Returns how many. */
+function clearStoredMarkups() {
+  let n = 0;
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith(AUTOSAVE)) { localStorage.removeItem(k); n++; } }
+  } catch { /* storage blocked */ }
+  return n;
+}
+app.clearStoredMarkups = clearStoredMarkups;
 function restoreAutosave() {
+  autosaveWarned = false;
   const k = autosaveKey();
-  const s = k && storage.get(k);
+  let s = k && storage.get(k);
+  if (!s && k) { // kept by an older version, under name + size only: move it to the new key
+    const old = `${AUTOSAVE}${app.doc.name}:${app.doc.size}`;
+    s = storage.get(old);
+    if (s) { storage.del(old); storage.set(k, s); }
+  }
   if (!s) return;
   try {
     const r = parseMarkups(s);
@@ -663,9 +735,17 @@ app.setTool = setTool;
 function restoreHint() {
   const hint = $('#tool-hint');
   const touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
-  const text = (touch && TOUCH_HINTS[app.tool]) || HINTS[app.tool] || '';
+  const text = (touch && TOUCH_TOOL_HINTS[app.tool]) || HINTS[app.tool] || '';
   hint.hidden = !text || !app.scene;
   hint.textContent = text;
+}
+
+// toasts sit below the tool hint, which wraps to several lines on a phone (app.css: --hint-bottom)
+{
+  const h = $('#tool-hint');
+  const place = () => stage.style.setProperty('--hint-bottom', h.hidden ? '0px' : `${Math.round(h.offsetTop + h.offsetHeight)}px`);
+  new ResizeObserver(place).observe(h);
+  new MutationObserver(place).observe(h, { attributes: true, attributeFilter: ['hidden'] });
 }
 
 function selectTab(name) {
@@ -985,7 +1065,7 @@ function closeTextEditor(commitIt) {
   const p = app.pendingCallout;
   app.pendingCallout = null;
   $('#text-editor').hidden = true;
-  const text = $('#ta-callout').value.replace(/\s+$/, '');
+  const text = $('#ta-callout').value.trimEnd();
   if (commitIt && p && text) {
     if (p.editId) {
       const i = app.markups.findIndex((m) => m.id === p.editId);
@@ -1104,7 +1184,11 @@ function fit() { if (app.scene) { app.view.fit(app.scene.fitBox); invalidate(tru
 app.fit = fit;
 
 // ------------------------------------------------------------------ keyboard
-const isTyping = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+const NOT_TEXT = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'range', 'file', 'image']);
+/** Typing into a text field? (Shortcuts stay off there; a checkbox or a button is not typing.) */
+const isTyping = (el) => !!el && ((el.tagName === 'INPUT' && !NOT_TEXT.has(el.type)) || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+/** A focused control that Space / Enter activate (a button, checkbox, tab, menu item...). */
+const isControl = (el) => !!el && el !== document.body && !!el.closest && !!el.closest('button, a[href], input, select, textarea, summary, [role="tab"], [role^="menuitem"]');
 const KEY_TOOLS = { h: 'pan', z: 'zoombox', d: 'distance', g: 'length', a: 'area', v: 'select', p: 'pen', n: 'line', w: 'arrow', r: 'rect', o: 'ellipse', c: 'cloud', t: 'callout', k: 'highlight' };
 document.addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]')) return;
@@ -1122,8 +1206,9 @@ document.addEventListener('keydown', (e) => {
       else saveMarkups();
       return;
     }
-    if (k === 'a' && EDIT_TOOLS.has(app.tool)) { e.preventDefault(); edit.selectAll(); return; }
-    if (k === 'd' && EDIT_TOOLS.has(app.tool)) { e.preventDefault(); edit.duplicate(); return; }
+    // Ctrl+A / Ctrl+D never reach the browser (select the page's text / bookmark dialog)
+    if (k === 'a') { e.preventDefault(); if (EDIT_TOOLS.has(app.tool)) edit.selectAll(); return; }
+    if (k === 'd') { e.preventDefault(); if (EDIT_TOOLS.has(app.tool)) edit.duplicate(); return; }
     if (k === 'v' && app.scene) { edit.pasteKey(e.shiftKey); return; } // the paste event follows (Ctrl+C: the copy event)
     if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
@@ -1131,6 +1216,9 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (typing || e.altKey) return;
+  // Space / Enter on a focused button or checkbox press it, unless something is being drawn
+  if (e.key === ' ' && isControl(e.target)) return;
+  if (e.key === 'Enter' && isControl(e.target) && !(edit.draftActive || app.draft || (app.mdraft && app.mdraft.pts.length))) return;
   if (edit.key(e)) return;
   if (e.key === ' ') { if (!app.spaceDown) { app.spaceDown = true; cvOverlay.classList.add('dragging'); } e.preventDefault(); return; }
   if (e.key === 'Escape') {
@@ -1198,13 +1286,19 @@ function setLayersOpen(open) {
 function toggleLayers() { setLayersOpen($('#layers-panel').hidden); }
 
 for (const b of $$('.tool[data-tool]')) b.addEventListener('click', () => setTool(b.dataset.tool));
+/** A ribbon tab chosen by the user: the Edit tab starts Edit mode with Select; leaving it ends Edit mode. */
+function activateTab(name) {
+  if (name === 'edit') { if (!EDIT_TOOLS.has(app.tool)) setTool('eselect'); else selectTab(name); return; }
+  if (EDIT_TOOLS.has(app.tool)) setTool('pan');
+  selectTab(name);
+}
 for (const tab of $$('[role="tab"]')) {
-  tab.addEventListener('click', () => selectTab(tab.dataset.tab));
+  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   tab.addEventListener('keydown', (e) => {
     const tabs = $$('[role="tab"]');
     const i = tabs.indexOf(tab);
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); const n = tabs[(i + 1) % tabs.length]; n.focus(); selectTab(n.dataset.tab); }
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); const n = tabs[(i + tabs.length - 1) % tabs.length]; n.focus(); selectTab(n.dataset.tab); }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); const n = tabs[(i + 1) % tabs.length]; n.focus(); activateTab(n.dataset.tab); }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); const n = tabs[(i + tabs.length - 1) % tabs.length]; n.focus(); activateTab(n.dataset.tab); }
   });
 }
 const actions = {
@@ -1230,6 +1324,11 @@ $('#file-input').addEventListener('change', async (e) => { const f = e.target.fi
 $('#markup-input').addEventListener('change', async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await loadMarkupFile(f); });
 for (const b of $$('.sample')) b.addEventListener('click', () => openSample(b.dataset.sample));
 $('#btn-close-layers').addEventListener('click', () => setLayersOpen(false));
+$('#btn-cancel-load').addEventListener('click', cancelOpen);
+$('#btn-clear-stored').addEventListener('click', () => {
+  const n = clearStoredMarkups();
+  toast(n ? `Cleared ${plural(n, 'set')} of stored markups` : 'No markups are stored in this browser', { key: 'cleared', timeout: 3000, detail: n && app.markups.length ? 'The markups on screen stay until you close the drawing.' : undefined });
+});
 $('#btn-help').addEventListener('click', () => $('#dlg-help').showModal());
 $('#btn-export').addEventListener('click', () => doExport());
 $('#btn-print').addEventListener('click', () => openPrintDialog());
@@ -1305,9 +1404,13 @@ window.addEventListener('drop', async (e) => {
 });
 
 // open files passed by the OS (installed PWA file handler)
+// (the manifest asks for one window per file; a browser that still hands over several opens the first)
 if ('launchQueue' in window) {
   window.launchQueue.setConsumer(async (params) => {
-    for (const h of params.files || []) { const f = await h.getFile(); await openFile(f); break; }
+    const files = params.files || [];
+    if (!files.length) return;
+    if (files.length > 1) toast(`Opened the first of ${files.length} files`, { key: 'launch', kind: 'warn', timeout: 8000, detail: `Linework shows one drawing per window: open the other ${files.length === 2 ? 'one' : files.length - 1} separately.` });
+    try { await openFile(await files[0].getFile()); } catch { toast('Could not read that file.', { kind: 'error' }); }
   });
 }
 
@@ -1317,15 +1420,14 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 // ------------------------------------------------------------------ edit mode
+/** After every edit, undo and redo: new layers and item counts in the Layers panel (visibility kept). */
 function layersChanged() {
-  const prev = app.layerVisible;
-  layersPanel.setLayers(app.scene.layers);
-  if (prev) for (let i = 0; i < prev.length && i < layersPanel.visible.length; i++) layersPanel.visible[i] = prev[i];
-  layersPanel.sync();
-  app.layerVisible = layersPanel.visible;
+  if (!app.scene) return;
+  app.layerVisible = layersPanel.refresh();
 }
 edit = initEdit(app, {
   invalidate, setTool, accent, drawSnapGlyph, updateUndoButtons, updateFinishBar, layersChanged, restoreHint,
+  showLayers: (indices) => layersPanel.show(indices),
   setInfo: (t) => { $('#st-info').textContent = t; },
   setCursor: (c) => { if (!cvOverlay.classList.contains('dragging')) cvOverlay.className = c === 'grab' ? '' : c; },
   focusStage: () => stage.focus({ preventScroll: true }),
@@ -1353,7 +1455,8 @@ function init() {
       if (!app.scene && !(edit && edit.dirty)) { reloading = true; location.reload(); return; }
       toast('Linework was updated.', { key: 'update', timeout: 0, detail: 'Reload to use the new version.', actions: [{ label: 'Reload', onClick: () => { if (!(edit && edit.dirty) || window.confirm('The drawing has unsaved edits. Reload anyway?')) { reloading = true; location.reload(); } } }] });
     });
-    navigator.serviceWorker.register('sw.js').catch(() => { /* offline support unavailable */ });
+    // updateViaCache 'none': the version (src/version.js, imported by sw.js) is always checked fresh
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => { /* offline support unavailable */ });
   }
   if (location.protocol === 'file:') {
     toast('Opened from disk: samples and offline mode need a local web server (see README). Opening your own files still works.', { kind: 'warn', timeout: 10000 });

@@ -274,6 +274,30 @@ dialog::backdrop { background: rgba(5, 10, 20, .5); }
 
 .show-sm { display: none !important; }
 
+/* ------------------------------------------------------------------ recent drawings, print options, compare */
+#menu-recent { left: 12px; right: auto; max-width: min(440px, calc(100vw - 24px)); max-height: 70vh; overflow-y: auto; }
+#menu-recent small { display: block; color: var(--muted); font-size: 12px; }
+.cmp-files > div { display: flex; align-items: center; gap: 6px; }
+.cmp-files small { color: var(--muted); }
+.recent-list .sample strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.pr-row > label { flex: 1 1 140px; }
+.form-grid select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-3); }
+.form-grid input[type="text"]:invalid { border-color: var(--danger); }
+.cmp-files, .cmp-toggles, .cmp-nav { padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+.cmp-files { display: grid; gap: 4px; }
+.cmp-toggles { padding: 4px 0; }
+.cmp-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+.cmp-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 12px; background: none; border: 0; text-align: left; cursor: pointer; }
+.cmp-item:hover { background: var(--bg-3); }
+.cmp-item.on { background: var(--accent-soft); }
+.cmp-list .note { list-style: none; padding: 6px 12px; }
+.sw.cmp-a { background: #ff5c5c; }
+.sw.cmp-b { background: #3ddc84; }
+.sw.cmp-ab { background: linear-gradient(90deg, #ff5c5c 50%, #3ddc84 50%); }
+:root[data-theme="paper"] .sw.cmp-a { background: #d4001a; }
+:root[data-theme="paper"] .sw.cmp-b { background: #08873a; }
+
 /* ------------------------------------------------------------------ small screens */
 @media (max-width: 760px) {
   .privacy span, .hide-sm { display: none !important; }
@@ -309,4 +333,8 @@ dialog::backdrop { background: rgba(5, 10, 20, .5); }
   .title-strip > div:first-child { border-left: 0; }
   .title-strip small { display: block; font-size: 6.5pt; text-transform: uppercase; color: #333; }
   .title-strip strong { font-size: 10pt; }
+  .vsheet { box-sizing: border-box; padding: 8mm; overflow: hidden; display: flex; flex-direction: column; break-after: avoid; }
+  .vsheet svg { display: block; flex: none; }
+  .vsheet .title-strip { grid-template-columns: 2fr 1.5fr 1fr 1.1fr 1fr 1fr; height: 9mm; overflow: hidden; }
+  .vsheet .title-strip > div { padding: .8mm 2mm; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }

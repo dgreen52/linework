@@ -92,6 +92,9 @@ const app = {
 };
 window.__linework = app; // test/automation hook (read-only use)
 let edit = null; // Edit mode controller (src/app/edit-ui.js), created at start-up
+// modules loaded after start-up (files, compare) hook in here: a drawing opened, the history changed, the overlay is drawn
+const hooks = app.hooks = { open: [], history: [], draw: [] };
+const fire = (k, x) => { for (const f of hooks[k]) f(x); };
 
 const stage = $('#stage');
 const cvDrawing = $('#cv-drawing');
@@ -115,6 +118,7 @@ function invalidate(base = false) {
   if (base) app.baseDirty = true;
   if (!app.raf) app.raf = requestAnimationFrame(frame);
 }
+app.invalidate = invalidate;
 let settleTimer = 0;
 function interact() {
   app.interacting = true;
@@ -218,6 +222,7 @@ function drawOverlay() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawAnnotations(ctx, app.view, { theme: app.theme, live: true });
   edit.drawOverlay(ctx);
+  fire('draw', ctx);
 }
 
 function drawAnnotations(ctx, view, opts = {}) {
@@ -354,6 +359,8 @@ const failJobs = (message, code) => {
   for (const [, job] of jobs) job.reject(Object.assign(new Error(message), { code }));
   jobs.clear();
   modelParts.clear();
+  for (const [, w] of modelWaiters) w(null);
+  modelWaiters.clear();
 };
 function getWorker() {
   if (worker === false) return null;
@@ -406,14 +413,36 @@ app.readTimeLimitMs = 120000;
 
 // the drawing model (for editing/saving) follows the scene in pieces; see worker.js
 const modelParts = new Map();
+const modelWaiters = new Map(); // job -> callback: the model of a file read but not shown (compare, save over the original)
 function modelMessage(m) {
   if (m.type === 'model-part') { if (!modelParts.has(m.id)) modelParts.set(m.id, []); modelParts.get(m.id).push(m.entities); return; }
   const parts = modelParts.get(m.id) || [];
   modelParts.delete(m.id);
   const entities = parts.length === 1 ? parts[0] : parts.flat(); // (no spread: thousands of parts)
-  const model = { ...m.meta, entities, paperEntities: m.paperEntities || [] };
-  if (app.scene && app.scene.jobId === m.id) edit.setModel(model, m.bytes ? new Uint8Array(m.bytes) : null);
+  gotModel(m.id, { ...m.meta, entities, paperEntities: m.paperEntities || [] }, m.bytes ? new Uint8Array(m.bytes) : null);
 }
+function gotModel(id, model, bytes) {
+  const w = modelWaiters.get(id);
+  if (w) { modelWaiters.delete(id); w({ model, bytes }); } else if (app.scene && app.scene.jobId === id) edit.setModel(model, bytes);
+}
+/** Read a drawing without showing it: { scene, model, bytes } (bytes: DGN only). Cancel stops it. */
+app.readDrawing = async (name, buffer) => {
+  if (app.loading) throw new Error('Another drawing is still opening.');
+  const my = ++loadSeq;
+  app.loading = true;
+  $('#btn-cancel-load').hidden = false;
+  showProgress(`Reading ${name}…`, 0);
+  try {
+    const scene = await parseOffThread(name, buffer, null, (phase, f) => showProgress(`${phase} ${name}…`, f));
+    const got = await new Promise((res) => modelWaiters.set(scene.jobId, res));
+    if (!got) throw new Error('The reader stopped.');
+    return { scene, ...got };
+  } finally {
+    if (my === loadSeq) { app.loading = false; hideProgress(); }
+  }
+};
+/** Show a drawing read by readDrawing (src as for openDrawing; keep: true keeps the view, layers and markups). */
+app.showDrawing = (r, name, src) => { setDocument(r.scene, name, r.scene.fileSize, 0, src); edit.setModel(r.model, r.bytes); };
 
 async function parseOffThread(name, buffer, sample, progress) {
   const w = getWorker();
@@ -438,7 +467,7 @@ async function parseOffThread(name, buffer, sample, progress) {
   const r = await loadInWorkerScope({ id: 0, name, buffer, sample }, () => {});
   const id = 'local-' + ++jobSeq;
   r.scene.jobId = id;
-  setTimeout(() => { if (app.scene && app.scene.jobId === id) edit.setModel(r.model, r.bytes); }, 0);
+  setTimeout(() => gotModel(id, r.model, r.bytes), 0);
   return r.scene;
 }
 
@@ -455,7 +484,7 @@ function okToReplace() {
 }
 
 let loadSeq = 0;
-async function openDrawing(name, buffer, size, sample) {
+async function openDrawing(name, buffer, size, sample, src) {
   if (app.loading) stopReader('Replaced by another file.'); // a new file replaces the one still opening
   const my = ++loadSeq;
   app.loading = true;
@@ -465,7 +494,7 @@ async function openDrawing(name, buffer, size, sample) {
   try {
     const scene = await parseOffThread(name, buffer, sample, (phase, f) => { if (my === loadSeq) showProgress(`${phase} ${name}…`, f); });
     if (my !== loadSeq) return;
-    setDocument(scene, name, size ?? scene.fileSize, performance.now() - t0);
+    setDocument(scene, name, size ?? scene.fileSize, performance.now() - t0, src);
   } catch (e) {
     if (my !== loadSeq) return;
     if (e && e.code === 'cancelled') { toast(`Stopped opening ${name}`, { key: 'open', timeout: 2500 }); return; }
@@ -480,47 +509,57 @@ app.openDrawing = openDrawing;
 function cancelOpen() { if (app.loading) stopReader('Opening was cancelled.'); }
 app.cancelOpen = cancelOpen;
 
-async function openFile(file) {
+/** src: { handle, dir } when the browser gave a file handle (Save can then write the file itself). */
+async function openFile(file, src) {
   if (!file) return;
   if (/\.json$/i.test(file.name)) { await loadMarkupFile(file); return; }
   if (!okToReplace()) return;
   if (file.size > 400 * 1024 * 1024) { toast('This file is too large to open in the browser (over 400 MB).', { kind: 'error' }); return; }
   let buf;
   try { buf = await readFileAsArrayBuffer(file); } catch { toast(`Could not read ${file.name}`, { kind: 'error', detail: 'The file could not be read from this device (moved, locked or not allowed).' }); return; }
-  await openDrawing(file.name, buf, file.size);
+  await openDrawing(file.name, buf, file.size, undefined, src && { ...src, modified: file.lastModified });
 }
+app.openFile = openFile;
+/** Open: the browser's file picker when there is one (it gives a handle), else the plain chooser. */
+const pickFile = () => (app.files ? app.files.pick() : $('#file-input').click());
 
 async function openSample(key) {
   if (!okToReplace()) return;
-  if (key === 'stress') return openDrawing('stress-test-53k.dxf', null, null, 'stress');
+  if (key === 'stress') return openDrawing('stress-test-53k.dxf', null, null, 'stress', { sample: key });
   try {
     const res = await fetch(key);
     if (!res.ok) throw new Error(res.statusText);
     const buf = await res.arrayBuffer();
-    return openDrawing(key.split('/').pop(), buf, buf.byteLength);
+    return openDrawing(key.split('/').pop(), buf, buf.byteLength, undefined, { sample: key });
   } catch {
     toast('Could not load the sample. If you opened index.html directly from disk, run a local web server instead (see README).', { kind: 'error' });
   }
 }
 app.openSample = openSample;
 
-function setDocument(scene, name, size, ms) {
+/**
+ * Show a drawing. src: where it came from ({ handle, dir, modified, sample }); src.keep: the same
+ * drawing read again after Save wrote it (view, hidden layers and markups stay, no open notes).
+ */
+function setDocument(scene, name, size, ms, src = {}) {
+  const keep = src.keep && app.scene ? { view: app.view.snapshot(), markups: app.markups, key: autosaveKey(), off: new Set(app.scene.layers.filter((l, i) => app.layerVisible && !app.layerVisible[i]).map((l) => l.name)) } : null;
+  if (keep) for (const l of scene.layers) if (keep.off.has(l.name)) l.visible = false;
   app.scene = scene;
-  app.doc = { name, size, format: scene.format, hash: scene.hash || '' };
+  app.doc = { ...src, name, size, format: scene.format, hash: scene.hash || '', keep: !!keep };
   app.renderer.setScene(scene);
   app.layerVisible = Uint8Array.from(scene.layers.map((l) => (l.visible ? 1 : 0)));
   layersPanel.setLayers(scene.layers);
   const wide = window.innerWidth >= 1100;
-  setLayersOpen(wide && scene.layers.filter((l) => l.count).length > 1);
+  if (!keep) setLayersOpen(wide && scene.layers.filter((l) => l.count).length > 1);
   $('#empty').hidden = true;
   resize(); // layout may have changed (layers panel); fit to the real stage size
   app.view.setLimits(scene.extents);
-  app.view.fit(scene.fitBox);
+  if (keep) app.view.restore(keep.view); else app.view.fit(scene.fitBox);
   app.heavy = 0;
   app.hover = null; app.hoverPath = null; app.selected = null;
   app.measures = []; app.mdraft = null; app.draft = null;
   app.history.clear();
-  app.markups = [];
+  app.markups = keep ? keep.markups : [];
   edit.reset();
   if (EDIT_TOOLS.has(app.tool)) setTool(app.tool);
   $('#empty').hidden = true;
@@ -533,9 +572,11 @@ function setDocument(scene, name, size, ms) {
   for (const b of ['#btn-export', '#btn-print']) $(b).disabled = false;
   const nLayers = listedLayers(scene.layers).length; // the same count as the Layers panel
   cvOverlay.setAttribute('aria-label', `Drawing ${name}: ${plural(nLayers, 'layer')}, ${plural(scene.n + scene.textCount, 'item')}. Use the toolbar to pan, zoom, measure and mark up.`);
-  restoreAutosave();
+  if (keep) { if (keep.key !== autosaveKey()) storage.del(keep.key); autosave(); } else restoreAutosave(); // markups follow the saved file
   updateUndoButtons();
   invalidate(true);
+  fire('open', app.doc);
+  if (keep) return;
 
   const items = scene.n + scene.textCount;
   const ns = Object.entries(scene.notShown);
@@ -662,6 +703,7 @@ app.undo = undo; app.redo = redo;
 function updateUndoButtons() {
   for (const b of $$('[data-action="undo"]')) b.disabled = !app.history.canUndo();
   for (const b of $$('[data-action="redo"]')) b.disabled = !app.history.canRedo();
+  fire('history');
 }
 function deleteSelected() {
   if (!app.selected) return false;
@@ -1196,7 +1238,7 @@ document.addEventListener('keydown', (e) => {
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (mod) {
-    if (k === 'o') { e.preventDefault(); $('#file-input').click(); return; }
+    if (k === 'o') { e.preventDefault(); pickFile(); return; }
     if (typing) return;
     if (k === 's') {
       e.preventDefault();
@@ -1309,6 +1351,7 @@ const actions = {
   'load-markup': () => { if (app.doc) $('#markup-input').click(); else toast('Open the drawing first, then load its markups.', { kind: 'warn' }); },
   export: () => doExport(),
   print: () => openPrintDialog(),
+  compare: () => { if (!app.doc) { toast('Open a drawing first, then compare it with another revision.', { kind: 'warn' }); return; } import('./app/compare.js').then((m) => m.startCompare(app), () => toast('Compare is not available offline yet.', { kind: 'warn' })); },
   'e-delete': () => edit.deleteSel(),
   'e-copy': () => edit.copyButton(),
   'e-paste': () => edit.paste(),
@@ -1318,8 +1361,8 @@ const actions = {
 };
 for (const b of $$('[data-action]')) b.addEventListener('click', () => { $('#menu-more').hidden = true; actions[b.dataset.action]?.(); });
 
-$('#btn-open').addEventListener('click', () => $('#file-input').click());
-$('#btn-open-empty').addEventListener('click', () => $('#file-input').click());
+$('#btn-open').addEventListener('click', pickFile);
+$('#btn-open-empty').addEventListener('click', pickFile);
 $('#file-input').addEventListener('change', async (e) => { const f = e.target.files[0]; e.target.value = ''; await openFile(f); });
 $('#markup-input').addEventListener('change', async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await loadMarkupFile(f); });
 for (const b of $$('.sample')) b.addEventListener('click', () => openSample(b.dataset.sample));
@@ -1368,21 +1411,29 @@ async function doExport() {
 }
 app.exportPng = () => exportPng(app);
 
+// Print: a vector sheet to scale (src/app/print-svg.js, loaded with the dialog or soon after a drawing
+// opens). The image print is kept for the browser's own Print menu used before that module is here.
+let printMod = null;
+const loadPrint = () => import('./app/print-svg.js').then((m) => (printMod = m));
 function openPrintDialog() {
   if (!app.doc) return;
   $('#pr-title').value = $('#pr-title').value || app.doc.name;
   $('#pr-author').value = $('#pr-author').value || app.author;
+  loadPrint().then((m) => m.initDialog(app), () => {});
   $('#dlg-print').showModal();
 }
 $('#dlg-print').addEventListener('close', async () => {
   if ($('#dlg-print').returnValue !== 'print') return;
-  const f = new FormData($('#print-form'));
-  const img = buildPrintSheet(app, { title: f.get('title'), author: f.get('author'), orientation: f.get('orient'), area: f.get('area'), markups: f.get('markups') === 'on' });
-  try { await img.decode(); } catch { /* print anyway */ }
+  try { (printMod || await loadPrint()).printSheet(app); } catch (e) { toast('Could not prepare the print', { kind: 'error', detail: String(e && e.message ? e.message : e) }); return; }
   window.print();
 });
 app.buildPrintSheet = (o) => buildPrintSheet(app, o);
-window.addEventListener('beforeprint', () => { if (app.doc && !$('#print-root').firstChild) buildPrintSheet(app, { title: app.doc.name, author: app.author }); });
+app.printSheet = (o) => loadPrint().then((m) => m.printSheet(app, o));
+window.addEventListener('beforeprint', () => {
+  if (!app.doc || $('#print-root').firstChild) return;
+  if (printMod) printMod.printSheet(app); else buildPrintSheet(app, { title: app.doc.name, author: app.author });
+});
+hooks.open.push(() => setTimeout(() => loadPrint().catch(() => {}), 1500));
 window.addEventListener('afterprint', () => clearPrintSheet());
 
 // ------------------------------------------------------------------ drag and drop anywhere
@@ -1396,10 +1447,13 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   dragDepth = 0;
   $('#drop-overlay').hidden = true;
+  // file handles (where the browser gives them) must be asked for before anything is awaited
+  const asked = [...e.dataTransfer.items].map((it) => (it.kind === 'file' && it.getAsFileSystemHandle ? it.getAsFileSystemHandle().catch(() => null) : null));
   const files = [...e.dataTransfer.files];
   const drawing = files.find((f) => !/\.json$/i.test(f.name));
   const markups = files.find((f) => /\.json$/i.test(f.name));
-  if (drawing) await openFile(drawing);
+  const handle = drawing && (await Promise.all(asked)).find((h) => h && h.kind === 'file' && h.name === drawing.name);
+  if (drawing) await openFile(drawing, handle ? { handle } : undefined);
   if (markups) await loadMarkupFile(markups);
 });
 
@@ -1410,7 +1464,7 @@ if ('launchQueue' in window) {
     const files = params.files || [];
     if (!files.length) return;
     if (files.length > 1) toast(`Opened the first of ${files.length} files`, { key: 'launch', kind: 'warn', timeout: 8000, detail: `Linework shows one drawing per window: open the other ${files.length === 2 ? 'one' : files.length - 1} separately.` });
-    try { await openFile(await files[0].getFile()); } catch { toast('Could not read that file.', { kind: 'error' }); }
+    try { await openFile(await files[0].getFile(), { handle: files[0] }); } catch { toast('Could not read that file.', { kind: 'error' }); }
   });
 }
 
@@ -1445,6 +1499,14 @@ function init() {
   app.author = storage.get('linework:author', '') || '';
   $('#inp-author').value = app.author;
   setTool('pan');
+  // file access (Open with a file handle, recent drawings, Save over the original, unsaved-edit recovery):
+  // loaded after start-up; until then (or offline before it was cached) Open and Save work as before
+  import('./app/files.js').then((m) => {
+    app.files = m.initFiles(app, { openFile, openSample, save: (...a) => edit.save(...a), commit: (l, c) => edit.commit(l, c), readDrawing: app.readDrawing, showDrawing: app.showDrawing });
+    hooks.open.push(app.files.opened);
+    hooks.history.push(app.files.history);
+    if (app.doc) app.files.opened(app.doc);
+  }, () => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !new URLSearchParams(location.search).has('nosw')) {
     // A new version installs in the background and takes over this page (skipWaiting + claim). The page
     // itself is still the old code, so reload: straight away when nothing is open, otherwise ask.
@@ -1453,7 +1515,7 @@ function init() {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!hadController || reloading) return;
       if (!app.scene && !(edit && edit.dirty)) { reloading = true; location.reload(); return; }
-      toast('Linework was updated.', { key: 'update', timeout: 0, detail: 'Reload to use the new version.', actions: [{ label: 'Reload', onClick: () => { if (!(edit && edit.dirty) || window.confirm('The drawing has unsaved edits. Reload anyway?')) { reloading = true; location.reload(); } } }] });
+      toast('Linework was updated.', { key: 'update', timeout: 0, detail: 'Reload to use the new version.', actions: [{ label: 'Reload', onClick: () => { if (!(edit && edit.dirty) || window.confirm(app.journalState === 'kept' ? 'Reload now? The unsaved edits stay in this browser: open the drawing again to get them back.' : 'The drawing has unsaved edits. Reload anyway?')) { reloading = true; location.reload(); } } }] });
     });
     // updateViaCache 'none': the version (src/version.js, imported by sw.js) is always checked fresh
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => { /* offline support unavailable */ });

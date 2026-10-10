@@ -1414,13 +1414,17 @@ export function initEdit(app, api) {
     }
     return writers;
   }
-  /** Write the drawing and download it. Returns true when saved; failures are shown, never thrown. */
-  async function save(f, name) {
+  /**
+   * Write the drawing and download it. Returns true when saved; failures are shown, never thrown.
+   * target(blob, notes): writes it somewhere else instead (Save over the original file, files.js),
+   * resolves true when it did; it reports its own result.
+   */
+  async function save(f, name, target) {
     if (!(await whenReady())) return false;
     f = f || srcFormat();
     name = name || defaultName(f);
     let blob, notes;
-    const m = model();
+    const m = model(), at = E.doc.cur;
     try {
       const { writeDxf, writeDgn } = await loadWriters();
       const ext = liveExtents(scene()) || undefined;
@@ -1439,17 +1443,20 @@ export function initEdit(app, api) {
       return false;
     }
     if (m.format === 'DWG') notes.unshift(`Linework does not write DWG, so this is a ${f} copy.`);
-    download(blob, name);
-    E.doc.markSaved();
+    const doc = E.doc;
+    if (target) { if (!(await target(blob, notes))) return false; } else download(blob, name);
+    doc.saved = at; // what was written (edits made while writing stay unsaved)
     updateDirty();
-    app.lastSave = { name, format: f, size: blob.size };
-    toast(`Saved ${name}`, { detail: 'Downloaded to this device — nothing was uploaded.', list: notes, listTitle: 'Notes', timeout: notes.length ? 9000 : 4000 });
+    api.updateUndoButtons(); // (the history listeners learn the drawing is saved)
+    app.lastSave = { name, format: f, size: blob.size, over: !!target };
+    if (!target) toast(`Saved ${name}`, { detail: 'Downloaded to this device — nothing was uploaded.', list: notes, listTitle: 'Notes', timeout: notes.length ? 9000 : 4000 });
     return true;
   }
-  /** Save in the drawing's own format; asks first when some original items would be lost. */
+  /** Save in the drawing's own format (over the original file when it allows that, see files.js); asks first when some original items would be lost. */
   function quickSave() {
     if (!app.scene) return;
     if (lostCount(srcFormat())) { openSaveAs(); return; }
+    if (app.files && app.files.quickSave(srcFormat())) return;
     save(srcFormat());
   }
   function openSaveAs() {
@@ -1534,6 +1541,7 @@ export function initEdit(app, api) {
   return {
     reset, setModel, revert, reapply, drawOverlay, down, move, up, dbl, context, key, toolChanged, cancelGesture, visibilityChanged,
     finishDraft, undoDraftPoint, cancelDraft, deleteSel, rotateSel, selectAll, quickSave, openSaveAs, save, editEntity,
+    commit: (label, changes) => commit(label, changes, []), // one undo step (restoring unsaved edits)
     copy: copySel, copyButton, paste, pasteKey, pasteText, duplicate: duplicateSel,
     get placing() { return !!E.place; },
     get draftActive() { return !!(E.place || (E.draft && (E.draft.tool === 'epoly' || E.draft.tool === 'eline') && E.draft.pts.length)); },

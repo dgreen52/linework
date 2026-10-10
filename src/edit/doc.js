@@ -19,6 +19,7 @@ export class EditDoc {
     this.seq = 0;
     this.cur = 0;
     this.saved = 0;
+    this.log = []; // the applied entries since the file was opened, oldest first (unsaved-edit recovery)
     makeLive(scene);
   }
 
@@ -34,10 +35,11 @@ export class EditDoc {
     const entry = { kind: 'edit', id: ++this.seq, prev: this.cur, label, changes, ...meta };
     entry.result = this.apply(entry, 'after');
     this.cur = entry.id;
+    this.log.push(entry);
     return entry;
   }
-  revert(entry) { const r = this.apply(entry, 'before'); this.cur = entry.prev; return r; }
-  reapply(entry) { const r = this.apply(entry, 'after'); this.cur = entry.id; return r; }
+  revert(entry) { const r = this.apply(entry, 'before'); this.cur = entry.prev; this.log.pop(); return r; }
+  reapply(entry) { const r = this.apply(entry, 'after'); this.cur = entry.id; this.log.push(entry); return r; }
 
   apply(entry, side) {
     const list = side === 'before' ? entry.changes.slice().reverse() : entry.changes;

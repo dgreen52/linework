@@ -5,7 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { join, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, inflateSync } from 'node:zlib';
 import { startServer } from '../../tools/serve.mjs';
 import { launch } from './browser.mjs';
 
@@ -381,13 +381,14 @@ test('export PNG and print / save as PDF', async () => {
   const strip = await page.textContent('#print-root .title-strip');
   assert(strip.includes('Angle bracket — check print') && strip.includes('bracket.dxf') && strip.includes('E2E Tester'), 'title strip');
   await page.emulateMedia({ media: 'print' });
-  assert(await page.isVisible('#print-root img'), 'print image visible in print media');
+  assert(await page.isVisible('#print-root svg'), 'print sheet (vector) visible in print media');
   assert(await page.isHidden('.topbar'), 'UI hidden in print media');
   await page.screenshot({ path: join(OUT, 'print-emulation-bracket.png') });
   const pdf = await page.pdf({ landscape: true, printBackground: true, preferCSSPageSize: true });
   writeFileSync(join(OUT, 'print-bracket.pdf'), pdf);
   const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
   eq(pages, 1, 'fits on one landscape page');
+  assert(pdfInfo(pdf).box[2] > pdfInfo(pdf).box[3], 'landscape page');
   await page.emulateMedia({ media: 'screen' });
   await close(page);
 });
@@ -450,6 +451,11 @@ test('offline: service worker serves the app shell and samples', async () => {
   eq(await page.evaluate(() => window.__linework.scene.format), 'DGN', 'sample opens offline');
   await openSample(page, 'stress', 'stress-test-53k.dxf');
   assert(await page.evaluate(() => window.__linework.scene.n > 50000), 'generated stress sample works offline');
+  // v0.4 modules loaded after start-up or on first use come from the offline cache too
+  await page.waitForFunction(() => !!window.__linework.files, null, { timeout: 10000 });
+  assert(await page.evaluate(async () => { const c = await caches.open((await caches.keys()).find((k) => k.startsWith('linework-') && !k.includes('reader'))); return (await Promise.all(['src/app/compare.js', 'src/tools/compare.js', 'src/app/print-svg.js', 'src/app/store.js', 'src/app/files.js'].map((p) => c.match(p)))).every(Boolean); }), 'compare, print and file modules are precached');
+  await page.evaluate(() => window.__linework.printSheet({ sheet: 'a4', orient: 'landscape', scale: 'Fit', area: 'all' }));
+  assert(await page.evaluate(() => !!document.querySelector('#print-root svg')), 'vector print works offline');
   await page.ctx.setOffline(false);
   await close(page);
 });
@@ -2098,6 +2104,473 @@ test('version, help, kept markups: about shows src/version.js; help lists Ctrl+A
   await page.waitForFunction(() => window.__linework.edit.ready);
   await page.click('#tab-edit');
   await page.waitForFunction(() => performance.getEntriesByType('resource').filter((r) => /(dxf|dgn)-write\.js/.test(r.name)).length === 2, null, { timeout: 5000 });
+  await close(page);
+});
+
+// ------------------------------------------------------------------ v0.4: files, unsaved-edit recovery, compare, vector print
+// The browser's file pickers cannot be driven headlessly: tests hand the app real file handles from
+// the page's origin-private file system (OPFS) where a picker would, and cover the fallback
+// (plain file chooser, downloads) end to end.
+const { parseDgn } = await import('../../src/formats/dgn.js');
+const { parseDrawing } = await import('../../src/formats/detect.js');
+const { buildScene } = await import('../../src/scene.js');
+const { EditDoc } = await import('../../src/edit/doc.js');
+const { moveEntity, setText, restyle } = await import('../../src/edit/ops.js');
+const { writeDgn } = await import('../../src/formats/dgn-write.js');
+const { writeDxf } = await import('../../src/formats/dxf-write.js');
+
+/** Put a file into the page's OPFS folder (default 'e2e'): window.__fs[name] is its handle, window.__dir the folder. */
+async function opfsPut(page, name, buf, folder = 'e2e') {
+  await page.evaluate(async ([n, b64, f]) => {
+    const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(f, { create: true });
+    const fh = await dir.getFileHandle(n, { create: true });
+    const w = await fh.createWritable(); await w.write(bin); await w.close();
+    window.__dir = dir;
+    (window.__fs = window.__fs || {})[n] = fh;
+  }, [name, Buffer.from(buf).toString('base64'), folder]);
+}
+async function opfsGet(page, name, folder = 'e2e') {
+  const b64 = await page.evaluate(async ([n, f]) => {
+    try {
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(f);
+      const b = new Uint8Array(await (await (await dir.getFileHandle(n)).getFile()).arrayBuffer());
+      let s = '';
+      for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192));
+      return btoa(s);
+    } catch { return null; }
+  }, [name, folder]);
+  return b64 == null ? null : Buffer.from(b64, 'base64');
+}
+/** The next file picker hands over this OPFS file (as showOpenFilePicker would). */
+const pickerGives = (page, name) => page.evaluate((n) => { window.showOpenFilePicker = async () => [window.__fs[n]]; }, name);
+const filesReady = (page) => page.waitForFunction(() => !!window.__linework.files);
+/** Original DGN elements: identical, or (edited) only the deleted bit set. Returns [same, deleted]. */
+function dgnKept(orig, out) {
+  let same = 0, deleted = 0;
+  for (let o = 0; o + 4 <= orig.length;) {
+    if (orig[o] === 0xff && orig[o + 1] === 0xff) break;
+    const size = 4 + 2 * orig.readUInt16LE(o + 2);
+    const a = orig.subarray(o, o + size), b = out.subarray(o, o + size);
+    if (a.equals(b)) same++;
+    else { assert(b[1] === (a[1] | 0x80) && Buffer.compare(a.subarray(2), b.subarray(2)) === 0, `element at ${o} only gets its deleted bit`); deleted++; }
+    o += size;
+  }
+  return [same, deleted];
+}
+/** Select the Level 2 shape of the site plan and nudge it (one edit). */
+async function nudgeShape(page) {
+  await setSnap(page, false);
+  const st = await page.evaluate(() => { const m = window.__linework.edit.doc.model; const i = m.entities.findIndex((e) => e && e.layer === 'Level 2' && e.pts); return { i, e: m.entities[i] }; });
+  if (!/^e/.test(await page.evaluate(() => window.__linework.tool))) await page.click('#tab-edit');
+  await clickWorld(page, st.e.pts[0], (st.e.pts[1] + st.e.pts[3]) / 2 + 0.0001);
+  await page.keyboard.press('Shift+ArrowRight');
+  return st.i;
+}
+const toastText = (page) => page.evaluate(() => document.querySelector('#toasts').textContent);
+function pdfInfo(pdf) {
+  const s = pdf.toString('latin1');
+  const box = /\/MediaBox\s*\[\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*\]/.exec(s);
+  let ops = '';
+  for (const m of s.matchAll(/stream\r?\n/g)) {
+    const at = m.index + m[0].length, end = s.indexOf('endstream', at);
+    try { ops += inflateSync(pdf.subarray(at, end)).toString('latin1') + '\n'; } catch { /* not deflated */ }
+  }
+  return { pages: (s.match(/\/Type\s*\/Page[^s]/g) || []).length, box: box ? box.slice(1).map(Number) : [], images: (s.match(/\/Subtype\s*\/Image/g) || []).length, ops };
+}
+
+test('files: Open through the file picker keeps the handle; Save over the original asks once, keeps a backup in the folder, keeps untouched DGN bytes, reads the file back; changed-on-disk warning; recent drawings reopen it in one click', async () => {
+  const page = await newPage();
+  await filesReady(page);
+  const orig = readFileSync(FIX('site-plan.dgn'));
+  await opfsPut(page, 'site-plan.dgn', orig);
+  await pickerGives(page, 'site-plan.dgn');
+  await page.click('#btn-open');
+  await page.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'site-plan.dgn' && !window.__linework.loading);
+  assert(await page.evaluate(() => !!window.__linework.doc.handle), 'opened with a file handle');
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await clearToasts(page);
+  await page.click('#tab-edit');
+  await nudgeShape(page);
+  assert(await ED.dirty(page), 'unsaved');
+  const scale0 = await ED.scale(page);
+  // first Save: the one-time question
+  await page.keyboard.press('Control+s');
+  await page.waitForSelector('#dlg-inplace[open]');
+  const q = await page.textContent('#dlg-inplace');
+  assert(/site-plan\.dgn will be replaced/.test(q) && /byte for byte/.test(q), 'says what happens: ' + q);
+  assert(await page.isHidden('#ip-dxf'), 'no DXF warning for a DGN');
+  assert(await page.isChecked('#ip-bak'), 'backup copy on by default');
+  assert(/access to this file only/.test(await page.textContent('#ip-bak-note')), 'no folder access yet: says so');
+  await page.evaluate(() => { window.showDirectoryPicker = async () => window.__dir; });
+  await page.click('#ip-dir');
+  await page.waitForFunction(() => /goes next to it, in “e2e”/.test(document.querySelector('#ip-bak-note').textContent));
+  await shot(page, 'save-over-dialog-dark-1440');
+  await page.click('#btn-ip-save');
+  await page.waitForFunction(() => /Saved over site-plan\.dgn/.test(document.querySelector('#toasts').textContent), null, { timeout: 20000 });
+  assert(/Backup of the file as it was: site-plan\.bak\.dgn/.test(await toastText(page)), 'backup reported');
+  const disk1 = await opfsGet(page, 'site-plan.dgn');
+  const [same, deleted] = dgnKept(orig, disk1);
+  assert(same > 25 && deleted === 1 && disk1.length > orig.length, `untouched elements byte-identical (${same}), the edited one deleted in place (${deleted}), its new version appended`);
+  assert((await opfsGet(page, 'site-plan.bak.dgn')).equals(orig), 'the backup is the file as it was');
+  const st1 = await page.evaluate(() => ({ dirty: window.__linework.edit.dirty, keep: window.__linework.doc.keep, over: window.__linework.lastSave.over, undo: window.__linework.history.canUndo() }));
+  assert(!st1.dirty && st1.keep && st1.over && !st1.undo, 'saved, read back from the file: ' + JSON.stringify(st1));
+  assert(Math.abs((await ED.scale(page)) / scale0 - 1) < 1e-9, 'the view is kept');
+  assert(await page.isHidden('#doc-dirty'), 'unsaved indicator cleared');
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  // second Save: no question, the backup is not overwritten
+  await clearToasts(page);
+  await page.click('#tab-edit');
+  await nudgeShape(page);
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction(() => /Saved over/.test(document.querySelector('#toasts').textContent), null, { timeout: 20000 });
+  assert(await page.evaluate(() => !document.querySelector('#dlg-inplace').open), 'asked only once');
+  const disk2 = await opfsGet(page, 'site-plan.dgn');
+  assert(dgnKept(disk1, disk2)[1] === 1, 'the second save keeps the first one\'s bytes too');
+  assert((await opfsGet(page, 'site-plan.bak.dgn')).equals(orig), 'backup still the original');
+  // changed on disk by someone else: ask before overwriting
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await new Promise((r) => setTimeout(r, 30));
+  await opfsPut(page, 'site-plan.dgn', disk2); // same bytes, newer date
+  await page.click('#tab-edit');
+  await nudgeShape(page);
+  await clearToasts(page);
+  const dialogs = [];
+  page.once('dialog', (d) => { dialogs.push(d.message()); d.dismiss(); });
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction(() => !window.__linework.loading);
+  await new Promise((r) => setTimeout(r, 500));
+  assert(dialogs.length === 1 && /was changed on disk after you opened it/.test(dialogs[0]), 'asks: ' + dialogs.join());
+  assert((await opfsGet(page, 'site-plan.dgn')).equals(disk2) && (await ED.dirty(page)), 'refused: nothing written, edits kept');
+  page.once('dialog', (d) => d.accept());
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction(() => /Saved over/.test(document.querySelector('#toasts').textContent), null, { timeout: 20000 });
+  assert(!(await opfsGet(page, 'site-plan.dgn')).equals(disk2), 'accepted: written');
+  // recent drawings: the empty state after a reload reopens the file in one click (no picker)
+  await page.evaluate(() => { window.showOpenFilePicker = () => { throw new Error('no picker expected'); }; });
+  await page.reload();
+  await page.waitForFunction(() => !!window.__linework && !!window.__linework.files);
+  await page.waitForSelector('#recent [data-recent]');
+  await shot(page, 'recent-empty-dark-1440');
+  const items = await page.$$eval('#recent [data-recent]', (bs) => bs.map((b) => b.textContent));
+  eq(items.length, 1, 'one recent drawing');
+  assert(/site-plan\.dgn/.test(items[0]) && /DGN · .* · just now/.test(items[0]), items[0]);
+  await page.click('#recent [data-recent]');
+  await page.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'site-plan.dgn' && !!window.__linework.doc.handle && !window.__linework.loading);
+  await page.waitForFunction(() => !!(window.__linework.doc.recent && window.__linework.doc.recent.ok && window.__linework.doc.dir));
+  // the Open menu lists it too; Clear list forgets it (the file stays)
+  await page.click('#btn-recent');
+  assert(/site-plan\.dgn/.test(await page.textContent('#menu-recent')), 'Open menu lists recent drawings');
+  await shot(page, 'recent-menu-dark-1440');
+  await page.click('#menu-recent [data-recent-clear]');
+  await page.waitForFunction(() => document.querySelector('#btn-recent').hidden);
+  assert((await opfsGet(page, 'site-plan.dgn')) !== null, 'the file is not touched');
+  eq(await page.evaluate(async () => (await window.__linework.files.db.all('recent')).length), 0, 'list cleared in storage');
+  await close(page);
+});
+
+test('files: DXF over the original warns what DXF loses (Download a copy instead); without the File System Access API Open is the plain chooser and Save downloads', async () => {
+  const page = await newPage();
+  await filesReady(page);
+  await opfsPut(page, 'house-plan.dxf', readFileSync(FIX('house-plan.dxf')));
+  await pickerGives(page, 'house-plan.dxf');
+  await page.keyboard.press('Control+o');
+  await page.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'house-plan.dxf' && window.__linework.edit.ready);
+  await clearToasts(page);
+  await page.click('#tab-edit');
+  await zoomTo(page, 500, 300, 8300, 7500);
+  await clickWorld(page, 2300, 6600);
+  await page.keyboard.press('Shift+ArrowRight');
+  assert(await ED.dirty(page), 'edited');
+  await page.click('#btn-esave');
+  await page.waitForSelector('#dlg-inplace[open]');
+  assert(await page.isVisible('#ip-dxf') && /layouts, dimension styles/.test(await page.textContent('#ip-dxf')), 'DXF: says what is not kept');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#dlg-inplace button[value="download"]')]);
+  eq(dl.suggestedFilename(), 'house-plan-edited.dxf', 'Download a copy = the old Save');
+  assert((await opfsGet(page, 'house-plan.dxf')).equals(readFileSync(FIX('house-plan.dxf'))), 'the original is untouched');
+  // a browser without file handles (or a file from the plain chooser): Save downloads, as before
+  const p2 = await newPage();
+  await filesReady(p2);
+  await p2.evaluate(() => { window.showOpenFilePicker = undefined; });
+  const [fc] = await Promise.all([p2.waitForEvent('filechooser'), p2.click('#btn-open')]);
+  await fc.setFiles(FIX('site-plan.dgn'));
+  await p2.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'site-plan.dgn' && window.__linework.edit.ready);
+  assert(await p2.evaluate(() => !window.__linework.doc.handle), 'no handle');
+  await clearToasts(p2);
+  await p2.click('#tab-edit');
+  await nudgeShape(p2);
+  const [dl2] = await Promise.all([p2.waitForEvent('download'), p2.keyboard.press('Control+s')]);
+  eq(dl2.suggestedFilename(), 'site-plan-edited.dgn', 'downloads');
+  assert(await p2.evaluate(() => !document.querySelector('#dlg-inplace')), 'no question without a handle');
+  await close(p2);
+  await close(page);
+});
+
+test('unsaved edits survive a crash: reopening the file offers to restore them (DGN and DXF), Restore gives the same drawing, Discard forgets them, Save clears them', async () => {
+  const page = await newPage();
+  const ctx = page.ctx;
+  await filesReady(page);
+  await openForEdit(page, 'site-plan.dgn');
+  const shape = await nudgeShape(page);
+  await page.keyboard.press('Escape');
+  await clickWorld(page, ...(await textAt(page, 'STORE')));
+  await page.keyboard.press('Delete');
+  eq(await page.evaluate(() => window.__linework.edit.doc.log.length), 2, 'two edits');
+  await page.evaluate(() => window.__linework.files.flush());
+  eq(await page.evaluate(() => window.__linework.journalState), 'kept', 'journal written');
+  const want = await page.evaluate(() => JSON.stringify(window.__linework.edit.doc.model.entities));
+  // "crash": the tab goes away without a word (no beforeunload), the drawing is opened again
+  await page.close();
+  const reopen = async () => {
+    const p = await ctx.newPage();
+    p.errors = []; p.ctx = ctx;
+    p.on('pageerror', (e) => p.errors.push('pageerror: ' + e.message));
+    p.on('console', (m) => { if (m.type() === 'error') p.errors.push('console: ' + m.text()); });
+    await p.goto(BASE + '?nosw');
+    await p.waitForFunction(() => !!window.__linework && !!window.__linework.files);
+    return p;
+  };
+  const p2 = await reopen();
+  await p2.waitForSelector('#recent [data-recent]');
+  assert(/unsaved edits kept/.test(await p2.textContent('#recent')), 'the recent list says which drawing has unsaved edits');
+  await openFixture(p2, 'site-plan.dgn');
+  await p2.waitForSelector('.toast:has-text("Restore 2 unsaved edits?")');
+  await shot(p2, 'restore-offer-dark-1440');
+  await p2.click('.toast button:has-text("Restore")');
+  await p2.waitForFunction(() => window.__linework.edit.doc && window.__linework.edit.doc.log.length === 2);
+  eq(await p2.evaluate(() => JSON.stringify(window.__linework.edit.doc.model.entities)), want, 'the same drawing as before the crash');
+  assert(await ED.dirty(p2), 'still unsaved');
+  assert(/Restored 2 edits/.test(await toastText(p2)), 'says so');
+  await p2.click('#tab-edit');
+  await p2.keyboard.press('Control+z');
+  eq(await p2.evaluate(() => window.__linework.edit.doc.log.length), 1, 'undo takes them back one by one');
+  await p2.keyboard.press('Control+y');
+  assert(await p2.evaluate((i) => !!window.__linework.edit.doc.model.entities[i], shape), 'the moved shape is there');
+  // Save (download): nothing kept any more
+  const [dl] = await Promise.all([p2.waitForEvent('download'), p2.click('#btn-esave')]);
+  eq(dgnKept(readFileSync(FIX('site-plan.dgn')), readFileSync(await dl.path()))[1], 2, 'the restored edits are saved');
+  await p2.evaluate(() => window.__linework.files.flush());
+  eq(await p2.evaluate(async () => (await window.__linework.files.db.all('journal')).length), 0, 'saved: no journal');
+  // DXF: edit, crash, Discard
+  await openForEdit(p2, 'house-plan.dxf');
+  await zoomTo(p2, 500, 300, 8300, 7500);
+  await clickWorld(p2, 2300, 6600);
+  await p2.keyboard.press('Shift+ArrowUp');
+  await p2.evaluate(() => window.__linework.files.flush());
+  eq(await p2.evaluate(() => window.__linework.journalState), 'kept', 'DXF journal written');
+  const errs = p2.errors.slice();
+  await p2.close();
+  const p3 = await reopen();
+  await openFixture(p3, 'house-plan.dxf');
+  await p3.waitForSelector('.toast:has-text("Restore 1 unsaved edit?")');
+  // another drawing opened before answering: the offer goes (it belongs to the other file), the edits stay kept
+  await openFixture(p3, 'bracket.dxf');
+  assert(!/Restore 1/.test(await toastText(p3)), 'offer withdrawn with its drawing');
+  await openFixture(p3, 'house-plan.dxf');
+  await p3.waitForSelector('.toast:has-text("Restore 1 unsaved edit?")');
+  await p3.click('.toast button:has-text("Discard")');
+  await p3.waitForFunction(async () => (await window.__linework.files.db.all('journal')).length === 0);
+  assert(!(await ED.dirty(p3)), 'discarded: the file as it is');
+  await openFixture(p3, 'house-plan.dxf');
+  await new Promise((r) => setTimeout(r, 400));
+  assert(!/Restore/.test(await toastText(p3)), 'nothing offered any more');
+  assert(!p3.errors.length && !errs.length, p3.errors.concat(errs).join(' | '));
+  await ctx.close();
+});
+
+test('vector print to scale: A3 at 1:2 (mm drawing), 1"=20\' black and white (DGN in metres); markups as vector; one PDF page of the sheet size with lines and text, no images (production CSP)', async () => {
+  const page = await newPage();
+  await openFixture(page, 'bracket.dxf');
+  await clearToasts(page);
+  await page.click('#tab-markup'); await page.click('[data-tool="cloud"]');
+  const box = await stageBox(page);
+  await dragScreen(page, [box.x + box.w * 0.4, box.y + box.h * 0.4], [box.x + box.w * 0.55, box.y + box.h * 0.55]);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'a markup to print');
+  await page.click('#tab-view');
+  await page.evaluate(() => { window.print = () => { window.__printed = (window.__printed || 0) + 1; }; });
+  await page.click('#btn-print');
+  await page.waitForFunction(() => document.querySelector('#pr-info').textContent.length > 0);
+  eq(await page.inputValue('#pr-sheet'), 'letter', 'Letter by default for en-US');
+  await page.selectOption('#pr-sheet', 'a3');
+  await page.check('input[name="area"][value="all"]');
+  await page.fill('#pr-scale', 'one to fifty');
+  assert(/not understood/.test(await page.textContent('#pr-info')), 'a scale it cannot read is pointed out');
+  await page.click('#btn-do-print');
+  assert(await page.evaluate(() => document.querySelector('#dlg-print').open && !window.__printed), 'and not printed');
+  await page.fill('#pr-scale', '1:2');
+  assert(/Prints at 1:2 on A3 landscape/.test(await page.textContent('#pr-info')), await page.textContent('#pr-info'));
+  await page.fill('#pr-scale', '1:1');
+  assert(/At 1:1 this area is 451 mm × 271 mm: only its middle part fits on A3/.test(await page.textContent('#pr-info')), 'too big for the sheet: says so');
+  await page.fill('#pr-scale', '1:2');
+  await shot(page, 'print-dialog-scale-dark-1440');
+  await page.click('#btn-do-print');
+  await page.waitForFunction(() => window.__printed === 1);
+  const lp = await page.evaluate(() => window.__linework.lastPrint);
+  assert(lp.s === 0.5 && lp.fits && lp.sheet === 'A3 landscape' && lp.W === 420 && lp.H === 297, JSON.stringify(lp));
+  const svg = await page.evaluate(() => { const s = document.querySelector('#print-root svg'); return { w: s.getAttribute('width'), paths: s.querySelectorAll('path').length, texts: s.querySelectorAll('text').length, notes: !!s.querySelector('g[transform^="scale"] path') }; });
+  assert(svg.w === '404mm' && svg.paths > 3 && svg.texts > 5 && svg.notes, 'vector sheet with text and the markup: ' + JSON.stringify(svg));
+  const strip = await page.textContent('#print-root .title-strip');
+  assert(/Scale1:2/.test(strip) && /SheetA3 landscape/.test(strip) && strip.includes('bracket.dxf'), strip);
+  await page.emulateMedia({ media: 'print' });
+  await page.screenshot({ path: join(OUT, 'print-vector-bracket-a3.png') });
+  const pdf = await page.pdf({ printBackground: true, preferCSSPageSize: true });
+  writeFileSync(join(OUT, 'print-vector-bracket-a3.pdf'), pdf);
+  const P = pdfInfo(pdf);
+  eq(P.pages, 1, 'one page');
+  assert(Math.abs(P.box[2] - 1190.55) < 1 && Math.abs(P.box[3] - 841.89) < 1, 'A3 landscape page: ' + P.box);
+  eq(P.images, 0, 'no images: a vector PDF');
+  assert((P.ops.match(/ l\b/g) || []).length > 100 && (P.ops.match(/ c\b/g) || []).length > 20, 'lines and curves');
+  assert(/T[Jj]\b/.test(P.ops), 'real text');
+  await page.emulateMedia({ media: 'screen' });
+  // a DGN in metres at 1"=20', black and white, Letter portrait, current view
+  await page.evaluate(() => { document.querySelector('#print-root').innerHTML = ''; });
+  await openFixture(page, 'site-plan.dgn');
+  await clearToasts(page);
+  await page.click('#btn-print');
+  await page.selectOption('#pr-sheet', 'letter');
+  await page.check('input[name="orient"][value="portrait"]');
+  await page.check('input[name="area"][value="view"]');
+  await page.fill('#pr-scale', '1"=20\'');
+  await page.check('#pr-mono');
+  await page.click('#btn-do-print');
+  await page.waitForFunction(() => window.__printed === 2);
+  const l2 = await page.evaluate(() => window.__linework.lastPrint);
+  assert(Math.abs(l2.s - 1000 / 240) < 1e-9 && l2.label === '1"=20\'' && l2.sheet === 'Letter portrait', JSON.stringify(l2));
+  const cols = await page.evaluate(() => [...new Set([...document.querySelectorAll('#print-root svg [stroke], #print-root svg [fill]')].flatMap((e) => [e.getAttribute('stroke'), e.getAttribute('fill')]).filter((c) => c && c !== 'none'))]);
+  assert(cols.every((c) => c === '#000'), 'black and white: ' + cols);
+  await page.emulateMedia({ media: 'print' });
+  const P2 = pdfInfo(await page.pdf({ printBackground: true, preferCSSPageSize: true }));
+  assert(P2.pages === 1 && Math.abs(P2.box[2] - 612) < 1 && Math.abs(P2.box[3] - 792) < 1 && P2.images === 0, 'Letter portrait, vector: ' + JSON.stringify({ ...P2, ops: undefined }));
+  await page.emulateMedia({ media: 'screen' });
+  await close(page);
+});
+
+/** Revision B of the site plan, written by Linework's own round-trip writer: a moved line, a retyped text, a recoloured ellipse, a deleted line, a new line. */
+function sitePlanRevB() {
+  const b0 = new Uint8Array(readFileSync(FIX('site-plan.dgn')));
+  const model = parseDgn(b0);
+  const doc = new EditDoc(model, buildScene(model), { bytes: b0 });
+  const e = (i) => model.entities[i];
+  doc.commit('move', [{ i: 9, before: e(9), after: moveEntity(e(9), 3, 0) }]);
+  doc.commit('text', [{ i: 7, before: e(7), after: setText(e(7), 'STORE B') }]);
+  doc.commit('colour', [{ i: 13, before: e(13), after: restyle(e(13), { color: 3 }, 'DGN') }]);
+  doc.commit('delete', [{ i: 10, before: e(10), after: null }]);
+  doc.commit('new', [{ i: doc.nextIndex(), before: null, after: { type: 'line', layer: 'Level 5', color: 256, rgb: 0xff0000, ci: 3, weight: 0, a: [200, 200], b: [205, 207] } }]);
+  return Buffer.from(writeDgn(model, { bytes: b0, orig: doc.orig }).bytes);
+}
+
+test('compare: a DGN revision over the open drawing (only in A red, only in B green, the rest dimmed), counts, toggles, step through with zoom; DXF revisions; mixed kinds refused; file chooser fallback', async () => {
+  const page = await newPage();
+  await filesReady(page);
+  await openFixture(page, 'site-plan.dgn');
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await clearToasts(page);
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  const revB = sitePlanRevB();
+  writeFileSync(join(OUT, 'site-plan-rev-b.dgn'), revB);
+  await opfsPut(page, 'site-plan-rev-b.dgn', revB);
+  await pickerGives(page, 'site-plan-rev-b.dgn');
+  const before = await ED.scale(page);
+  await page.click('#btn-compare');
+  await page.waitForSelector('#compare-panel');
+  await page.waitForFunction(() => !!window.__linework.compare);
+  const c = await page.evaluate(() => window.__linework.compare);
+  assert(c.a === 4 && c.b === 4 && c.same === 18 && c.sameBytes === 18, 'counts: ' + JSON.stringify(c));
+  eq(c.changes.slice().sort().join(), 'added,changed,changed,moved,removed', 'kinds');
+  eq(await page.textContent('#cmp-na'), '4', 'panel: only in A');
+  eq(await page.textContent('#cmp-ns'), '18', 'panel: unchanged');
+  assert(/STORE” → “STORE B/.test(await page.textContent('#cmp-list')), 'the retyped text is listed with both strings');
+  eq(await page.evaluate(() => document.querySelector('#cv-drawing').style.opacity), '0.32', 'the rest is dimmed');
+  await clearToasts(page);
+  await shot(page, 'compare-dgn-dark-1440');
+  // red and green really drawn: overlay pixels of both colours
+  const colours = () => page.evaluate(() => {
+    const cv = document.querySelector('#cv-overlay'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let red = 0, green = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] > 200 && d[i + 1] < 120 && d[i + 3] > 200) red++; if (d[i + 1] > 180 && d[i] < 120 && d[i + 3] > 200) green++; }
+    return { red, green };
+  });
+  const c1 = await colours();
+  assert(c1.red > 20 && c1.green > 20, 'red and green items drawn: ' + JSON.stringify(c1));
+  await page.uncheck('#compare-panel input[data-show="b"]');
+  await settle(page);
+  const c2b = await colours();
+  assert(!(await page.evaluate(() => window.__linework.compare.show.b)) && c2b.green === 0 && c2b.red > 20, 'Only in B hidden: ' + JSON.stringify(c2b));
+  await page.uncheck('#compare-panel input[data-show="same"]');
+  eq(await page.evaluate(() => document.querySelector('#cv-drawing').style.opacity), '0', 'unchanged hidden');
+  await page.check('#compare-panel input[data-show="b"]');
+  await page.check('#compare-panel input[data-show="same"]');
+  await page.click('#cmp-next');
+  await settle(page);
+  eq(await page.evaluate(() => window.__linework.compare.cur), 0, 'first change');
+  assert((await ED.scale(page)) > before * 1.5, 'zoomed to it');
+  eq(await page.textContent('#cmp-pos'), '1 / 5', 'position');
+  await page.click('#cmp-prev');
+  eq(await page.textContent('#cmp-pos'), '5 / 5', 'wraps around');
+  await page.click('#cmp-list [data-k="2"]');
+  eq(await page.textContent('#cmp-pos'), '3 / 5', 'a click on the list goes there');
+  await page.keyboard.press('b');
+  await shot(page, 'compare-dgn-paper-1440');
+  await page.keyboard.press('b');
+  // edits to A while comparing are taken into account
+  await page.evaluate(() => window.__linework.fit());
+  await settle(page);
+  await page.click('#tab-edit');
+  await nudgeShape(page);
+  await page.waitForFunction(() => window.__linework.compare && window.__linework.compare.a === 5, null, { timeout: 5000 });
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => window.__linework.compare && window.__linework.compare.a === 4, null, { timeout: 5000 });
+  await page.click('#cmp-close');
+  assert(await page.evaluate(() => !document.querySelector('#compare-panel') && !window.__linework.compare && document.querySelector('#cv-drawing').style.opacity === ''), 'closed: as before');
+  // mixed kinds are refused, through the plain file chooser
+  await page.evaluate(() => { window.showOpenFilePicker = undefined; });
+  await clearToasts(page);
+  await page.click('#tab-view');
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#btn-compare')]);
+  await fc.setFiles(FIX('house-plan.dxf'));
+  await page.waitForSelector('.toast:has-text("Compare needs two drawings of the same kind")');
+  assert(await page.evaluate(() => !document.querySelector('#compare-panel')), 'nothing shown');
+  // DXF revisions: one line moved
+  await openFixture(page, 'house-plan.dxf');
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  const m = parseDrawing(new Uint8Array(readFileSync(FIX('house-plan.dxf'))), 'house-plan.dxf');
+  const li = m.entities.findIndex((e) => e.type === 'line');
+  m.entities[li] = moveEntity(m.entities[li], 500, 0);
+  const revDxf = join(OUT, 'house-plan-rev-b.dxf');
+  writeFileSync(revDxf, writeDxf(m, {}).text);
+  const [fc2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#btn-compare')]);
+  await fc2.setFiles(revDxf);
+  await page.waitForFunction(() => !!window.__linework.compare);
+  const c2 = await page.evaluate(() => window.__linework.compare);
+  assert(c2.a === 1 && c2.b === 1 && c2.changes.join() === 'moved', 'DXF: one moved line: ' + JSON.stringify(c2));
+  // opening another drawing ends the comparison
+  await openFixture(page, 'bracket.dxf');
+  assert(await page.evaluate(() => !document.querySelector('#compare-panel') && !window.__linework.compare), 'ends with the drawing');
+  await close(page);
+});
+
+test('compare and recent drawings at 390 px: the panel opens over the drawing and closes; the recent list fits', async () => {
+  const page = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 } });
+  await filesReady(page);
+  await openSample(page, 'samples/site-plan.dgn', 'site-plan.dgn');
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await clearToasts(page);
+  await opfsPut(page, 'rev-b.dgn', sitePlanRevB());
+  await pickerGives(page, 'rev-b.dgn');
+  await page.click('#btn-compare');
+  await page.waitForSelector('#compare-panel');
+  await clearToasts(page);
+  const w = await page.evaluate(() => [document.querySelector('#compare-panel').getBoundingClientRect().width, document.documentElement.scrollWidth]);
+  assert(w[0] <= 390 && w[1] <= 390, 'fits: ' + w);
+  await shot(page, 'compare-dark-390');
+  await page.click('#cmp-close');
+  await page.reload();
+  await page.waitForFunction(() => !!window.__linework && !!window.__linework.files);
+  await page.waitForSelector('#recent [data-recent]');
+  assert((await page.evaluate(() => document.documentElement.scrollWidth)) <= 390, 'no horizontal overflow');
+  await shot(page, 'recent-empty-dark-390');
+  await page.click('#recent [data-recent]');
+  await page.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'site-plan.dgn' && !window.__linework.loading);
   await close(page);
 });
 

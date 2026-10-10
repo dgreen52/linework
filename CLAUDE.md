@@ -52,9 +52,10 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/scene.js` | Model → render scene: block expansion, colours, local origin, spatial grid. |
 | `src/view/renderer2d.js` | Canvas2D renderer (interface designed so WebGL can replace it). |
 | `src/tools/snap.js`, `measure.js` | Snaps and measurement maths (pure, unit tested). |
+| `src/tools/compare.js` | Revision compare (pure): items described from the scene (+ DGN element-byte hashes), matched, paired as moved / changed. |
 | `src/markup/*` | Markup model, sidecar format (see MARKUP_FORMAT.md), history, drawing. |
 | `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings). |
-| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. |
+| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. Loaded after start-up / on first use (keep them out of the static graph): `files.js` + `store.js` (file picker handles, Save over the original, recent drawings, IndexedDB journal of unsaved edits), `compare.js` (compare overlay), `print-svg.js` (vector print to scale). Modules hook in through `app.hooks` (`open`, `history`, `draw`). |
 | `src/worker.js` | Parse worker. |
 | `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump the version in `src/version.js`** (the one place it lives; the about line, saved files and the cache name read it). The DWG reader has its own cache (`READER_CACHE`). |
 | `tools/` | Fixture generators (`dwg-r2000.mjs` = test-only DWG writer), DWG reader vendoring/build, palette extraction, icon rendering, static server, `make_dist.mjs`. |
@@ -72,6 +73,12 @@ npm test                               # unit tests
 NODE_PATH=<dir with playwright> node tests/e2e/run.mjs   # e2e + screenshots + perf -> tests/e2e/out/
 node tools/serve.mjs 8080              # local static server
 ```
+
+File pickers (`showOpenFilePicker`, `showDirectoryPicker`) cannot be driven headlessly: e2e tests stub
+them to return real handles from the origin-private file system (`navigator.storage.getDirectory()`),
+and cover the fallback (plain chooser, downloads) by setting `window.showOpenFilePicker = undefined`.
+The journal must never hold file contents, only the EditDoc change list (entities as read from the
+file are stored as markers); recent drawings hold names, sizes, dates and handles only.
 
 Look at the e2e screenshots after UI changes (dark + paper, 1440/1024/390) and fix anything
 that looks wrong before reporting.

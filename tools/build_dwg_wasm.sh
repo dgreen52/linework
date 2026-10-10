@@ -44,6 +44,9 @@ JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
 step() { printf '\n==== %s\n' "$*"; }
 fail() { echo "error: $*" >&2; exit 1; }
 mkdir -p "$WORK"
+# configure runs its test programs, which emcc emits as extension-less JavaScript files for node:
+# keep them out of the repository's "type": "module" scope, or node reads them as ES modules
+printf '{ "type": "commonjs" }\n' > "$WORK/package.json"
 
 # ------------------------------------------------------------------ 1. Emscripten SDK, pinned
 step "Emscripten SDK $EMSDK_VERSION (emsdk $EMSDK_COMMIT)"

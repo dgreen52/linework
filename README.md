@@ -472,10 +472,27 @@ the first frame, so opening a large file never blocks the page.
   opened (through the browser's file handle, after you agreed once) or hands it to the browser as
   a download (a `Blob`); it never leaves the device. Compare reads the second file the same way.
 
+## Use as a library (Node)
+
+The readers, scene builder, find, compare, writers and vector (SVG) builder are plain ES modules
+that also run in Node. `lib/core.js` gathers them behind one package export (it is not part of the
+web app: nothing in `src/` imports it, it is not cached by the service worker and not deployed):
+
+```js
+import { readFileSync } from 'node:fs';
+import { parseDrawingAsync, buildScene, findTexts, DWG_WASM_URL } from 'linework/core';
+const model = await parseDrawingAsync(readFileSync('site-plan.dgn'), 'site-plan.dgn', { wasmBytes: readFileSync(DWG_WASM_URL) });
+const scene = buildScene(model);
+console.log(findTexts(scene, 'PUMP').map((m) => m.s));
+```
+
+Install it from a tag, e.g. `npm install github:dgreen52/linework#v0.4.2`. `buildSvg` takes
+`theme: 'dark'` (colours for a dark background) and `frame: false`; `findTexts` also takes a RegExp.
+
 ## Tests
 
 ```bash
-npm test                                  # 216 Node unit tests (node --test, no dependencies)
+npm test                                  # 220 Node unit tests (node --test, no dependencies)
 NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 50 Playwright end-to-end tests
 ```
 

@@ -14,10 +14,11 @@ export function findRegex(q, opts = {}, global = false) {
 
 /**
  * Drawn texts that match: [{ t (scene text index), ent, sub, s, bbox (scene-local), h }], in reading order
- * (rows from the top, then left to right). opts: { matchCase, wholeWord, isVisible(layerIndex) }.
+ * (rows from the top, then left to right). q: literal text, or a RegExp (used as it is; opts then only
+ * filter). opts: { matchCase, wholeWord, isVisible(layerIndex) }.
  */
 export function findTexts(scene, q, opts = {}) {
-  const re = findRegex(q, opts);
+  const re = q instanceof RegExp ? new RegExp(q.source, q.flags.replace(/[gy]/g, '')) : findRegex(q, opts);
   if (!re || !scene) return [];
   const vis = opts.isVisible || (() => true);
   const out = [];

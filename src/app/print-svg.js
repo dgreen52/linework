@@ -70,12 +70,16 @@ const r6 = (v) => +v.toPrecision(6);
 /** Paper line width (mm): DXF lineweights as they are, DGN weights like the screen, 0.18 mm by default. */
 export const widthMm = (w, format) => (!w ? 0.18 : format === 'DGN' ? 0.18 * weightPx(w, 'DGN') : Math.max(0.1, DXF_LW[w - 1] / 100));
 
-/** The frame as SVG (fw x fh mm). o: { mono, layerVisible, annotate(ctx, view): markups into a recorder } */
+/**
+ * The frame as SVG (fw x fh mm). o: { mono, layerVisible, annotate(ctx, view): markups into a recorder,
+ * theme: 'paper' (default) | 'dark' (colours for a dark background, which the caller paints), frame: false (no border) }
+ */
 export function buildSvg(scene, L, o = {}) {
   const { fw, fh, s, win } = L, [x0, y0, x1, y1] = win;
   const X = (x) => r3((x - x0) * s), Y = (y) => r3((y1 - y) * s);
   const vis = o.layerVisible, dead = scene.dead, bb = scene.bbox, co = scene.coords;
-  const col = (c) => (o.mono ? '#000' : cssColor(c, 'paper'));
+  const theme = o.theme === 'dark' ? 'dark' : 'paper', ink = theme === 'dark' ? '#fff' : '#000';
+  const col = (c) => (o.mono ? ink : cssColor(c, theme));
   const groups = new Map(); // key -> { order, open (tag start), d: [] }
   const group = (key, order, open) => { let g = groups.get(key); if (!g) groups.set(key, g = { order, open, d: [] }); return g.d; };
   for (let i = 0; i < scene.n; i++) {
@@ -121,7 +125,7 @@ export function buildSvg(scene, L, o = {}) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${r3(fw)}mm" height="${r3(fh)}mm" viewBox="0 0 ${r3(fw)} ${r3(fh)}">`
     + `<defs><clipPath id="lw-frame"><rect width="${r3(fw)}" height="${r3(fh)}"/></clipPath></defs>`
     + `<g clip-path="url(#lw-frame)" fill="none" stroke-linecap="round" stroke-linejoin="round">${body.join('')}${notes}</g>`
-    + `<rect x=".15" y=".15" width="${r3(fw - 0.3)}" height="${r3(fh - 0.3)}" fill="none" stroke="#000" stroke-width=".3"/></svg>`;
+    + (o.frame === false ? '' : `<rect x=".15" y=".15" width="${r3(fw - 0.3)}" height="${r3(fh - 0.3)}" fill="none" stroke="${ink}" stroke-width=".3"/>`) + '</svg>';
 }
 
 function polyD(scene, i, X, Y) {

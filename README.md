@@ -475,8 +475,8 @@ the first frame, so opening a large file never blocks the page.
 ## Tests
 
 ```bash
-npm test                                  # 204 Node unit tests (node --test, no dependencies)
-NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 46 Playwright end-to-end tests
+npm test                                  # 216 Node unit tests (node --test, no dependencies)
+NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 50 Playwright end-to-end tests
 ```
 
 Some unit tests read the files the writers produce with GDAL/OGR through Python (`from osgeo

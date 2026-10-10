@@ -59,7 +59,7 @@ export function libredwgVersion(wasm) {
 
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
 const PINS = ['libredwgWeb.repo', 'libredwgWeb.tag', 'libredwgWeb.commit', 'jsmn.commit', 'libredwgBase.tag', 'libredwgBase.commit',
-  'emsdk.version', 'emsdk.commit', 'emcc', 'version', 'configure', 'cflags', 'link'];
+  'emsdk.version', 'emsdk.commit', 'emcc', 'version', 'configure', 'cflags', 'compile', 'link'];
 const get = (o, path) => path.split('.').reduce((v, k) => (v == null ? v : v[k]), o);
 
 /** vendor/libredwg/README.md for a build (build-info.json + the installed files, as bytes). */
@@ -84,6 +84,7 @@ Built from pinned sources by \`tools/build_dwg_wasm.sh\` and installed unchanged
 | LibreDWG base | upstream LibreDWG release \`${info.libredwgBase.tag}\` (commit \`${info.libredwgBase.commit}\`) is in that history; the version string counts the commits since it |
 | Toolchain | Emscripten SDK \`${info.emsdk.version}\` (emsdk commit \`${info.emsdk.commit}\`): \`${info.emcc}\` |
 | Configure | \`${info.configure}\` with \`CFLAGS=${info.cflags}\` |
+| Compile (C) | \`make -C src CFLAGS="${info.compile}"\` |
 | Link | \`${info.link}\` |
 | Built on | ${built} |
 | Memory | initial ${mem.initial} pages (${mem.initial / 16} MiB), grows on demand up to ${mem.maximum} pages (${mem.maximum / 16384} GiB) |
@@ -91,8 +92,8 @@ Built from pinned sources by \`tools/build_dwg_wasm.sh\` and installed unchanged
 Differences from the npm package's own build (the scripts in its \`package.json\`):
 \`-sDYNAMIC_EXECUTION=0\` (the glue never generates code at run time, so the Content-Security-Policy
 needs only \`'wasm-unsafe-eval'\`), 64 MiB initial memory instead of 1 GiB (phones and tablets), no
-TypeScript declarations. Same configure options (with \`--enable-debug\`, which these sources need;
-it makes configure drop \`-O2\` from the C flags, as in the npm build).
+TypeScript declarations, and the C code compiled with \`-O2\` (configure removes it when
+\`--enable-debug\` is given; these sources need that option, for LibreDWG's DEBUG_CLASSES).
 
 | File | Bytes | SHA-256 |
 |---|---|---|

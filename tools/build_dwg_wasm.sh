@@ -18,8 +18,10 @@ set -euo pipefail
 export LC_ALL=C TZ=UTC
 
 # ------------------------------------------------------------------ pins (recorded in DWG.md)
-SDK_VERSION="${EMSDK_VERSION:-3.1.74}"   # (emsdk_env.sh clears EMSDK_* variables)
-SDK_COMMIT="${EMSDK_COMMIT:-3d6d8ee910466516a53e665b86458faa81dae9ba}"               # emsdk tag 3.1.74
+# Emscripten 4.0.6: the release line whose glue the npm package's binary has. 4.x passes 64-bit
+# integers as BigInt (WASM_BIGINT); the bindings need that (a 3.1.x build loses handle references).
+SDK_VERSION="${EMSDK_VERSION:-4.0.6}"   # (kept out of EMSDK_* names: emsdk_env.sh clears those)
+SDK_COMMIT="${EMSDK_COMMIT:-24fc909c0da13ef641d5ae75e89b5a97f25e37aa}"               # emsdk tag 4.0.6
 LIBREDWG_WEB_REPO="${LIBREDWG_WEB_REPO:-https://github.com/mlightcad/libredwg-web.git}"
 LIBREDWG_WEB_TAG="${LIBREDWG_WEB_TAG:-v0.7.16}"
 LIBREDWG_WEB_COMMIT="${LIBREDWG_WEB_COMMIT:-0d4fd3fbe6eb1a451d7c5ce286d0785e4d65dd29}"   # that tag
@@ -30,12 +32,12 @@ LIBREDWG_BASE_COMMIT="${LIBREDWG_BASE_COMMIT:-e3774bd4020fcfebb68150361db74b8b34
 # ------------------------------------------------------------------ build flags
 # Same as the npm package's build (bindings/javascript/package.json of libredwg-web) except:
 # -sDYNAMIC_EXECUTION=0 (no eval / new Function in the glue: the CSP allows only 'wasm-unsafe-eval'),
-# 64 MiB initial memory instead of 1 GiB (phones and tablets), no --emit-tsd. --enable-debug stays:
-# the fork's sources only compile with LibreDWG's DEBUG_CLASSES (e.g. ARCALIGNEDTEXT); with it,
-# configure drops -O2 from the C flags (as in the npm build; the link step still optimises, -O2).
+# 64 MiB initial memory instead of 1 GiB (phones and tablets), no --emit-tsd, and -O2 for the C code
+# (below). --enable-debug stays: the fork's sources only compile with LibreDWG's DEBUG_CLASSES (e.g.
+# ARCALIGNEDTEXT).
 CONFIGURE_FLAGS="--enable-release --enable-debug --disable-docs --disable-write --disable-python --disable-bindings --disable-shared --disable-json"
 CFLAGS_WASM="-O2 -sUSE_ZLIB=1 -DNDEBUG"
-LINK_FLAGS="-O2 -lembind -std=c++17 -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc -sEXPORT_ES6=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule -sEXPORTED_RUNTIME_METHODS=FS,ENV,ccall,cwrap,UTF8ToString,stringToNewUTF8,setValue"
+LINK_FLAGS="-O2 -lembind -std=c++17 -sWASM_BIGINT=1 -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc -sEXPORT_ES6=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule -sEXPORTED_RUNTIME_METHODS=FS,ENV,ccall,cwrap,UTF8ToString,stringToNewUTF8,setValue"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${WORK:-$ROOT/.build-dwg}"   # outside version control (see .gitignore)
@@ -96,7 +98,11 @@ cd build-wasm
 # shellcheck disable=SC2086
 emconfigure ../configure CC=emcc CFLAGS="$CFLAGS_WASM" $CONFIGURE_FLAGS || { sed -n "/checking for suffix of executables/,/Cache variables/p" config.log | head -n 80; fail "configure failed"; }
 grep -q "^#define PACKAGE_VERSION \"$VERSION\"" src/config.h || fail "configure did not take the version string"
-emmake make -j"$JOBS" -C src
+# --enable-debug also makes configure drop -O2 from CFLAGS (a debugging aid); compile the library
+# with the configured flags plus -O2 (about 14% smaller than without; the link step optimises either way)
+COMPILE_CFLAGS="$(sed -n 's/^CFLAGS = //p' src/Makefile | sed 's/^ *//') -O2"
+echo "C flags: $COMPILE_CFLAGS"
+emmake make -j"$JOBS" -C src CFLAGS="$COMPILE_CFLAGS"
 ls src/*.o > /dev/null 2>&1 || fail "no objects in build-wasm/src"
 echo "$(ls src/*.o | wc -l | tr -d ' ') objects"
 
@@ -124,7 +130,7 @@ if [ -n "${GITHUB_RUN_ID:-}" ]; then
 fi
 AUTOTOOLS="$(autoconf --version 2>/dev/null | sed -n 1p); $(automake --version 2>/dev/null | sed -n 1p); $(libtoolize --version 2>/dev/null | sed -n 1p)"
 export SDK_VERSION SDK_COMMIT LIBREDWG_WEB_REPO LIBREDWG_WEB_TAG LIBREDWG_WEB_COMMIT JSMN_COMMIT LIBREDWG_BASE_TAG \
-  LIBREDWG_BASE_COMMIT VERSION EMCC_VERSION AUTOTOOLS CONFIGURE_FLAGS CFLAGS_WASM LINK_FLAGS RUN_URL RUN_COMMIT RUN_IMAGE
+  LIBREDWG_BASE_COMMIT VERSION EMCC_VERSION AUTOTOOLS CONFIGURE_FLAGS CFLAGS_WASM COMPILE_CFLAGS LINK_FLAGS RUN_URL RUN_COMMIT RUN_IMAGE
 node - "$OUT/build-info.json" <<'JS'
 const e = process.env;
 const info = {
@@ -138,6 +144,7 @@ const info = {
   autotools: e.AUTOTOOLS,
   configure: e.CONFIGURE_FLAGS,
   cflags: e.CFLAGS_WASM,
+  compile: e.COMPILE_CFLAGS,
   link: e.LINK_FLAGS,
   run: e.RUN_URL ? { url: e.RUN_URL, commit: e.RUN_COMMIT, image: e.RUN_IMAGE.trim() } : null,
 };

@@ -323,7 +323,7 @@ the first frame, so opening a large file never blocks the page.
 ## Tests
 
 ```bash
-npm test                                  # 156 Node unit tests (node --test, no dependencies)
+npm test                                  # 191 Node unit tests (node --test, no dependencies)
 NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 27 Playwright end-to-end tests
 ```
 

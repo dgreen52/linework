@@ -9,7 +9,7 @@ write DWG: an edited DWG is saved as DXF (default) or DGN v7, and the save dialo
 
 | Piece | What |
 |---|---|
-| `vendor/libredwg/libredwg-web.wasm` (+ `.js` glue) | LibreDWG + JavaScript bindings, 9.5 MB raw, **2.1 MB gzip**, 1.1 MB brotli. Fetched only when the first DWG is opened. |
+| `vendor/libredwg/libredwg-web.wasm` (+ `.js` glue) | LibreDWG + JavaScript bindings, built from pinned sources (see below); 9.4 MB raw, **2.1 MB gzip**, 1.07 MB brotli. Fetched only when the first DWG is opened. |
 | `src/formats/dwg.js` | Loads the module (once per worker), reads the DWG, maps it to the drawing model. Imported lazily by `detect.js` (`parseDrawingAsync`); 12 KB gzip. |
 | `src/worker.js` / `src/app.js` | Progress ("Loading the DWG reader for …", "Reading …"); the page applies a time limit to the one blocking read. |
 | `sw.js` | DXF/DGN users never download the reader. After the first DWG, `dwg.js` is in the app cache and the reader in its own cache (`READER_CACHE`), which survives app updates; DWGs then open offline. |
@@ -41,17 +41,16 @@ layers, because this LibreDWG build's DXF writer marks every R13–R2000 layer a
   usual "N items not shown" note. Fuzz tests (truncated and byte-corrupted DWGs) check that every
   damaged file either opens or gives the friendly message.
 * **Memory**: initial WebAssembly memory 64 MiB (grows on demand up to 4 GiB), not the 1 GiB the
-  upstream build reserves, so tablets and phones can instantiate it.
+  npm package's build reserves, so tablets and phones can instantiate it.
 * **R12 and older** DWGs are refused with a clear message (LibreDWG's support for them is
   experimental).
 
 ## Content-Security-Policy
 
 Compiling WebAssembly needs `'wasm-unsafe-eval'` in `script-src` — nothing else (no
-`'unsafe-eval'`). The upstream Emscripten glue built functions with `new Function` (embind); the
-vendoring script replaces those two code generators with the closure versions Emscripten emits
-for `-sDYNAMIC_EXECUTION=0`, and a unit test fails if any `eval`/`new Function` comes back. The
-policy is in `deploy/_headers`:
+`'unsafe-eval'`). The reader is built with `-sDYNAMIC_EXECUTION=0`, so embind's glue uses closures
+where it would otherwise build functions with `new Function`; `tools/vendor_libredwg.mjs` refuses,
+and a unit test fails on, any `eval`/`new Function` in the glue. The policy is in `deploy/_headers`:
 
 ```
 Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
@@ -62,37 +61,54 @@ e2e test also serves the app *without* `'wasm-unsafe-eval'` and checks that the 
 refused (and the app says so) while DXF keeps working — proof that the policy really applies to
 the worker that compiles the module.
 
-## Where the binary comes from (decision)
+## Where the binary comes from
 
-**Preferred: build it ourselves** from pinned LibreDWG sources with Emscripten
-(`tools/build_dwg_wasm.sh`). That could not be done for this release: the Emscripten SDK and
-source downloads were not reachable from the available build environment.
+**Built from pinned sources on GitHub Actions.** The workflow
+`.github/workflows/build-libredwg-wasm.yml` runs `tools/build_dwg_wasm.sh` (the one build recipe;
+it runs the same on any Linux, macOS or WSL machine with network access) and uploads the result as
+the artifact `libredwg-wasm`; `tools/vendor_libredwg.mjs` checks that build and installs it into
+`vendor/libredwg/` unchanged, writing `vendor/libredwg/README.md` (pins, flags, run, SHA-256).
 
-**Used for v0.3: the prebuilt npm package `@mlightcad/libredwg-web@0.7.16`**, vetted:
-
-| Check | Result |
+| Pin | Value |
 |---|---|
-| Licence | GPL-3.0 (package), LibreDWG GPL-3.0-or-later — compatible with Linework's GPL-3.0 |
-| Source | public repository https://github.com/mlightcad/libredwg-web (LibreDWG tree + embind bindings + build scripts in its `package.json`) |
-| Pinned | exact version 0.7.16, npm integrity `sha512-gWmjJ5TV…ENY5+Nw==` checked by `tools/vendor_libredwg.mjs` |
-| Contents | only `wasm/libredwg-web.js` + `.wasm` are vendored (not the package's TypeScript wrapper) |
-| Glue | used `new Function` (embind) → patched, see above; no external URLs, no network access other than the (bypassed) wasm fetch |
-| Memory | 1 GiB initial → patched to 64 MiB |
-| Size | 9,496,803 bytes raw, 2,167,875 gzip, 1,083,860 brotli |
-| Version | identifies itself as `LibreDWG 0.13.3.7825.246_0c9ab_dirty` |
+| Sources | https://github.com/mlightcad/libredwg-web tag `v0.7.16`, commit `0d4fd3fbe6eb1a451d7c5ce286d0785e4d65dd29`: a fork of LibreDWG (its whole source tree, not a submodule) plus the embind bindings in `bindings/javascript/embind/`. Its C/C++ sources are those of npm `@mlightcad/libredwg-web@0.7.16` (the two commits after that package's last binary change touch only TypeScript). |
+| Submodule | `jsmn` commit `85695f3d5903b1cd5b4030efe50db3b4f5f3c928` (as pinned by that commit) |
+| Upstream base | descends from LibreDWG release `0.13.4` (commit `e3774bd4020fcfebb68150361db74b8b34d170fe`) via upstream commit `6d6a33987a1a97095b069c799c3d8a793320f812`; the binary reports `LibreDWG 0.13.4.197_0d4f` (197 commits after 0.13.4, clean tree) |
+| Toolchain | Emscripten SDK `4.0.6` (emsdk commit `24fc909c0da13ef641d5ae75e89b5a97f25e37aa`; emcc `1ddaae4d2d6dfbb678ecc193bc988820d1fc4633`), Ubuntu 24.04 runner (autoconf 2.71, automake 1.16.5, libtool 2.4.7) |
+| Build | https://github.com/dgreen52/linework/actions/runs/38036898443 — `libredwg-web.wasm` 9,389,632 bytes, SHA-256 `93281952e1edb1d83195de6f4079433c2b8135e52813eee898d43d96458727dc`; `libredwg-web.js` 111,545 bytes, `4432a43f3477bbc8015ca1d001a595d91db2feb216efd8abd1cad380d67856cc`. An earlier run on another runner produced the same bytes. |
 
-`vendor/libredwg/README.md` records provenance, changes and SHA-256 hashes; `NOTICE` has the
-licence section. Re-running `npm pack @mlightcad/libredwg-web@0.7.16` + `node
-tools/vendor_libredwg.mjs <tgz>` reproduces the vendored files byte for byte.
+Build flags: the npm package's own (its `package.json` scripts: `--enable-release --enable-debug
+--disable-write …`, `-O2 -lembind -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc
+-sMODULARIZE=1 -sEXPORT_ES6=1 …`) plus `-sDYNAMIC_EXECUTION=0`, `-sINITIAL_MEMORY=64MB` (instead of
+1 GB) and `-O2` for the library's C code (`--enable-debug`, which these sources need for LibreDWG's
+DEBUG_CLASSES, makes configure drop it; 9.4 MB instead of 10.9 MB). Nothing is patched after the
+build. Emscripten 4.x matters: it passes 64-bit integers as BigInt (`WASM_BIGINT`), which the
+bindings need; a 3.1.74 build lost handle references (layer line types, blocks).
 
-**GPL caveat (to resolve before a public release).** GPL-3.0 requires the *corresponding source*
-of the object code we distribute. The vendored binary says it was built from a modified ("dirty")
-tree at LibreDWG snapshot `0c9ab`, so its exact source cannot be verified from the binary alone.
-Pointing to the upstream repositories is the usual practice, but the clean fix is to rebuild with
-`tools/build_dwg_wasm.sh` from a pinned commit (it also removes the need for the glue/memory
-patches) and vendor that output instead. Steps: run the script with `LIBREDWG_WEB_REF=<commit>`
-on a machine with normal network access, bump `READER_REV` (`src/formats/dwg.js`) and
-`READER_CACHE` (`sw.js`), regenerate `vendor/libredwg/README.md`, run the unit + e2e tests.
+The version string is LibreDWG's own `build-aux/git-version-gen`, run on the clean checkout with
+upstream `0.13.4` as the only tag and fixed in `.tarball-version` before `autoreconf` — which
+rewrites tracked files such as `src/config.h.in`, the likely source of the npm binary's `_dirty`.
+
+**Updating the reader:** change the pins at the top of `tools/build_dwg_wasm.sh` and push (the
+workflow runs when the script or the workflow changes; once the workflow is on `main` it can also
+be started from the Actions tab), download the `libredwg-wasm` artifact, run
+`node tools/vendor_libredwg.mjs <unpacked artifact>`, set `WASM_SIZE` and bump `READER_REV`
+(`src/formats/dwg.js`) together with `READER_CACHE` (`sw.js`), then run the unit and e2e tests.
+
+**History.** v0.3.0–0.3.1 shipped the npm package's prebuilt binary (`LibreDWG
+0.13.3.7825.246_0c9ab_dirty`, 9,496,803 bytes), patched for the CSP and the initial memory. It is
+byte-identical to the binary committed in the libredwg-web repository at the tag, but it was built
+from a modified tree, and none of our builds of the tagged sources reproduces it (Emscripten
+4.0.0–4.0.7 with the package's flags; 4.0.6 with `-O2`), so its exact corresponding source could not
+be shown. This build replaces it: same sources and
+bindings, every DWG fixture reads exactly as before, 1% smaller (2,146,389 bytes gzip instead of
+2,167,875; brotli 1,066,336 instead of 1,083,860).
+
+**Corresponding source (GPL-3.0).** `vendor/libredwg/README.md` and `NOTICE` point to the exact
+commits, and `tools/build_dwg_wasm.sh` fetches them. Those repositories belong to other people;
+before a public release with DWG support, keep a copy of the source we distribute (for example a
+fork of libredwg-web at the pinned commit, or a source archive attached to the release), because
+GPL-3.0 §6 makes the distributor responsible for the source staying available.
 
 ## Testing (synthetic only)
 
@@ -111,8 +127,9 @@ on a machine with normal network access, bump `READER_REV` (`src/formats/dwg.js`
   oversize, garbage), fuzzing (truncated/corrupted files), a broken file followed by a good one,
   variants real files have (strings stored with their terminating NUL; a model space whose entity
   links are missing — the reader then collects entities by their space), colour methods, saving a
-  DWG drawing as DXF and reading it back, the vendored files' hashes and absence of run-time code
-  generation.
+  DWG drawing as DXF and reading it back; the vendored reader: hashes recorded in its README,
+  no run-time code generation, 64 MiB / 4 GiB memory limits, a clean version string, pinned
+  source and toolchain commits.
 * **E2E** (Playwright, real CSP): the reader is not fetched for DXF/DGN and is fetched once for
   DWG; progress names the download; a DWG measures exactly like the DXF (snaps); layer toggle;
   edit + Save → DXF (the dialog says DWG is not written) → re-open; offline re-open through the
@@ -155,5 +172,6 @@ the DWG reader must become a clearly separate, optional GPL component — get le
 
 1. ~~WASM + DXF-text bridge~~ — done (now the fallback).
 2. ~~Direct object mapping, progress, partial-file handling~~ — done.
-3. Rebuild from pinned sources (`tools/build_dwg_wasm.sh`), then size/perf tuning (`-Oz`, drop
-   unused LibreDWG parts, streaming compile); R2004+ synthetic fixtures.
+3. ~~Rebuild from pinned sources~~ — done (`tools/build_dwg_wasm.sh` on GitHub Actions).
+4. Size/perf tuning (`-Oz`, drop unused LibreDWG parts, streaming compile); R2004+ synthetic
+   fixtures.

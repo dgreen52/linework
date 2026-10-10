@@ -59,21 +59,24 @@ DWG files are read by GNU LibreDWG compiled to WebAssembly
   software: you can redistribute it and/or modify it under the terms of the
   GNU General Public License as published by the Free Software Foundation,
   either version 3 of the License, or (at your option) any later version.
-  The binary identifies itself as a LibreDWG 0.13.3 development snapshot.
-* The WebAssembly build and its JavaScript bindings come from the libredwg-web
-  project (https://github.com/mlightcad/libredwg-web, npm package
-  @mlightcad/libredwg-web 0.7.16, GPL-3.0).
+  The binary identifies itself as LibreDWG 0.13.4.197_0d4f, a development
+  snapshot (197 commits after the 0.13.4 release).
+* The binary is built from the libredwg-web project
+  (https://github.com/mlightcad/libredwg-web, GPL-3.0): LibreDWG's source tree
+  with JavaScript (embind) bindings, tag v0.7.16, commit
+  0d4fd3fbe6eb1a451d7c5ce286d0785e4d65dd29, compiled with Emscripten 3.1.74 by
+  tools/build_dwg_wasm.sh (on GitHub Actions, see DWG.md).
 * Also linked into that binary: the Emscripten runtime and system libraries
   (MIT / University of Illinois NCSA; musl libc: MIT; LLVM libc++ and
   libc++abi: Apache-2.0 WITH LLVM-exception), mimalloc (MIT, Microsoft
   Corporation) and zlib (zlib licence, Jean-loup Gailly and Mark Adler).
   All of these are compatible with the GPL-3.0 licence of this app.
-* vendor/libredwg/README.md records the exact provenance, the two changes made
-  by tools/vendor_libredwg.mjs (no run-time code generation in the glue; a
-  smaller initial memory) and the SHA-256 of the files. Source code:
-  https://git.savannah.gnu.org/git/libredwg.git (LibreDWG) and the libredwg-web
-  repository above (bindings and build scripts); tools/build_dwg_wasm.sh
-  documents how to rebuild the binary from pinned sources (see DWG.md).
+* vendor/libredwg/README.md records the exact source commits, the toolchain,
+  the build flags, the build's workflow run and the SHA-256 of the files.
+  Corresponding source: the libredwg-web commit above (with its jsmn
+  submodule) and tools/build_dwg_wasm.sh, which fetches exactly those sources
+  and rebuilds the binary. LibreDWG itself:
+  https://git.savannah.gnu.org/git/libredwg.git
 
 The test fixture writer tools/dwg-r2000.mjs (not part of the app) writes DWG
 R2000 files from the publicly available "Open Design Specification for .dwg

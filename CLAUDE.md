@@ -23,9 +23,10 @@ README.md first (and DWG.md for the DWG reader). These rules are not optional.
    `package.json` must not gain `dependencies`. Playwright is used for tests only, loaded from
    `NODE_PATH`, never vendored. The one vendored component is the DWG reader in
    `vendor/libredwg/` (GNU LibreDWG, GPL-3.0-or-later, loaded only when a DWG is opened): change
-   it only with `tools/vendor_libredwg.mjs` or `tools/build_dwg_wasm.sh`, keep its glue free of
-   `eval`/`new Function` (the CSP allows `'wasm-unsafe-eval'` only), and bump `READER_REV`
-   (`src/formats/dwg.js`) together with `READER_CACHE` (`sw.js`).
+   it only by building it with `tools/build_dwg_wasm.sh` (the GitHub workflow
+   `build-libredwg-wasm.yml` runs it) and installing the build with `tools/vendor_libredwg.mjs`;
+   keep its glue free of `eval`/`new Function` (the CSP allows `'wasm-unsafe-eval'` only), and
+   bump `READER_REV` (`src/formats/dwg.js`) together with `READER_CACHE` (`sw.js`).
 5. **Static only (~$0 to run).** No server code. Anything that needs a server is out of scope.
 6. **Tests are required.** Every change must keep `npm test` (Node unit tests) and the
    Playwright e2e suite green, and new behaviour needs new tests. Do not delete or loosen
@@ -66,7 +67,8 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 node tools/make_fixtures.mjs           # DXF samples + edge-case fixtures (+ 50k stress, not committed)
 python tools/make_dgn_fixtures.py      # DGN fixtures + OGR oracles (needs Python GDAL)
 node tools/make_dwg_fixtures.mjs       # DWG R2000 fixtures from the synthetic DXF files
-node tools/vendor_libredwg.mjs <tgz>   # re-vendor the DWG reader from the pinned npm tarball (see DWG.md)
+tools/build_dwg_wasm.sh                # build the DWG reader from pinned sources (runs on GitHub Actions, see DWG.md)
+node tools/vendor_libredwg.mjs <dir>   # check a reader build (e.g. the CI artifact) and install it into vendor/libredwg/
 node tools/make_dist.mjs               # deployable folder in dist/ (incl. _headers)
 npm test                               # unit tests
 NODE_PATH=<dir with playwright> node tests/e2e/run.mjs   # e2e + screenshots + perf -> tests/e2e/out/

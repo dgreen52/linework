@@ -21,7 +21,7 @@ import { parseDxf } from '../../src/formats/dxf.js';
 import { writeDgn } from '../../src/formats/dgn-write.js';
 import { parseDgn } from '../../src/formats/dgn.js';
 import { loadInWorkerScope, modelMeta } from '../../src/worker.js';
-import { FIXTURES, PRINTS } from '../../tools/make_pdf_fixtures.mjs';
+import { FIXTURES, PRINTS, pdfFonts } from '../../tools/make_pdf_fixtures.mjs';
 import { makePdf, Content, MM } from '../../tools/pdf-writer.mjs';
 import { PIN, FILES, untar, integrityOf, install, pdfjsCodeSites } from '../../tools/vendor_pdfjs.mjs';
 
@@ -253,7 +253,11 @@ test('text: position, size, angle and width (fitted); colour, layer and invisibl
 // ------------------------------------------------------------------ fixtures through pdf.js
 test('PDF fixtures are reproducible from tools/make_pdf_fixtures.mjs (and the printed ones exist)', () => {
   for (const [name, make] of Object.entries(FIXTURES)) assert.ok(Buffer.from(make()).equals(Buffer.from(bytes(name))), name);
-  for (const p of PRINTS) assert.ok(existsSync(join(ROOT, 'tests/fixtures', p[4])), p[4]);
+  for (const p of PRINTS) {
+    assert.ok(existsSync(join(ROOT, 'tests/fixtures', p[4])), p[4]);
+    assert.deepEqual(pdfFonts(bytes(p[4])).map((f) => f.replace(/^[A-Z]{6}\+/, '')), ['DejaVuSans'], `${p[4]} embeds only the open font DejaVu Sans`);
+  }
+  assert.deepEqual(pdfFonts(bytes('pdf-plan.pdf')), ['Helvetica'], 'the hand-written ones name a standard font and embed none');
 });
 
 test('pdf-plan.pdf: an A4 page in mm; a 100 mm line is exactly 100 mm; circle, arc, colours, dashes, spot colour, fills, a turned form, an annotation, text', async () => {

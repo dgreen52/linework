@@ -644,7 +644,8 @@ src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, 
                         pdf-ui.js (PDF page picker, app.pages; loaded with the first PDF)
 src/worker.js           parse worker
 samples/                synthetic sample drawings (+ generators in samples/gen/)
-tools/                  fixture generators (DXF, DGN, DWG, PDF), DWG / PDF reader vendoring scripts,
+tools/                  fixture generators (DXF, DGN, DWG, PDF; fonts/: DejaVu Sans for the printed
+                        PDF fixtures), DWG / PDF reader vendoring scripts,
                         palette extraction, icon rendering, static server, dist builder
 tests/unit, tests/e2e   tests
 ```

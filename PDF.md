@@ -137,7 +137,8 @@ writes `vendor/pdfjs/README.md`.
   plus invisible OCR text), `pdf-password.pdf`, `pdf-owner.pdf`, `pdf-broken.pdf`. With `--print`
   (Playwright) it also writes `pdf-print-house-plan.pdf` and `pdf-print-schematic.pdf`: Linework's
   own vector print of the synthetic samples, saved as PDF by Chromium (real producer output:
-  embedded subset fonts, page background, colours).
+  a subset of the open font DejaVu Sans embedded — `tools/fonts/`, loaded with @font-face so no
+  system font is used — page background, colours).
 * **Unit** (`tests/unit/pdf.test.mjs`, pdf.js running in Node): vendored files and vendoring,
   detection, units, colours, Bézier arcs, path splitting, operator list → model (transforms,
   forms, widths, dashes, fills, patterns, optional content, annotations, pictures, limits),

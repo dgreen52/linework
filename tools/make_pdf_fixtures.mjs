@@ -3,7 +3,8 @@
 //   node tools/make_pdf_fixtures.mjs           hand-written PDFs (tools/pdf-writer.mjs) -> tests/fixtures/pdf-*.pdf
 //   NODE_PATH=<dir with playwright> node tools/make_pdf_fixtures.mjs --print
 //                                              also vector PDFs printed by Linework itself: the repo's
-//                                              synthetic samples on its print sheet, saved as PDF by Chromium
+//                                              synthetic samples on its print sheet, saved as PDF by Chromium,
+//                                              all text in DejaVu Sans (tools/fonts/, an open font)
 // The hand-written files are deterministic (tests/unit/pdf.test.mjs regenerates and compares them);
 // the printed ones carry Chromium's dates and are only regenerated on request.
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -159,6 +160,16 @@ export const PRINTS = [
   ['schematic.dxf', 'letter', 'Fit', 'landscape', 'pdf-print-schematic.pdf'],
 ];
 
+/**
+ * The printed fixtures use an OPEN font only: DejaVu Sans (tools/fonts/, Bitstream Vera licence,
+ * credited in NOTICE), loaded with @font-face for everything on the print sheet, so the PDFs embed
+ * no system font (the default sheet font would be Segoe UI / Arial on Windows).
+ */
+const FIXTURE_FONT = `@font-face { font-family: "LW Fixture Sans"; src: url("tools/fonts/DejaVuSans.ttf") format("truetype"); }
+  #print-root, #print-root * { font-family: "LW Fixture Sans" !important; }`;
+/** BaseFont names in a PDF (e.g. "AAAAAA+DejaVuSans"). */
+export const pdfFonts = (b) => [...new Set((Buffer.from(b).toString('latin1').match(/\/BaseFont\s*\/[^\s/<>[\]()]+/g) || []).map((m) => m.replace(/^\/BaseFont\s*\//, '')))];
+
 async function prints() {
   const { startServer } = await import('./serve.mjs');
   const { launch } = await import('../tests/e2e/browser.mjs');
@@ -169,6 +180,9 @@ async function prints() {
       const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
       await page.goto(`http://127.0.0.1:${server.address().port}/?nosw`);
       await page.waitForFunction(() => !!window.__linework);
+      await page.addStyleTag({ content: FIXTURE_FONT });
+      await page.evaluate(async () => { await document.fonts.load('16px "LW Fixture Sans"'); await document.fonts.ready; });
+      if (!(await page.evaluate(() => document.fonts.check('16px "LW Fixture Sans"')))) throw new Error('DejaVu Sans did not load');
       await page.evaluate((k) => window.__linework.openSample(k), 'samples/' + sample);
       await page.waitForFunction((n) => window.__linework.doc && window.__linework.doc.name === n && !window.__linework.loading, sample);
       await page.evaluate(() => { window.print = () => { window.__printed = true; }; });
@@ -181,9 +195,12 @@ async function prints() {
       await page.click('#btn-do-print');
       await page.waitForFunction(() => window.__printed);
       await page.emulateMedia({ media: 'print' });
+      await page.evaluate(() => document.fonts.ready);
       const pdf = await page.pdf({ printBackground: true, preferCSSPageSize: true });
+      const fonts = pdfFonts(pdf);
+      if (!fonts.length || !fonts.every((f) => /^([A-Z]{6}\+)?DejaVuSans/.test(f))) throw new Error(`${file}: fonts other than DejaVu Sans: ${fonts.join(', ')}`);
       writeFileSync(join(FIX, file), pdf);
-      console.log('wrote', `tests/fixtures/${file}`, `${(pdf.length / 1024).toFixed(1)} KB`);
+      console.log('wrote', `tests/fixtures/${file}`, `${(pdf.length / 1024).toFixed(1)} KB`, 'fonts:', fonts.join(', '));
       await page.close();
     }
   } finally {

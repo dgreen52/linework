@@ -138,6 +138,17 @@ The test fixture writer tools/pdf-writer.mjs (not part of the app) writes PDF
 files from the public PDF 1.7 reference (ISO 32000-1).
 
 ------------------------------------------------------------------------------
+DejaVu Sans  (https://dejavu-fonts.github.io)  -  Bitstream Vera licence
+------------------------------------------------------------------------------
+tools/fonts/DejaVuSans.ttf (not part of the app, not deployed) is the only font
+used for the test fixtures printed by Linework (tests/fixtures/pdf-print-*.pdf,
+made by tools/make_pdf_fixtures.mjs --print), which embed subsets of it.
+Fonts are (c) Bitstream (Bitstream Vera Fonts, Copyright (c) 2003 by
+Bitstream, Inc.; Bitstream Vera is a trademark of Bitstream, Inc.); DejaVu
+changes are in the public domain; glyphs imported from Arev fonts are (c)
+Tavmjong Bah. The full licence text is in tools/fonts/DejaVu-LICENSE.txt.
+
+------------------------------------------------------------------------------
 File formats
 ------------------------------------------------------------------------------
 The DXF reader and writer (src/formats/dxf.js, dxf-write.js) were written from

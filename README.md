@@ -52,6 +52,10 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   lights up — through shared ends, T-junctions and junction dots, not through plain crossings — with
   its length, its labels (wire numbers) and where it ends: the connector or terminal and the pin text,
   a symbol, or an open end ([Trace a wire](#trace-a-wire)).
+* **Opens sheet sets**: a whole folder of drawings (or several files, or a folder dropped on the
+  window) as one set — a list of the sheets with the titles from their title blocks, `Page Up` /
+  `Page Down` from sheet to sheet, **Find in all sheets**, and references such as "SHEET 12" or
+  "SEE DWG 1234-56" become links to that sheet ([Sheet sets](#sheet-sets)).
 * **Compares revisions** (new in v0.4): View › **Compare** lays another revision over the open
   drawing — only in this one red, only in the other green, the rest dimmed — with counts and a
   list to step through ([Compare](#compare-two-revisions)).
@@ -145,6 +149,13 @@ for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/d
 | A number | while drawing a line or polyline: the length; a circle: the radius |
 | `I` | element information (selection, or the item under the cursor) |
 | Edit › **More** | find and replace, key-in, move / copy / rotate by a value, mirror, scale, array, select same, match attributes, element info |
+
+| Sheet sets | |
+|---|---|
+| `Ctrl+Shift+O` | open a folder as a sheet set (or choose / drop several drawings) |
+| `Page Up` / `Page Down` | previous / next sheet |
+| `Ctrl+F` | with a set open: find in all sheets (`Enter` goes from sheet to sheet) |
+| Click a sheet reference | open that sheet (Pan tool) |
 
 On touch screens: tap to select, drag to move, long-press for a menu (edit, copy, duplicate, rotate,
 delete, paste here / in place, add or delete a point); the ribbon has Copy, Paste and Duplicate, and a
@@ -389,10 +400,48 @@ same way). View › **Trace** (`J`) — in any mode, and it never changes the dr
 * **Gap** (*Options*): ends closer than this touch — by default 5 % of the drawing's usual text height
   (so a sloppy end still connects); type a larger value for drawings with bigger gaps.
 * Hidden levels / layers are not traced through. After an edit the net is traced again from the same
-  point. When a set of sheets is open (a later feature), **Find on other sheets** looks for the net's
-  label on the other sheets.
+  point. When a set of sheets is open ([Sheet sets](#sheet-sets)), **Find on other sheets** looks for
+  the net's label on the other sheets.
 * The connections are found once per drawing (a slice at a time, so the page never freezes): about
   0.1–0.3 s for a 50,000-item drawing, then each trace takes a few milliseconds.
+
+## Sheet sets
+
+Schematics and wiring diagrams come as sets of dozens of sheets. **Open folder** (`Ctrl+Shift+O`;
+on a phone: the start screen's button or More › Open folder…) opens every drawing in a folder (and its subfolders, one level
+deep) as one set; choosing several files in **Open**, or dropping several files or a folder on the
+window, does the same. Save backups (`*.bak.dgn`) and other files are left out. The file types a
+set takes are one list in `src/tools/sheets.js` (`SHEET_EXTS`).
+
+* **Navigator** (View › **Sheets**): the sheets in natural order (SH2 before SH10) with the title
+  from each title block — a `TITLE` / `DWG_TITLE` block attribute, otherwise the largest text at
+  the lower right — and the current one highlighted. `Page Up` / `Page Down` (or the arrows)
+  step through the set through the normal open path: unsaved edits are asked about first, and each
+  sheet keeps its zoom, position and hidden layers for the session. A sheet that does not read is
+  marked in the list, and `Page Down` goes on past it.
+* **Background index**: a second parse worker reads every sheet once (progress, **Stop**) and keeps
+  only a compact text index — strings, positions, heights and paths inside cells — never the
+  drawing. The indexes are kept in this browser (IndexedDB, per file content hash, the oldest
+  forgotten beyond 3,000 sheets / 96 MB), so opening the set again is instant. Only the sheet on
+  screen and up to three recently shown ones (an LRU, at most 160 MB) keep a full drawing in
+  memory (the 120-sheet test set: a 44 KB index, the heap grows by about 2 MB).
+* **Find in all sheets**: with a set open, `Ctrl+F` has an **All sheets** scope (on by default):
+  the matches are listed by sheet with counts (also in the navigator), `Enter` / `F3` go from
+  match to match across sheets — opening the sheet and zooming to the text — and a click on a
+  listed match goes there. The sheet on screen is searched as drawn (edits included). Replace works
+  on the sheet on screen.
+* **Sheet references become links**: on the sheet on screen, texts like `SHEET 12`, `SH 4`,
+  `SHT. 3` (the sheet whose title block says "SHEET 12 OF …", else the file whose name ends in 12),
+  `SEE DWG 1234-56` (a file named so, or a sheet whose title block shows that number), or a text
+  that is another sheet's file name are underlined; hover shows where they go, a click (Pan tool)
+  opens that sheet. A reference that matches no sheet or more than one stays plain text, as do
+  "SHEET 1 OF 5" and a sheet's own number. The patterns are regular expressions you can change
+  (Sheets › *Sheet references*, kept in this browser).
+* **Recent drawings** keeps the set as one entry ("Sheet set · 24 sheets"): one click opens it
+  again at the sheet you were on (the browser may ask once for permission to read the folder).
+* For other features: `app.sheets = { list(), open(id), step(±1), findAcross(query, { matchCase,
+  wholeWord }) → [{ sheetId, name, hits: [{ text, x, y, h, sub, ent }] }], xrefs(), status() }`
+  (`x`, `y` in drawing coordinates).
 
 ## Compare two revisions
 
@@ -500,8 +549,8 @@ the first frame, so opening a large file never blocks the page.
   browser tab. The service worker caches only the app's own files and never sees your drawings.
 * Markups stay in the sidecar file you save and in this browser's local storage.
 * This browser's IndexedDB keeps the recent drawings list (names, sizes, dates and the browser's
-  file handles — never the contents) and the history of unsaved edits until they are saved or
-  discarded. Clear list / Discard remove them; clearing the site's data removes everything.
+  file handles — never the contents), the history of unsaved edits until they are saved or
+  discarded, and the text index of the sheets of sheet sets (their texts and positions). Clear list / Discard remove them; clearing the site's data removes everything.
 * Copied drawing items go to the system clipboard as plain text (and stay in the open tab), only
   when you copy; nothing is sent anywhere.
 * Saving an edited drawing creates the file in the page and either writes it to the file you
@@ -624,6 +673,18 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   hashes and its lack of run-time code generation. End to end: the reader loads only for DWG,
   measuring, editing and saving as DXF, offline re-open, the read time limit, and the real CSP
   (plus a negative control without `'wasm-unsafe-eval'`).
+* Sheet sets (`sheets.test.mjs`, synthetic five-sheet set in `tests/fixtures/sheets/`: three DGN,
+  two DXF, repeated wire numbers, references between sheets): which files a set takes, the text
+  index (drawing coordinates, cell paths), titles from title blocks and attributes, own sheet
+  numbers, the worker job, search by sheet in reading order with options and a cap, references
+  (numbers, drawing numbers, file names, never itself, ambiguous ones not linked, own patterns),
+  the LRU bounds, the index cache store. End to end: a folder from the directory picker (OPFS
+  handles; backups and other files left out), titles, Page Up / Page Down with each sheet's view
+  and hidden layers kept, Find in all sheets (grouped counts, Enter across sheets with zoom, a
+  listed match), reference links (hover, click), the unsaved-edits question, Recent drawings after
+  a reload with the index from this browser; the plain chooser with several files, dropped files
+  (a sheet that does not read is marked and skipped), the panel and find at 390 px, and a
+  120-sheet set (all read, at most three drawings kept, small index, heap growth bounded).
 * **All test drawings are synthetic**, generated by `tools/make_fixtures.mjs` (DXF),
   `tools/make_dgn_fixtures.py` (DGN, via GDAL) and `tools/make_dwg_fixtures.mjs` (DWG, from the
   synthetic DXF files). No real drawings are used or committed.
@@ -642,7 +703,8 @@ src/scene.js            blocks → flat primitives, colours, local origin, spati
 src/edit/               edit operations, edit document (changes, undo, selection), live scene,
                         find / replace, key-ins, transforms, attributes + element info, level names
 src/view/               viewport, Canvas2D renderer (WebGL-replaceable interface), batches, colours
-src/tools/              snaps, measurement, revision compare (compare.js), wire tracing (trace.js)
+src/tools/              snaps, measurement, revision compare (compare.js), wire tracing (trace.js),
+                        sheet sets: text index, search, references, LRU (sheets.js)
 src/markup/             markup model, revision clouds, sidecar format, undo history, drawing
 src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, PNG export; loaded
                         after start-up or on first use: files.js + store.js (file picker, save
@@ -650,6 +712,7 @@ src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, 
                         (compare overlay + panel), print-svg.js (vector print to scale),
                         tools-ui.js (editing tools: find, key-ins, More menu, info, level names),
                         trace-ui.js (the Trace tool and its panel)
+                        sheets.js (sheet sets: navigator, background index, find in all sheets)
 src/worker.js           parse worker
 samples/                synthetic sample drawings (+ generators in samples/gen/)
 tools/                  fixture generators (DXF, DGN, DWG), DWG reader vendoring/build scripts,

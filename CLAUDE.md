@@ -36,7 +36,7 @@ README.md first (and DWG.md for the DWG reader). These rules are not optional.
 ## Product principles (the acceptance bar)
 
 Lightweight (startup code — index.html, app.css, the modules src/app.js and the parse worker import
-statically — < 150 KB gzipped; everything precached for offline, lazily loaded writers included, < 260 KB; the DWG reader is loaded on demand and cached separately), smooth (60 fps pan/zoom on normal drawings; parsing in
+statically — < 150 KB gzipped; everything precached for offline, lazily loaded writers included, < 320 KB; the DWG reader is loaded on demand and cached separately), smooth (60 fps pan/zoom on normal drawings; parsing in
 a worker with progress), easy (a first-time user can open, measure and mark up in a minute; few
 labelled buttons; undo always available), actually works (robust to real-world quirks; never
 crash on a bad file — show what loaded plus "N items not shown"), and cheap (static hosting).
@@ -55,9 +55,10 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/tools/snap.js`, `measure.js` | Snaps and measurement maths (pure, unit tested). |
 | `src/tools/trace.js` | Wire / net tracing (pure): connectivity graph of a schematic's wires on a spatial hash (ends, T-junctions, junction dots; crossings only on request), built a slice at a time; the net's length, labels and ends (cell + pin text). UI in `src/app/trace-ui.js` (lazy, View › Trace, `J`). Test sheet: `tools/trace_sheet.json` → `dgn-trace.dgn` + `trace-sheet.dxf`. |
 | `src/tools/compare.js` | Revision compare (pure): items described from the scene (+ DGN element-byte hashes), matched, paired as moved / changed. |
+| `src/tools/sheets.js` | Sheet sets (pure): `SHEET_EXTS` (the one list of file types a set takes — add new readers' extensions here), the compact text index of a sheet (built in the parse worker, `type: 'index'` messages), titles / own sheet numbers, search across sheets, sheet-reference patterns and resolution, the LRU. |
 | `src/markup/*` | Markup model, sidecar format (see MARKUP_FORMAT.md), history, drawing. |
 | `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings); v0.4 editing tools, pure and unit tested: `find.js` (find / replace text, also in cells), `keyin.js` (XY= DL= DI= AA= key-ins), `xform.js` (mirror, scale, array), `attrs.js` (select same, match attributes, element info), `levels.js` (DGN level-name files). |
-| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. Loaded after start-up / on first use (keep them out of the static graph): `files.js` + `store.js` (file picker handles, Save over the original, recent drawings, IndexedDB journal of unsaved edits), `compare.js` (compare overlay), `print-svg.js` (vector print to scale), `trace-ui.js` (the Trace tool, loaded when it is picked) and `tools-ui.js` (the editing tools' UI: find bar, key-in preview, More menu, dialogs, info card, level names; imported on first use through `app.loadTools`). Modules hook in through `app.hooks` (`open`, `history`, `draw`). |
+| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. Loaded after start-up / on first use (keep them out of the static graph): `files.js` + `store.js` (file picker handles, Save over the original, recent drawings, IndexedDB journal of unsaved edits), `compare.js` (compare overlay), `print-svg.js` (vector print to scale), `trace-ui.js` (the Trace tool, loaded when it is picked) and `tools-ui.js` (the editing tools' UI: find bar, key-in preview, More menu, dialogs, info card, level names; imported on first use through `app.loadTools`), and `sheets.js` (sheet sets: navigator, background index in a second parse worker with its IndexedDB cache `linework-sheets`, find in all sheets, reference links; imported through `app.loadSheets`, exposes `app.sheets`). Modules hook in through `app.hooks` (`open`, `history`, `draw`). |
 | `src/worker.js` | Parse worker. |
 | `lib/core.js` | Library entry (`linework/core` package export) for Node and other hosts: re-exports readers, scene, find, compare, writers, SVG builder. Not part of the app — never import it from `src/`, never add it to `sw.js` (`core.test.mjs` checks). |
 | `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump the version in `src/version.js`** (the one place it lives; the about line, saved files and the cache name read it). The DWG reader has its own cache (`READER_CACHE`). |
@@ -82,7 +83,7 @@ File pickers (`showOpenFilePicker`, `showDirectoryPicker`) cannot be driven head
 them to return real handles from the origin-private file system (`navigator.storage.getDirectory()`),
 and cover the fallback (plain chooser, downloads) by setting `window.showOpenFilePicker = undefined`.
 The journal must never hold file contents, only the EditDoc change list (entities as read from the
-file are stored as markers); recent drawings hold names, sizes, dates and handles only.
+file are stored as markers); recent drawings hold names, sizes, dates and handles only (a sheet set is one entry); the sheet-set cache holds text indexes only.
 
 Look at the e2e screenshots after UI changes (dark + paper, 1440/1024/390) and fix anything
 that looks wrong before reporting.

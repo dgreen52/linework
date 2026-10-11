@@ -551,6 +551,8 @@ app.openSample = openSample;
 function setDocument(scene, name, size, ms, src = {}) {
   const keep = src.keep && app.scene ? { view: app.view.snapshot(), markups: app.markups, key: autosaveKey(), off: new Set(app.scene.layers.filter((l, i) => app.layerVisible && !app.layerVisible[i]).map((l) => l.name)) } : null;
   if (keep) for (const l of scene.layers) if (keep.off.has(l.name)) l.visible = false;
+  const st = !keep && src.state; // a sheet of a set shown before (src/app/sheets.js): its view and hidden layers
+  if (st) for (const l of scene.layers) l.visible = !st.off.includes(l.name);
   app.scene = scene;
   app.doc = { ...src, name, size, format: scene.format, hash: scene.hash || '', keep: !!keep };
   app.renderer.setScene(scene);
@@ -562,7 +564,7 @@ function setDocument(scene, name, size, ms, src = {}) {
   $('#empty').hidden = true;
   resize(); // layout may have changed (layers panel); fit to the real stage size
   app.view.setLimits(scene.extents);
-  if (keep) app.view.restore(keep.view); else app.view.fit(scene.fitBox);
+  if (keep) app.view.restore(keep.view); else if (st) app.view.restore(st.view); else app.view.fit(scene.fitBox);
   app.heavy = 0;
   app.hover = null; app.hoverPath = null; app.selected = null;
   app.measures = []; app.mdraft = null; app.draft = null;
@@ -592,7 +594,7 @@ function setDocument(scene, name, size, ms, src = {}) {
   const nsCount = ns.reduce((s, [, v]) => s + v, 0);
   const notes = [...scene.warnings];
   for (const k of ['open', 'skipped']) for (const el of document.querySelectorAll(`#toasts [data-key="${k}"]`)) el.remove();
-  toast(`Opened ${name}`, { key: 'open', detail: `${plural(items, 'item')} · ${plural(nLayers, scene.format === 'DGN' ? 'level' : 'layer')} · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
+  if (!src.sheet) toast(`Opened ${name}`, { key: 'open', detail: `${plural(items, 'item')} · ${plural(nLayers, scene.format === 'DGN' ? 'level' : 'layer')} · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
   if (nsCount) {
     toast(`${fmtNum(nsCount, 0)} item${nsCount === 1 ? '' : 's'} not shown`, {
       key: 'skipped', kind: 'warn', detail: 'Everything else loaded normally.', listTitle: 'What was skipped',
@@ -1255,7 +1257,7 @@ document.addEventListener('keydown', (e) => {
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (mod) {
-    if (k === 'o') { e.preventDefault(); pickFile(); return; }
+    if (k === 'o') { e.preventDefault(); if (e.shiftKey) openFolder(); else pickFile(); return; }
     if (k === 'f' && !e.shiftKey) { e.preventDefault(); if (app.scene) tools('find'); return; }
     if (typing) return;
     if (k === 's') {
@@ -1381,12 +1383,13 @@ const actions = {
   'e-saveas': () => edit.openSaveAs(),
   find: () => { if (app.scene) tools('find'); else toast('Open a drawing first.', { kind: 'warn' }); },
   'e-tools': () => { if (app.scene) tools('menu'); },
+  'open-folder': () => openFolder(),
 };
 for (const b of $$('[data-action]')) b.addEventListener('click', () => { $('#menu-more').hidden = true; actions[b.dataset.action]?.(); });
 
 $('#btn-open').addEventListener('click', pickFile);
 $('#btn-open-empty').addEventListener('click', pickFile);
-$('#file-input').addEventListener('change', async (e) => { const f = e.target.files[0]; e.target.value = ''; await openFile(f); });
+$('#file-input').addEventListener('change', async (e) => { const fs = [...e.target.files]; e.target.value = ''; if (fs.filter((f) => !/\.json$/i.test(f.name)).length > 1) sheets().then((S) => S.openFiles(fs)); else await openFile(fs[0]); });
 $('#markup-input').addEventListener('change', async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await loadMarkupFile(f); });
 for (const b of $$('.sample')) b.addEventListener('click', () => openSample(b.dataset.sample));
 $('#btn-close-layers').addEventListener('click', () => setLayersOpen(false));
@@ -1472,7 +1475,10 @@ window.addEventListener('drop', async (e) => {
   $('#drop-overlay').hidden = true;
   // file handles (where the browser gives them) must be asked for before anything is awaited
   const asked = [...e.dataTransfer.items].map((it) => (it.kind === 'file' && it.getAsFileSystemHandle ? it.getAsFileSystemHandle().catch(() => null) : null));
+  const entries = [...e.dataTransfer.items].map((it) => (it.kind === 'file' && it.webkitGetAsEntry ? it.webkitGetAsEntry() : null));
   const files = [...e.dataTransfer.files];
+  // several drawings or a folder: a sheet set
+  if (files.filter((f) => !/\.json$/i.test(f.name)).length > 1 || entries.some((x) => x && x.isDirectory)) { const S = await sheets(); S.dropped(files, await Promise.all(asked), entries); return; }
   const drawing = files.find((f) => !/\.json$/i.test(f.name));
   const markups = files.find((f) => /\.json$/i.test(f.name));
   const handle = drawing && (await Promise.all(asked)).find((h) => h && h.kind === 'file' && h.name === drawing.name);
@@ -1524,6 +1530,18 @@ function trace(cmd, ...args) {
   }
   return traceP.then((T) => T.run(cmd, ...args));
 }
+
+// Sheet sets (src/app/sheets.js, loaded on first use): a folder or several drawings open as one set.
+let sheetsP = null;
+function sheets() {
+  if (!sheetsP) {
+    sheetsP = import('./app/sheets.js').then((m) => m.initSheets(app, { okToReplace }));
+    sheetsP.catch(() => { sheetsP = null; toast('Sheet sets could not be loaded. Check the connection and try again.', { kind: 'error' }); });
+  }
+  return sheetsP;
+}
+app.loadSheets = sheets;
+const openFolder = () => sheets().then((S) => S.pickFolder());
 
 // Level names (DGN v7 has none): kept in this browser per drawing name, never written into the file.
 const LEVELS = 'linework:levels:';

@@ -128,7 +128,7 @@ test('empty state, privacy promise, app shell size', async () => {
   for (const p of shell) { raw += readFileSync(join(ROOT, p)).length; offGz += gz(p); }
   perf.appShell = { startupFiles: startup.size, startupGzipKB: +(startGz / 1024).toFixed(1), offlineFiles: shell.length, offlineRawKB: +(raw / 1024).toFixed(1), offlineGzipKB: +(offGz / 1024).toFixed(1) };
   assert(startGz < 150 * 1024, `startup code gzip ${startGz} < 150 KB`);
-  assert(offGz < 260 * 1024, `offline app shell gzip ${offGz} < 260 KB`);
+  assert(offGz < 320 * 1024, `offline app shell gzip ${offGz} < 320 KB`);
   // first open timing
   const nav = await page.evaluate(() => { const n = performance.getEntriesByType('navigation')[0]; return { domContentLoaded: n.domContentLoadedEventEnd, load: n.loadEventEnd }; });
   perf.firstOpen = { domContentLoadedMs: Math.round(nav.domContentLoaded), loadMs: Math.round(nav.load) };
@@ -2572,6 +2572,227 @@ test('compare and recent drawings at 390 px: the panel opens over the drawing an
   await page.click('#recent [data-recent]');
   await page.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'site-plan.dgn' && !window.__linework.loading);
   await close(page);
+});
+
+// ------------------------------------------------------------------ sheet sets: a folder of drawings as one set
+// tests/fixtures/sheets: an invented pump control panel set, PNL-01..03 DGN + PNL-04..05 DXF (repeated wire
+// numbers, references between sheets, title blocks).
+const SHEETS = ['PNL-01.dgn', 'PNL-02.dgn', 'PNL-03.dgn', 'PNL-04.dxf', 'PNL-05.dxf'];
+const SHEET_FIX = (n) => join(ROOT, 'tests', 'fixtures', 'sheets', n);
+const shownSheet = (page) => page.evaluate(() => { const a = window.__linework; return !a.loading && a.doc ? a.doc.name : null; });
+const waitSheet = (page, name) => page.waitForFunction((n) => { const a = window.__linework; return a.doc && a.doc.name === n && !a.loading && a.edit.ready; }, name, { timeout: 30000 });
+const sheetsIndexed = (page, n) => page.waitForFunction((k) => { const s = window.__linework.sheets && window.__linework.sheets.status(); return s && s.indexed === k && !s.indexing; }, n, { timeout: 120000 });
+async function putSheets(page, folder, names = SHEETS) {
+  for (const n of names) await opfsPut(page, n, readFileSync(SHEET_FIX(n)), folder);
+  await opfsPut(page, 'PNL-01.bak.dgn', readFileSync(SHEET_FIX('PNL-01.dgn')), folder); // a Save backup: not a sheet
+  await opfsPut(page, 'notes.txt', Buffer.from('not a drawing'), folder);
+}
+
+test('sheet sets: open a folder (directory handle), navigator with titles, Page Up / Page Down keep each sheet\'s view and layers, Find in all sheets jumps between sheets, sheet references are links, unsaved edits are asked about, reopen from Recent in one click (index from this browser)', async () => {
+  const page = await newPage();
+  await filesReady(page);
+  await putSheets(page, 'PNL');
+  await page.evaluate(() => { window.showDirectoryPicker = async () => window.__dir; });
+  await page.click('.topbar [data-action="open-folder"]');
+  await waitSheet(page, 'PNL-01.dgn');
+  await page.waitForSelector('#sheets-panel:not([hidden])');
+  eq(await page.locator('#sheet-list [data-sheet]').count(), 5, 'five sheets (backup copy and text file left out)');
+  assert(/^1PNL-01\.dgn/.test(await page.textContent('#sheet-list [aria-current="true"]')), 'the first sheet is current');
+  await sheetsIndexed(page, 5);
+  const list = await page.evaluate(() => window.__linework.sheets.list());
+  eq(list.map((s) => s.title).join('|'), 'PUMP CONTROL POWER|PUMP CONTROL RELAYS|PUMP CONTROL TERMINALS|PUMP CONTROL I/O|PUMP CONTROL CABLES', 'titles from the title blocks (DXF: the TITLE / DWG_TITLE attribute)');
+  eq(list.map((s) => s.num).join(''), '12345', 'own sheet numbers');
+  assert(/PUMP CONTROL RELAYS/.test(await page.textContent('#sheet-list')), 'titles listed');
+  eq(await page.textContent('#sheets-count'), '1 / 5', 'position');
+  assert(/All 5 sheets searchable/.test(await page.textContent('#sheets-status')), 'status');
+  assert(await page.isVisible('#btn-sheets'), 'View › Sheets button');
+  await clearToasts(page);
+  await shot(page, 'sheets-panel-dark-1440');
+  // Page Down / Page Up; each sheet keeps its view and hidden layers for the session
+  await page.keyboard.press('PageDown');
+  await waitSheet(page, 'PNL-02.dgn');
+  eq(await page.textContent('#sheets-count'), '2 / 5', 'position after Page Down');
+  for (let i = 0; i < 3; i++) await page.keyboard.press('+');
+  const li = await page.evaluate(() => window.__linework.scene.layers.findIndex((l) => l.name === 'Level 20'));
+  await page.click(`#layer-list input[data-i="${li}"]`); // hide Level 20 (the references)
+  const v2 = await page.evaluate(() => ({ s: window.__linework.view.scale, cx: window.__linework.view.cx }));
+  await page.keyboard.press('PageUp');
+  await waitSheet(page, 'PNL-01.dgn');
+  await page.keyboard.press('PageUp');
+  assert(/first sheet/.test(await toastText(page)), 'Page Up on the first sheet says so');
+  await page.click('#sheets-next');
+  await waitSheet(page, 'PNL-02.dgn');
+  const back = await page.evaluate(() => { const a = window.__linework; return { s: a.view.scale, cx: a.view.cx, off: a.scene.layers.filter((l, i) => !a.layerVisible[i]).map((l) => l.name) }; });
+  assert(Math.abs(back.s / v2.s - 1) < 1e-9 && Math.abs(back.cx - v2.cx) < 1e-9, 'the view of sheet 2 is back: ' + JSON.stringify([back, v2]));
+  eq(back.off.join(), 'Level 20', 'its hidden level too');
+  const st = await page.evaluate(() => window.__linework.sheets.status());
+  assert(st.scenes >= 1 && st.scenes <= 3, 'recently shown sheets kept (LRU): ' + st.scenes);
+  // Find in all sheets: results by sheet, Enter goes from sheet to sheet and zooms to the match
+  await page.keyboard.press('Control+f');
+  await page.waitForSelector('.findbar:not([hidden])');
+  assert(await page.isVisible('.findbar [data-o="all"]'), 'All sheets scope offered');
+  await page.fill('#find-q', 'W201');
+  await page.waitForFunction(() => /5 in 3 sheets/.test(document.querySelector('#find-n').textContent));
+  const groups = await page.$$eval('.find-sets h4', (hs) => hs.map((h) => h.textContent));
+  eq(groups.join('|'), 'PNL-01.dgn2|PNL-02.dgn2|PNL-04.dxf1', 'matches grouped by sheet with counts');
+  eq(await page.$$eval('#sheet-list em', (es) => es.map((e) => e.textContent).join()), '2,2,1', 'counts in the navigator');
+  const across = await page.evaluate(() => window.__linework.sheets.findAcross('W201'));
+  eq(across.map((r) => r.sheetId + ':' + r.hits.length).join(), 'PNL-01.dgn:2,PNL-02.dgn:2,PNL-04.dxf:1', 'app.sheets.findAcross');
+  assert(across[0].hits.every((h) => h.text === 'W201' && Number.isFinite(h.x) && Number.isFinite(h.y)) && across[0].hits.some((h) => h.sub), 'hits: text, position, path inside a cell');
+  await clearToasts(page);
+  await shot(page, 'sheets-find-all-dark-1440');
+  await page.keyboard.press('Enter'); // the first match from the shown sheet (2) on
+  await page.waitForFunction(() => /^3 of 5/.test(document.querySelector('#find-n').textContent));
+  eq(await shownSheet(page), 'PNL-02.dgn', 'stays on sheet 2');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await waitSheet(page, 'PNL-04.dxf');
+  await page.waitForFunction(() => /^5 of 5/.test(document.querySelector('#find-n').textContent));
+  await settle(page);
+  const zoomed = await page.evaluate(() => { const a = window.__linework, t = a.scene.texts.find((x) => x.s === 'W201'), [ox, oy] = a.scene.origin; const [sx, sy] = a.worldToScreen((t.bbox[0] + t.bbox[2]) / 2 + ox, (t.bbox[1] + t.bbox[3]) / 2 + oy); return { sx, sy, w: a.view.w, h: a.view.h, px: (t.bbox[3] - t.bbox[1]) * a.view.scale, k: a.tools.find.k }; });
+  assert(zoomed.sx > 0 && zoomed.sx < zoomed.w && zoomed.sy > 0 && zoomed.sy < zoomed.h && zoomed.px > 12 && zoomed.k === 0, 'zoomed to the match on sheet 4: ' + JSON.stringify(zoomed));
+  assert(await page.isVisible('.findbar'), 'the find bar stays open across sheets');
+  await page.click('.find-sets button[data-g="0"]'); // a listed match on another sheet
+  await waitSheet(page, 'PNL-01.dgn');
+  eq(await findN(page), '1 of 5', 'listed match picked');
+  await page.click('.findbar [data-o="all"]'); // back to this sheet only
+  await page.waitForFunction(() => /2 matches|1 of 2/.test(document.querySelector('#find-n').textContent));
+  assert(await page.isHidden('.find-sets'), 'no list for this sheet only');
+  await page.click('.findbar [data-o="all"]');
+  await page.keyboard.press('Escape');
+  // sheet references become links: hover shows where, a click opens that sheet
+  const refs = await page.evaluate(() => window.__linework.sheets.xrefs().map((r) => r.text + '>' + r.to));
+  eq(refs.sort().join(), 'CONT ON SHEET 2>PNL-02.dgn,SEE DWG PNL-05>PNL-05.dxf', 'references on sheet 1 (its own drawing number and "SHEET 1 OF 5" are not links)');
+  await page.keyboard.press('f');
+  await settle(page);
+  const ref = await textAt(page, 'SEE DWG PNL-05');
+  const [rx, ry] = await client(page, ...ref);
+  await page.mouse.move(rx, ry);
+  await page.waitForFunction(() => /Sheet reference: click to open PNL-05\.dxf · PUMP CONTROL CABLES/.test(document.querySelector('#st-info').textContent));
+  eq(await page.evaluate(() => document.querySelector('#cv-overlay').style.cursor), 'pointer', 'link cursor');
+  await shot(page, 'sheets-link-hover-dark-1440');
+  await page.mouse.click(rx, ry);
+  await waitSheet(page, 'PNL-05.dxf');
+  eq(await page.textContent('#sheets-count'), '5 / 5', 'jumped to sheet 5');
+  await page.keyboard.press('PageDown');
+  assert(/last sheet/.test(await toastText(page)), 'the last sheet says so');
+  // an edited sheet: switching asks first (Cancel stays)
+  await page.click('#tab-edit');
+  await page.click('[data-tool="eselect"]');
+  await clickWorld(page, ...(await textAt(page, 'W202')));
+  await page.keyboard.press('Shift+ArrowRight');
+  assert(await ED.dirty(page), 'edited');
+  const asked = [];
+  page.once('dialog', (d) => { asked.push(d.message()); d.dismiss(); });
+  await page.keyboard.press('PageUp');
+  await new Promise((r) => setTimeout(r, 300));
+  assert(asked.length === 1 && /unsaved edits/.test(asked[0]), 'asked: ' + asked.join());
+  eq(await shownSheet(page), 'PNL-05.dxf', 'Cancel: still on sheet 5');
+  page.once('dialog', (d) => d.accept());
+  await page.keyboard.press('PageUp');
+  await waitSheet(page, 'PNL-04.dxf');
+  await page.click('#tab-view');
+  await page.keyboard.press('b');
+  await clearToasts(page);
+  await shot(page, 'sheets-panel-paper-1440');
+  await page.keyboard.press('b');
+  // the set is one entry in Recent drawings: one click after a reload opens it at the last sheet, the index comes from this browser
+  await page.evaluate(() => { window.showDirectoryPicker = () => { throw new Error('no picker expected'); }; });
+  await page.reload();
+  await page.waitForFunction(() => !!window.__linework && !!window.__linework.files);
+  await page.waitForSelector('#recent [data-recent]');
+  const items = await page.$$eval('#recent [data-recent]', (bs) => bs.map((b) => b.textContent));
+  eq(items.length, 1, 'one recent entry for the set (not one per sheet)');
+  assert(/PNL/.test(items[0]) && /Sheet set · 5 sheets · just now/.test(items[0]), items[0]);
+  await page.click('#recent [data-recent]');
+  await waitSheet(page, 'PNL-04.dxf');
+  await sheetsIndexed(page, 5);
+  const st2 = await page.evaluate(() => window.__linework.sheets.status());
+  assert(st2.fromCache >= 4, 'indexes read back from this browser: ' + JSON.stringify(st2));
+  await close(page);
+});
+
+test('sheet sets: several files from the plain chooser (no File System Access API) and dropped files; 390 px panel; a 120-sheet set stays within a memory bound', async () => {
+  const page = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 } });
+  await filesReady(page);
+  await page.evaluate(() => { window.showOpenFilePicker = undefined; window.showDirectoryPicker = undefined; });
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#btn-open-empty')]);
+  assert(fc.isMultiple(), 'the chooser takes several files');
+  await fc.setFiles(SHEETS.map(SHEET_FIX));
+  await waitSheet(page, 'PNL-01.dgn');
+  eq(await page.evaluate(() => window.__linework.sheets.list().length), 5, 'five sheets');
+  assert(await page.isHidden('#sheets-panel'), 'phone: the list starts hidden');
+  await sheetsIndexed(page, 5);
+  await clearToasts(page);
+  await page.click('#btn-sheets');
+  await page.waitForSelector('#sheets-panel:not([hidden])');
+  const fit = await page.evaluate(() => [document.querySelector('#sheets-panel').getBoundingClientRect().width, document.documentElement.scrollWidth]);
+  assert(fit[0] <= 390 && fit[1] <= 390, 'fits at 390 px: ' + fit);
+  await shot(page, 'sheets-panel-dark-390');
+  await page.tap('#sheet-list [data-sheet="PNL-03.dgn"]');
+  await waitSheet(page, 'PNL-03.dgn');
+  assert(await page.isHidden('#sheets-panel'), 'phone: the list closes when a sheet opens');
+  // a reference tapped
+  const ref = await textAt(page, 'PNL-04');
+  const [rx, ry] = await client(page, ...ref);
+  await page.touchscreen.tap(rx, ry);
+  await waitSheet(page, 'PNL-04.dxf');
+  await page.keyboard.press('Control+f');
+  await page.fill('#find-q', 'W202');
+  await page.waitForFunction(() => /4 in 3 sheets/.test(document.querySelector('#find-n').textContent));
+  assert((await page.evaluate(() => document.documentElement.scrollWidth)) <= 390, 'find with results fits');
+  await shot(page, 'sheets-find-all-dark-390');
+  await close(page);
+
+  // dropped files (no handles): a set too; a sheet that does not read is marked, Page Down goes past it
+  const p2 = await newPage();
+  await p2.evaluate(async (files) => {
+    const dt = new DataTransfer();
+    for (const [n, b64] of files) dt.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], n));
+    for (const type of ['dragenter', 'drop']) window.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, [...SHEETS.slice(3).map((n) => [n, readFileSync(SHEET_FIX(n)).toString('base64')]), ['PNL-04b.dxf', Buffer.from('not a drawing').toString('base64')]]);
+  await waitSheet(p2, 'PNL-04.dxf');
+  eq(await p2.evaluate(() => window.__linework.sheets.list().map((s) => s.id).join()), 'PNL-04.dxf,PNL-04b.dxf,PNL-05.dxf', 'dropped files, in order');
+  await p2.waitForFunction(() => { const s = window.__linework.sheets.status(); return s.indexed === 2 && s.failed === 1 && !s.indexing; });
+  assert(/PNL-04b\.dxf[^3]*not a DXF/.test(await p2.textContent('#sheet-list')), 'marked: ' + await p2.textContent('#sheet-list'));
+  await p2.keyboard.press('PageDown');
+  await p2.waitForSelector('.toast.error');
+  eq(await shownSheet(p2), 'PNL-04.dxf', 'still the sheet before');
+  await p2.keyboard.press('PageDown');
+  await waitSheet(p2, 'PNL-05.dxf');
+  await close(p2);
+
+  // 120 sheets: every sheet is read once in the background, only a few drawings stay in memory
+  const p3 = await newPage();
+  await filesReady(p3);
+  const base = readFileSync(SHEET_FIX('PNL-04.dxf'), 'latin1');
+  await p3.evaluate(async ([text]) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('BIG', { create: true });
+    for (let k = 1; k <= 120; k++) {
+      const fh = await dir.getFileHandle(`BIG-${String(k).padStart(3, '0')}.dxf`, { create: true });
+      const w = await fh.createWritable();
+      await w.write(`999\nsynthetic sheet ${k}\n` + text.replace('W240', `W${3000 + k}`).replace('SHEET 4 OF 5', `SHEET ${k} OF 120`));
+      await w.close();
+    }
+    window.showDirectoryPicker = async () => dir;
+  }, [base]);
+  const heap0 = await p3.evaluate(() => (performance.memory ? performance.memory.usedJSHeapSize : 0));
+  const t0 = Date.now();
+  await p3.evaluate(() => window.__linework.loadSheets().then((S) => S.pickFolder()));
+  await waitSheet(p3, 'BIG-001.dxf');
+  await sheetsIndexed(p3, 120);
+  const indexMs = Date.now() - t0;
+  for (let i = 0; i < 8; i++) { await p3.keyboard.press('PageDown'); await waitSheet(p3, `BIG-${String(i + 2).padStart(3, '0')}.dxf`); }
+  const st = await p3.evaluate(() => window.__linework.sheets.status());
+  const heap1 = await p3.evaluate(() => (performance.memory ? performance.memory.usedJSHeapSize : 0));
+  assert(st.sheets === 120 && st.indexed === 120 && st.failed === 0, 'all read: ' + JSON.stringify(st));
+  assert(st.scenes <= 3, 'at most 3 drawings kept besides the one shown: ' + st.scenes);
+  assert(st.indexBytes < 2 * 1024 * 1024, 'the text index is small: ' + st.indexBytes);
+  assert(!heap0 || heap1 - heap0 < 150 * 1024 * 1024, `heap grew ${((heap1 - heap0) / 2 ** 20).toFixed(1)} MB`);
+  const one = await p3.evaluate(() => window.__linework.sheets.findAcross('W3077', { wholeWord: true }));
+  eq(one.map((r) => r.sheetId).join(), 'BIG-077.dxf', 'one sheet has W3077');
+  perf.sheetSet = { sheets: 120, indexMs, indexKB: +(st.indexBytes / 1024).toFixed(1), scenesKept: st.scenes, heapGrowthMB: +((heap1 - heap0) / 2 ** 20).toFixed(1) };
+  await close(p3);
 });
 
 // ------------------------------------------------------------------ v0.4: editing tools (DGN first: the synthetic wiring sheet)

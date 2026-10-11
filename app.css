@@ -140,6 +140,7 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 .empty { position: absolute; inset: 0; display: grid; place-items: center; overflow: auto; padding: 24px 16px; background: var(--bg); }
 .empty-card { max-width: 720px; width: 100%; text-align: center; }
 .empty-card .hero { width: 56px; height: 56px; color: var(--accent); }
+.empty-card .btn.big { margin: 4px; }
 .empty-card h1 { font-size: 28px; margin: 8px 0 6px; }
 .empty-card h2 { font-size: 15px; margin: 26px 0 10px; color: var(--muted); font-weight: 600; }
 .lead { font-size: 16px; color: var(--muted); margin: 0 0 18px; }

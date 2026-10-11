@@ -2955,6 +2955,191 @@ test('level names (DGN): name a level in the Layers panel, import a names file, 
   await close(page);
 });
 
+// ------------------------------------------------------------------ Trace (wire / net tracing)
+const TRACE = 'dgn-trace.dgn';
+/** The "pinkest" opaque pixel of the overlay canvas around a drawing point. */
+async function overlayPx(page, x, y) {
+  return page.evaluate(([x, y]) => {
+    const a = window.__linework, [sx, sy] = a.worldToScreen(x, y), d = a.dpr;
+    const g = document.querySelector('#cv-overlay').getContext('2d').getImageData(Math.round(sx * d) - 2, Math.round(sy * d) - 2, 5, 5).data;
+    let best = [0, 0, 0, 0];
+    for (let i = 0; i < g.length; i += 4) if (g[i + 3] > 200 && g[i] + g[i + 2] - 2 * g[i + 1] > best[0] + best[2] - 2 * best[1]) best = [g[i], g[i + 1], g[i + 2], g[i + 3]];
+    return best;
+  }, [x, y]);
+}
+// dark #ff4fd8, paper #c4007a
+const traceColour = (p, theme = 'dark') => (theme === 'dark' ? p[0] > 235 && p[1] > 50 && p[1] < 120 && p[2] > 180 : p[0] > 150 && p[0] < 225 && p[1] < 40 && p[2] > 80 && p[2] < 170);
+const trNet = (page) => page.evaluate(() => { const n = window.__linework.trace && window.__linework.trace.net; return n && { wires: n.wires.length, count: n.count, ends: n.ends.length, labels: n.labels.map((l) => l.s) }; });
+const endsShown = (page) => page.$$eval('#tr-ends button', (b) => b.map((x) => x.textContent));
+async function traceAt(page, x, y) {
+  await page.evaluate(() => { window.__linework.trace && window.__linework.trace.clear(); });
+  await clickWorld(page, x, y);
+  await page.waitForFunction(() => window.__linework.trace && window.__linework.trace.net);
+  const b = await stageBox(page);
+  await page.mouse.move(b.x + 4, b.y + b.h - 4); // (no hover highlight over the probes)
+  await settle(page);
+}
+
+test('trace (View › Trace, J): a click lights up the net (pixel probes), panel with length, labels and ends; step, zoom, copy, Esc; options; paper; cross-sheet hook; edits re-trace; a drag pans', async () => {
+  const page = await newPage(CLIP);
+  await openFixture(page, TRACE);
+  await clearToasts(page);
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await page.keyboard.press('j');
+  eq(await page.evaluate(() => window.__linework.tool), 'trace', 'J picks Trace');
+  assert(await page.evaluate(() => document.querySelector('[data-tool="trace"]').getAttribute('aria-pressed')) === 'true', 'the View tab button is pressed');
+  await page.waitForFunction(() => window.__linework.trace && window.__linework.trace.graph); // built as the tool is picked
+  // a drag pans and does not trace
+  const v0 = await page.evaluate(() => window.__linework.view.cx);
+  await dragWorld(page, [60, 140], [80, 120]);
+  assert((await page.evaluate(() => window.__linework.view.cx)) !== v0, 'a drag pans');
+  eq(await trNet(page), null, 'a drag does not trace');
+  await page.evaluate(() => window.__linework.fit());
+  await settle(page);
+  // net A: the long one
+  await traceAt(page, 100, 160);
+  eq(JSON.stringify(await trNet(page)), JSON.stringify({ wires: 5, count: 5, ends: 2, labels: ['W9434'] }), 'net A');
+  assert(traceColour(await overlayPx(page, 120, 160)), 'net A is lit: ' + (await overlayPx(page, 120, 160)));
+  assert(traceColour(await overlayPx(page, 40, 163)), 'its meander too');
+  for (const [x, y] of [[120, 150], [130, 100], [60, 140]]) assert(!traceColour(await overlayPx(page, x, y)), `not lit: ${x}, ${y}`);
+  eq(await page.textContent('#tr-title'), 'Net W9434', 'title');
+  const sum = await page.textContent('#tr-sum');
+  assert(/282\.00 m · 5 wires · 26 segments/.test(sum), sum);
+  eq(await page.textContent('#tr-labels'), 'W9434 ×2', 'labels');
+  eq(JSON.stringify(await endsShown(page)), JSON.stringify(['J4 · 1 (CONN)', 'P1 · P1-A (CONN)']), 'ends');
+  eq(await page.evaluate(() => document.querySelector('#cv-drawing').style.opacity), '0.35', 'the rest is dimmed');
+  assert(await page.isHidden('#tr-sheets'), 'no sheet set: no cross-sheet button');
+  await shot(page, 'trace-dark-1440');
+  // step through the ends, zoom to the net, copy
+  await page.click('#tr-next');
+  eq(await page.evaluate(() => window.__linework.trace.cur), 0, 'first end');
+  const c = await page.evaluate(() => { const a = window.__linework; return [a.view.cx + a.scene.origin[0], a.view.cy + a.scene.origin[1], a.view.scale * 2]; });
+  assert(nearPt(c, [34, 160], 0.01) && c[2] >= 14, 'zoomed to J4 pin 1, pin texts readable: ' + c);
+  assert(await page.isVisible('#tr-ends li.on'), 'the current end is marked');
+  await page.click('#tr-next');
+  const c2 = await page.evaluate(() => { const a = window.__linework; return [a.view.cx + a.scene.origin[0], a.view.cy + a.scene.origin[1]]; });
+  assert(nearPt(c2, [256, 160], 0.01), 'next end: P1-A');
+  await page.click('#tr-zoom');
+  const box = await page.evaluate(() => { const a = window.__linework, b = a.trace.net.bbox, [x0, y0] = a.view.toScreen(b[0], b[3]), [x1, y1] = a.view.toScreen(b[2], b[1]); return [x0, y0, x1, y1, a.view.w, a.view.h]; });
+  assert(box[0] >= 0 && box[1] >= 0 && box[2] <= box[4] && box[3] <= box[5], 'zoom to net: all of it in view ' + box);
+  await page.click('#tr-copy');
+  const txt = (await clipText(page)).replace(/\r\n/g, '\n'); // (the system clipboard may use CRLF)
+  assert(txt.startsWith('Net W9434 · dgn-trace.dgn\nLength 282.00 m · 5 wires · 26 segments\nEnds (2):\n  1. J4 · 1 (CONN) at X 34.00 Y 160.00'), txt);
+  // Esc clears
+  await page.keyboard.press('Escape');
+  await settle(page);
+  eq(await trNet(page), null, 'Esc clears the net');
+  assert(await page.isHidden('#trace-card'), 'and the panel');
+  eq(await page.evaluate(() => document.querySelector('#cv-drawing').style.opacity), '', 'no longer dimmed');
+  assert(!traceColour(await overlayPx(page, 120, 160)), 'nothing lit');
+  eq(await page.evaluate(() => window.__linework.tool), 'trace', 'the tool stays (a second Esc goes back to Pan)');
+  // a T-junction to the coil; a junction dot; crossings connect; through pins
+  await page.evaluate(() => window.__linework.fit());
+  await traceAt(page, 60, 150);
+  eq(JSON.stringify(await endsShown(page)), JSON.stringify(['J4 · 2 (CONN)', 'P1 · P1-B (CONN)', 'K1 (circle)']), 'T-junction: ends');
+  assert(traceColour(await overlayPx(page, 100, 100)), 'the branch is lit');
+  await traceAt(page, 60, 140);
+  assert(/1 junction dot/.test(await page.textContent('#tr-sum')), 'junction dot counted');
+  assert(traceColour(await overlayPx(page, 220, 100)), 'the wire behind the dot is lit');
+  assert(!traceColour(await overlayPx(page, 130, 100)), 'a crossing wire is not');
+  await page.click('#trace-card summary');
+  await page.check('#trace-card [data-o="crossings"]');
+  await settle(page);
+  assert((await trNet(page)).count >= 17, 'crossings connect: ' + JSON.stringify(await trNet(page)));
+  assert(traceColour(await overlayPx(page, 130, 100)), 'the crossing wire is lit now');
+  await page.uncheck('#trace-card [data-o="crossings"]');
+  await traceAt(page, 100, 160);
+  await page.check('#trace-card [data-o="throughPins"]');
+  await settle(page);
+  eq(JSON.stringify((await trNet(page)).labels), JSON.stringify(['W9434', 'W9435']), 'through pins: on across P1');
+  assert(traceColour(await overlayPx(page, 290, 160)), 'the wire beyond the connector is lit');
+  await page.uncheck('#trace-card [data-o="throughPins"]');
+  await page.uncheck('#trace-card [data-o="dim"]');
+  eq(await page.evaluate(() => document.querySelector('#cv-drawing').style.opacity), '', 'Dim the rest off');
+  await page.check('#trace-card [data-o="dim"]');
+  // paper (the shortcut works with the focus on a panel checkbox)
+  await page.keyboard.press('b');
+  eq(await page.evaluate(() => window.__linework.theme), 'paper', 'B from the panel');
+  await settle(page);
+  assert(traceColour(await overlayPx(page, 120, 160), 'paper'), 'paper colour: ' + (await overlayPx(page, 120, 160)));
+  await shot(page, 'trace-paper-1440');
+  await page.keyboard.press('b');
+  // the cross-sheet hook (another module provides app.sheets.findAcross)
+  await page.evaluate(() => { window.__linework.sheets = { findAcross: (q, o) => { window.__found = [q, o]; } }; });
+  await traceAt(page, 100, 160);
+  assert(await page.isVisible('#tr-sheets'), 'Find on other sheets is offered');
+  await page.click('#tr-sheets');
+  eq(await page.evaluate(() => window.__found[0]), 'W9434', 'the label goes to the sheet search');
+  await page.evaluate(() => { delete window.__linework.sheets; });
+  // works in Edit too: an edit re-traces (the branch deleted: the coil is no longer an end), undo restores it
+  await page.evaluate(() => window.__linework.fit());
+  await traceAt(page, 60, 150);
+  await page.waitForFunction(() => window.__linework.edit.ready);
+  await page.keyboard.press('e');
+  assert(await page.isVisible('#trace-card'), 'the net stays lit in Edit');
+  await clickWorld(page, 100, 100);
+  eq((await ED.sel(page)).length, 1, 'the branch selected');
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(() => window.__linework.trace.net && window.__linework.trace.net.ends.length === 2);
+  eq(JSON.stringify(await endsShown(page)), JSON.stringify(['J4 · 2 (CONN)', 'P1 · P1-B (CONN)']), 'traced again after the edit');
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => window.__linework.trace.net && window.__linework.trace.net.ends.length === 3);
+  await page.keyboard.press('j');
+  eq(await page.evaluate(() => window.__linework.tool), 'trace', 'J from Edit');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  eq(await page.evaluate(() => window.__linework.tool), 'pan', 'second Esc: Pan');
+  await close(page);
+});
+
+test('trace at 390 px with touch: tap Trace, tap a wire; the panel docks at the bottom and fits; the close button clears', async () => {
+  const ph = await newPage({ context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } });
+  await openFixture(ph, TRACE);
+  await clearToasts(ph);
+  await ph.tap('[data-tool="trace"]');
+  await ph.waitForFunction(() => window.__linework.trace && window.__linework.trace.graph);
+  eq(await ph.textContent('#tool-hint'), 'Tap a wire to light up everything connected to it', 'touch wording');
+  const [x, y] = await client(ph, 60, 150);
+  await ph.touchscreen.tap(x, y);
+  await ph.waitForFunction(() => window.__linework.trace.net);
+  await settle(ph);
+  eq(JSON.stringify(await endsShown(ph)), JSON.stringify(['J4 · 2 (CONN)', 'P1 · P1-B (CONN)', 'K1 (circle)']), 'traced by a tap');
+  const r = await ph.evaluate(() => { const b = document.querySelector('#trace-card').getBoundingClientRect(), s = document.querySelector('#stage').getBoundingClientRect(); return [b.left, b.right, b.top, b.bottom, window.innerWidth, s.top, s.bottom]; });
+  assert(r[0] >= 0 && r[1] <= r[4], 'the panel fits the width: ' + r);
+  assert(r[3] <= r[6] && r[2] > (r[5] + r[6]) / 2, 'docked in the lower half of the drawing area: ' + r);
+  assert(traceColour(await overlayPx(ph, 60, 150)), 'lit');
+  await shot(ph, 'trace-dark-390');
+  await ph.tap('#tr-close');
+  eq(await trNet(ph), null, 'the close button clears');
+  await close(ph);
+});
+
+test('performance: Trace on the 53k stress drawing — the graph is built in slices (no long task), < 300 ms of work; a trace < 50 ms', async () => {
+  const page = await newPage();
+  await openSample(page, 'stress', 'stress-test-53k.dxf');
+  await clearToasts(page);
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; window.__lt = []; const t0 = performance.now(); new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.startTime >= t0) window.__lt.push(e.duration); }).observe({ type: 'longtask' }); });
+  await page.click('[data-tool="trace"]');
+  await page.waitForFunction(() => window.__linework.trace && window.__linework.trace.graph, null, { timeout: 30000 });
+  await page.evaluate(() => window.__linework.zoomToWorld(-500, -500, 10500, 10500));
+  await settle(page);
+  await traceAt(page, 5000, 0);
+  const s = await page.evaluate(() => ({ ...window.__linework.traceStats, wires: window.__linework.trace.net.wires.length, lt: window.__lt }));
+  const longest = s.lt.length ? Math.max(...s.lt) : 0;
+  // the same build in one go, best of three (the first one above also pays for compiling the code)
+  const again = await page.evaluate(async () => {
+    const m = await import('./src/tools/trace.js'), a = window.__linework, ms = [], tr = [];
+    for (let k = 0; k < 3; k++) { const G = m.buildNetGraph(a.scene); ms.push(G.ms); tr.push(m.traceNet(G, a.trace.net.seed, {}).ms); }
+    return { build: Math.min(...ms), trace: Math.min(...tr) };
+  });
+  perf.trace = { entities: 53100, firstBuildMs: +s.buildMs.toFixed(1), firstBuildWallMs: +s.buildWallMs.toFixed(1), firstTraceMs: +s.traceMs.toFixed(2), buildMs: +again.build.toFixed(1), traceMs: +again.trace.toFixed(2), netWires: s.wires, longTaskMaxMs: +longest.toFixed(1) };
+  eq(s.wires, 3600, 'the bay grid: 3600 lines joined at their ends and Ts');
+  assert(again.build < 300, `graph build ${again.build.toFixed(0)} ms`);
+  assert(s.traceMs < 50 && again.trace < 50, `trace ${s.traceMs.toFixed(1)} / ${again.trace.toFixed(1)} ms`);
+  assert(longest < 100, `no long main-thread task while the graph is built (${longest.toFixed(0)} ms)`);
+  await close(page);
+});
+
 // ------------------------------------------------------------------ run
 let failed = 0;
 for (const t of tests) {

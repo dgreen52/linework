@@ -17,7 +17,7 @@ import { exportPng, buildPrintSheet, clearPrintSheet } from './app/print.js';
 import { initEdit, EDIT_TOOLS, EDIT_HINTS, TOUCH_HINTS } from './app/edit-ui.js';
 
 const TOOL_GROUP = {
-  pan: 'view', zoombox: 'view', distance: 'measure', length: 'measure', area: 'measure',
+  pan: 'view', zoombox: 'view', trace: 'view', distance: 'measure', length: 'measure', area: 'measure',
   select: 'markup', pen: 'markup', line: 'markup', arrow: 'markup', rect: 'markup', ellipse: 'markup',
   cloud: 'markup', callout: 'markup', highlight: 'markup',
   eselect: 'edit', eline: 'edit', epoly: 'edit', erect: 'edit', ecircle: 'edit', etext: 'edit',
@@ -26,6 +26,7 @@ const MEASURE_TOOLS = new Set(['distance', 'length', 'area']);
 const MARKUP_TOOLS = new Set(['pen', 'line', 'arrow', 'rect', 'ellipse', 'cloud', 'callout', 'highlight']);
 const HINTS = {
   zoombox: 'Drag a box around the area to zoom into',
+  trace: 'Click a wire to light up everything connected to it · drag pans · Esc clears',
   distance: 'Click two points to measure the distance between them',
   length: 'Click points along the path · double-click or Enter to finish',
   area: 'Click the corners of the shape · double-click, Enter or click the first point to finish',
@@ -43,12 +44,15 @@ const HINTS = {
 /** Touch wording (no mouse clicks, Enter or Delete keys on a phone). */
 const TOUCH_TOOL_HINTS = {
   distance: 'Tap two points to measure the distance between them',
+  trace: 'Tap a wire to light up everything connected to it',
   length: 'Tap points along the path · Finish when done',
   area: 'Tap the corners of the shape · Finish (or tap the first point) when done',
   select: 'Tap a markup to select it · drag to move · double-tap a callout to edit',
   cloud: 'Drag a box to cloud it, or tap corners and then Finish',
   ...TOUCH_HINTS,
 };
+/** Tools that show what is under the cursor. */
+const hovers = (t) => t === 'pan' || t === 'select' || t === 'trace';
 const SNAP_LABEL = { endpoint: 'End', midpoint: 'Middle', center: 'Centre', intersection: 'Crossing', nearest: 'On line' };
 const plural = (n, word) => `${fmtNum(n, 0)} ${word}${n === 1 ? '' : 's'}`;
 
@@ -203,7 +207,7 @@ function drawOverlay() {
   ctx.clearRect(0, 0, cvOverlay.width, cvOverlay.height);
   if (!app.scene) return;
   // hover highlight (drawing primitive) in scene coordinates
-  if (app.hover && (app.tool === 'pan' || app.tool === 'select') && !app.draft) {
+  if (app.hover && hovers(app.tool) && !app.draft) {
     const M = app.view.matrix(dpr);
     ctx.setTransform(M[0], M[1], M[2], M[3], M[4], M[5]);
     ctx.strokeStyle = accent();
@@ -772,6 +776,7 @@ function setTool(t) {
   cvOverlay.className = t === 'pan' ? '' : t === 'select' || t === 'eselect' ? 'pointer' : 'crosshair';
   restoreHint();
   edit.toolChanged(t);
+  if (t === 'trace') trace('tool'); // (loads the tool and finds the wires before the first click)
   if (app.tools) app.tools.toolChanged();
   updateMeasureCard();
   updateFinishBar();
@@ -892,7 +897,7 @@ function updateCursor(sx, sy, pointerType) {
 }
 
 function updateHover(sx, sy) {
-  if (!app.scene || !(app.tool === 'pan' || app.tool === 'select')) { app.hover = null; return; }
+  if (!app.scene || !hovers(app.tool)) { app.hover = null; return; }
   const [lx, ly] = app.view.toWorld(sx, sy);
   const h = pickItem(app.scene, lx, ly, 5 / app.view.scale, (li) => !app.layerVisible || app.layerVisible[li]);
   app.hover = h;
@@ -986,7 +991,7 @@ function toolMove(sx, sy, e, pressed) {
   if (EDIT_TOOLS.has(t)) { edit.move(sx, sy, e, pressed); return; }
   if (MEASURE_TOOLS.has(t)) { if (app.mdraft && app.mdraft.pts.length) updateMeasureCard(); invalidate(); return; }
   if (!pressed) {
-    if (t === 'pan' || t === 'select') updateHover(sx, sy);
+    if (hovers(t)) updateHover(sx, sy);
     if (app.draft && app.draft.type === 'cloud-poly') invalidate();
     invalidate();
     return;
@@ -1153,10 +1158,10 @@ cvOverlay.addEventListener('pointerdown', (e) => {
     return;
   }
   if (pointers.size > 2) return;
-  const pan = e.button === 1 || (e.button === 0 && (app.tool === 'pan' || app.spaceDown));
+  const pan = e.button === 1 || (e.button === 0 && (app.tool === 'pan' || app.tool === 'trace' || app.spaceDown));
   if (pan) {
     e.preventDefault();
-    gesture = { type: 'pan', x: p.x, y: p.y, moved: false };
+    gesture = { type: 'pan', x: p.x, y: p.y, moved: false, x0: p.x, y0: p.y, tap: app.tool === 'trace' && e.button === 0 && !app.spaceDown && e.pointerType };
     cvOverlay.classList.add('dragging');
     return;
   }
@@ -1205,7 +1210,12 @@ function endPointer(e) {
   if (!had) return;
   const p = local(e);
   if (gesture && gesture.type === 'pinch') { if (pointers.size === 0) gesture = null; return; }
-  if (gesture && gesture.type === 'pan') { gesture = null; cvOverlay.classList.remove('dragging'); return; }
+  if (gesture && gesture.type === 'pan') {
+    const g = gesture;
+    gesture = null; cvOverlay.classList.remove('dragging');
+    if (g.tap && e.type === 'pointerup' && Math.hypot(p.x - g.x0, p.y - g.y0) < 6) trace('at', p.x, p.y, g.tap); // Trace: a click / tap, not a drag
+    return;
+  }
   if (gesture && gesture.type === 'tool') { gesture = null; if (e.type === 'pointerup') toolUp(p.x, p.y, e); else { app.draft = null; app.zoomBox = null; edit.cancelGesture(); invalidate(); } }
 }
 cvOverlay.addEventListener('pointerup', endPointer);
@@ -1238,7 +1248,7 @@ const NOT_TEXT = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'col
 const isTyping = (el) => !!el && ((el.tagName === 'INPUT' && !NOT_TEXT.has(el.type)) || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
 /** A focused control that Space / Enter activate (a button, checkbox, tab, menu item...). */
 const isControl = (el) => !!el && el !== document.body && !!el.closest && !!el.closest('button, a[href], input, select, textarea, summary, [role="tab"], [role^="menuitem"]');
-const KEY_TOOLS = { h: 'pan', z: 'zoombox', d: 'distance', g: 'length', a: 'area', v: 'select', p: 'pen', n: 'line', w: 'arrow', r: 'rect', o: 'ellipse', c: 'cloud', t: 'callout', k: 'highlight' };
+const KEY_TOOLS = { h: 'pan', z: 'zoombox', j: 'trace', d: 'distance', g: 'length', a: 'area', v: 'select', p: 'pen', n: 'line', w: 'arrow', r: 'rect', o: 'ellipse', c: 'cloud', t: 'callout', k: 'highlight' };
 document.addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]')) return;
   const typing = isTyping(e.target);
@@ -1276,6 +1286,7 @@ document.addEventListener('keydown', (e) => {
     if (app.mdraft && app.mdraft.pts.length) { app.mdraft.pts = []; updateMeasureCard(); updateFinishBar(); invalidate(); return; }
     if (app.draft) { app.draft = null; updateFinishBar(); invalidate(); return; }
     if (app.selected) { app.selected = null; updateSelectionStatus(); invalidate(); return; }
+    if (app.trace && app.trace.net) { app.trace.clear(); return; }
     if (app.tool !== 'pan') setTool('pan');
     return;
   }
@@ -1504,6 +1515,15 @@ function tools(cmd, ...args) {
   return toolsP.then((T) => T.run(cmd, ...args));
 }
 app.loadTools = tools;
+// Trace (View › Trace, J): src/app/trace-ui.js, fetched the first time the tool is picked.
+let traceP = null;
+function trace(cmd, ...args) {
+  if (!traceP) {
+    traceP = import('./app/trace-ui.js').then((m) => (app.trace = m.initTrace(app, { invalidate })));
+    traceP.catch(() => { traceP = null; toast('This tool could not be loaded. Check the connection and try again.', { kind: 'error' }); });
+  }
+  return traceP.then((T) => T.run(cmd, ...args));
+}
 
 // Level names (DGN v7 has none): kept in this browser per drawing name, never written into the file.
 const LEVELS = 'linework:levels:';

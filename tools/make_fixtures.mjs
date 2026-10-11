@@ -2,7 +2,7 @@
 // Generates every SYNTHETIC DXF sample and test fixture. No real drawings are read or copied.
 //   node tools/make_fixtures.mjs           -> samples/*.dxf, tests/fixtures/*.dxf (+ stress-50k.dxf)
 // DGN fixtures come from tools/make_dgn_fixtures.py (needs Python + GDAL).
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DxfWriter } from '../samples/gen/dxf-writer.js';
@@ -315,5 +315,37 @@ for (const [rev, x] of [[1, 41], [2, 42]]) {
   w.line([0, 0], [100, 0], { layer: 'PART' });
   w.line([100, 0], [100, x], { layer: 'PART' });
   out(FIX, `edge-rev-${rev}.dxf`, w.toString());
+}
+// 18) the invented wiring sheet of the Trace tests (tools/trace_sheet.json; the DGN twin comes from
+// make_dgn_fixtures.py): connectors and a terminal strip as blocks, junction dots as solid hatches, the
+// hop arc as a polyline bulge
+{
+  const J = JSON.parse(readFileSync(join(ROOT, 'tools', 'trace_sheet.json'), 'utf8'));
+  const w = new DxfWriter({ version: 'AC1015', insunits: 6 });
+  w.layer('BORDER', 8).layer('WIRES', 3).layer('DOTS', 3).layer('LABELS', 2).layer('CELLS', 7).layer('COILS', 4).layer('NOTES', 6);
+  const dot = (b, d, p) => b.hatch([[[d.c[0] - d.r, d.c[1], 1], [d.c[0] + d.r, d.c[1], 1]]], { solid: true }, p);
+  const text = (b, t, p) => b.text(t.s, t.p, { h: t.h, rot: t.rot || 0 }, p);
+  w.lwpolyline(J.border, false, { layer: 'BORDER' });
+  const names = ['J4CONN', 'P1CONN', 'TERMS', 'TBLOCK'];
+  J.cells.forEach((c, k) => {
+    w.block(names[k], [0, 0], (b) => {
+      b.lwpolyline(c.frame.slice(0, -1), true, { layer: '0' });
+      for (const l of c.lines || []) b.line(l[0], l[1], { layer: '0' });
+      for (const d of c.dots || []) dot(b, d, { layer: '0' });
+      for (const t of c.texts) text(b, t, { layer: '0' });
+    });
+    w.insert(names[k], [0, 0], {}, { layer: 'CELLS' });
+  });
+  for (const x of J.wires) {
+    if (x.chain) { // line, hop arc, line: one polyline with a bulge (tan of a quarter of the sweep; negative = clockwise)
+      const [a, arc, b] = x.chain;
+      w.lwpolyline([[...a.pts[0]], [...a.pts[1], Math.tan((arc.arc.sweep * Math.PI) / 720)], ...b.pts.map((p) => [...p])], false, { layer: 'WIRES' });
+    } else if (x.pts.length === 2) w.line(x.pts[0], x.pts[1], { layer: 'WIRES' });
+    else w.lwpolyline(x.pts, false, { layer: 'WIRES' });
+  }
+  for (const d of J.dots) dot(w, d, { layer: 'DOTS' });
+  for (const c of J.circles) w.circle(c.c, c.r, { layer: 'COILS' });
+  for (const t of J.texts) text(w, t, { layer: t.level === 30 ? 'COILS' : t.level === 20 ? 'NOTES' : 'LABELS' });
+  out(FIX, 'trace-sheet.dxf', w.toString());
 }
 console.log('done');

@@ -48,6 +48,10 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
 * **Keeps your work**: **recent drawings** reopen in one click, and **unsaved edits survive** a
   crash, a closed tab or an update reload — open the drawing again and Linework offers them back
   ([Files](#files-recent-drawings-saving-over-the-original-recovery)).
+* **Traces wires** in schematics: View › **Trace** (`J`), click a wire and everything connected to it
+  lights up — through shared ends, T-junctions and junction dots, not through plain crossings — with
+  its length, its labels (wire numbers) and where it ends: the connector or terminal and the pin text,
+  a symbol, or an open end ([Trace a wire](#trace-a-wire)).
 * **Compares revisions** (new in v0.4): View › **Compare** lays another revision over the open
   drawing — only in this one red, only in the other green, the rest dimmed — with counts and a
   list to step through ([Compare](#compare-two-revisions)).
@@ -110,6 +114,7 @@ for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/d
 | `Z` | zoom to a box | `A` | area | `R` `O` `C` | box, ellipse, revision cloud |
 | `+` `−`, arrow keys | zoom, pan | `S` | snap on/off | `T` `K` | text callout, highlighter |
 | `H` | pan tool | `Enter` / double-click | finish length/area | `Ctrl+Z` / `Ctrl+Y` | undo / redo |
+| `J` | trace a wire (`Esc` clears) | | | | |
 | `L` | layers panel | `Backspace` | remove last point | `Ctrl+S` | save markups |
 | `B` | dark / paper | `Esc` | cancel, back to pan | `Ctrl+O` / `Ctrl+P` | open / print |
 
@@ -359,6 +364,36 @@ installed app's "Open with", or by dropping it on the window. With a handle:
 Other browsers (Firefox, Safari, phones) keep the previous behaviour: the plain file chooser, Save
 downloads a copy, and recent entries open the chooser; recovery works there too.
 
+## Trace a wire
+
+For troubleshooting from a wiring schematic (made with DGN v7 schematics in mind; DXF and DWG work the
+same way). View › **Trace** (`J`) — in any mode, and it never changes the drawing:
+
+* **Click a wire** (tap on a phone; dragging still pans) and its whole net lights up in pink, the rest
+  of the drawing dimmed. Wires are lines, line strings, chains and arcs that are not part of a cell or
+  block. They connect where their **ends meet**, where an end lands **on another wire (a T)**, and
+  through **junction dots** (small filled circles or shapes, small circles; a wire passing through a
+  dot is connected too). Lines that merely **cross** are *not* connected — the schematic convention;
+  *Options › Crossings connect* joins them anyway. A hop arc over another wire is part of its wire.
+* **Cells and blocks** (connectors, terminal strips, splices) stop the net: the cell line or pin dot the
+  wire lands on is lit, and the end is listed with the **cell name and the pin** — the cell's text
+  nearest to the wire end (and the cell's larger reference text, e.g. `J4 · 12`); a wire drawn into a
+  connector up to its pin text counts too. *Options › Through pins* continues to the wires on the same
+  pin text of the same cell (both sides of a connector or terminal). Wire ends on a symbol outline
+  (a relay coil) are listed with the text in it; other ends are **open ends**, with a note next to them
+  (`TO SH 2`) when there is one.
+* **The panel**: the net's length (wires as drawn, arcs exact), wires, segments and junction dots; its
+  **labels** — texts right next to its wires, such as wire numbers and signal names (click one to show
+  it); its **ends** — click one, or step with ‹ ›, to zoom to it with its pin readable. **Zoom to net**,
+  **Copy** (the net as text), `Esc` or × clears. On a phone the panel sits at the bottom of the drawing.
+* **Gap** (*Options*): ends closer than this touch — by default 5 % of the drawing's usual text height
+  (so a sloppy end still connects); type a larger value for drawings with bigger gaps.
+* Hidden levels / layers are not traced through. After an edit the net is traced again from the same
+  point. When a set of sheets is open (a later feature), **Find on other sheets** looks for the net's
+  label on the other sheets.
+* The connections are found once per drawing (a slice at a time, so the page never freezes): about
+  0.1–0.3 s for a 50,000-item drawing, then each trace takes a few milliseconds.
+
 ## Compare two revisions
 
 View › **Compare** asks for another revision of the drawing (same kind: DGN with DGN, DXF or DWG
@@ -441,6 +476,7 @@ rendering, 1440×900, on the development laptop. Real GPUs do better.
 | Edit, 53k drawing: box-select 554 items | ≈3 ms to select; 60 fps while dragging the box |
 | Edit, 53k drawing: drag those 554 items | median **16.7 ms**/frame, p95 16.8 ms (60 fps) |
 | Edit, 53k drawing: commit the move / undo it | ≈36 ms / ≈11 ms (no re-parse, no rebuild); next frame ≈2 ms |
+| Trace, 53k drawing: find the connections / trace a net (3,600 lines) | ≈0.26 s (best of three, measured while the laptop was busy with other work; the first time it runs in 12 ms slices, no long task); ≈6 ms per trace |
 | Edit, 53k drawing: copy those 554 items / paste them | ≈6–11 ms to copy; the pasted outline follows the cursor at median 16.7 ms/frame (p95 ≈17–33 ms); ≈6–8 ms to commit |
 
 How: geometry is parsed and batched in a worker; each spatial chunk keeps one `Path2D` per style,
@@ -492,8 +528,8 @@ Install it from a tag, e.g. `npm install github:dgreen52/linework#v0.4.2`. `buil
 ## Tests
 
 ```bash
-npm test                                  # 220 Node unit tests (node --test, no dependencies)
-NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 50 Playwright end-to-end tests
+npm test                                  # 243 Node unit tests (node --test, no dependencies)
+NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 53 Playwright end-to-end tests
 ```
 
 Some unit tests read the files the writers produce with GDAL/OGR through Python (`from osgeo
@@ -559,6 +595,17 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   undo) / Discard, Save clears the journal; compare overlay pixels, toggles, stepping and zoom,
   edits while comparing, mixed kinds refused, DXF revisions, 390 px; vector print at A3 1:2 and
   Letter 1"=20' black and white checked in the PDF (page size, one page, paths and text, no images).
+* Trace (`trace.test.mjs`, an invented wiring sheet described once in `tools/trace_sheet.json` and
+  built as DGN (`dgn-trace.dgn`, read like GDAL/OGR) and as DXF (`trace-sheet.dxf`), every case on both):
+  a long net over 26 segments (meander and chained lines), a T-junction to a relay coil, a junction-dot T
+  and a four-way dot, wires crossing four nets without joining (and joined with *Crossings connect*), a
+  hop arc (exact length), a gap within the tolerance and one beyond it (and a wider tolerance), two
+  wires on one pin, *Through pins* across a connector, connector and terminal-strip cells with pin texts
+  and pin dots, rotated wire labels, off-sheet notes at open ends, hidden levels, picking a dot or a pin
+  stub, edits and undo, the sliced build, the DXF schematic sample, and 50,000 items (build < 300 ms,
+  a trace < 50 ms). End to end: click to trace (pixel probes of the lit and unlit wires), the panel,
+  stepping, zoom, copy, `Esc`, the options, paper, the cross-sheet hook, re-tracing after an edit in
+  Edit mode, a drag that pans, a tap at 390 px, and the 53k stress drawing (no long task while building).
 * Editing tools (`tools.test.mjs`, synthetic wiring sheet `dgn-wiring.dgn`, read like GDAL/OGR):
   find (substring, whole word, case, visible levels, text in cells, reading order), replace one / all
   as one change list with every other element byte-identical and the cell rebuilt from its bytes,
@@ -595,13 +642,14 @@ src/scene.js            blocks → flat primitives, colours, local origin, spati
 src/edit/               edit operations, edit document (changes, undo, selection), live scene,
                         find / replace, key-ins, transforms, attributes + element info, level names
 src/view/               viewport, Canvas2D renderer (WebGL-replaceable interface), batches, colours
-src/tools/              snaps, measurement, revision compare (compare.js)
+src/tools/              snaps, measurement, revision compare (compare.js), wire tracing (trace.js)
 src/markup/             markup model, revision clouds, sidecar format, undo history, drawing
 src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, PNG export; loaded
                         after start-up or on first use: files.js + store.js (file picker, save
                         over the original, recent drawings, unsaved-edit journal), compare.js
                         (compare overlay + panel), print-svg.js (vector print to scale),
-                        tools-ui.js (editing tools: find, key-ins, More menu, info, level names)
+                        tools-ui.js (editing tools: find, key-ins, More menu, info, level names),
+                        trace-ui.js (the Trace tool and its panel)
 src/worker.js           parse worker
 samples/                synthetic sample drawings (+ generators in samples/gen/)
 tools/                  fixture generators (DXF, DGN, DWG), DWG reader vendoring/build scripts,

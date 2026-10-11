@@ -60,6 +60,7 @@
     <symbol id="i-find" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15 15l5.5 5.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-trace" viewBox="0 0 24 24"><path d="M2 7h9v10h11M11 12h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="12" r="2.4" fill="currentColor"/></symbol>
     <symbol id="i-compare" viewBox="0 0 24 24"><rect x="3" y="4" width="11" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="10" y="9" width="11" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.5 2"/></symbol>
   </defs>
 </svg>
@@ -100,6 +101,7 @@
     <button type="button" class="tool" data-tool="zoombox" aria-pressed="false" title="Zoom to a box: drag a rectangle (Z)"><svg class="ic" aria-hidden="true"><use href="#i-zoombox"/></svg><span>Zoom box</span></button>
     <button type="button" class="tool" data-action="fit" title="Fit the whole drawing (F)"><svg class="ic" aria-hidden="true"><use href="#i-fit"/></svg><span>Fit</span></button>
     <button type="button" class="tool" data-action="find" title="Find text in the drawing, also inside cells and blocks (Ctrl+F)"><svg class="ic" aria-hidden="true"><use href="#i-find"/></svg><span>Find</span></button>
+    <button type="button" class="tool" data-tool="trace" aria-pressed="false" title="Trace a wire: click it to light up everything connected to it, with its length, labels and ends (J)"><svg class="ic" aria-hidden="true"><use href="#i-trace"/></svg><span>Trace</span></button>
     <span class="sep" aria-hidden="true"></span>
     <button type="button" class="tool" data-action="layers" aria-pressed="false" id="btn-layers" title="Show or hide layers (L)"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg><span>Layers</span></button>
     <button type="button" class="tool" data-action="theme" id="btn-theme" title="Switch between a dark CAD background and white paper (B)"><svg class="ic" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-label">Paper</span></button>
@@ -291,6 +293,7 @@
           <dt><kbd>H</kbd></dt><dd>Pan tool</dd>
           <dt><kbd>L</kbd></dt><dd>Layers panel (DGN: name levels with the pen, or import a names file)</dd>
           <dt><kbd>Ctrl</kbd>+<kbd>F</kbd></dt><dd>Find text (<kbd>Enter</kbd> / <kbd>Shift</kbd>+<kbd>Enter</kbd> or <kbd>F3</kbd>: next / previous); in Edit also replace</dd>
+          <dt><kbd>J</kbd></dt><dd>Trace a wire: click it to light up its net (ends at cells and pins, labels, length); <kbd>Esc</kbd> clears</dd>
           <dt><kbd>I</kbd></dt><dd>Element info: type, level, colour, weight, text, size, DGN element and offset</dd>
           <dt><kbd>B</kbd></dt><dd>Dark background / white paper</dd>
         </dl>

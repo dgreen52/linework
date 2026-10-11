@@ -58,8 +58,8 @@ const oid = (o) => { if (!o) return 0; let v = ids.get(o); if (!v) ids.set(o, (v
 export function initTools(app, api) {
   const edit = api.edit, X = edit.x, E = app.edit;
   document.head.appendChild(Object.assign(document.createElement('style'), { textContent: CSS }));
-  const stack = Object.assign(document.createElement('div'), { className: 'tools-stack' });
-  $('#stage').appendChild(stack);
+  let stack = $('#stage .tools-stack'); // (the Trace panel may have made it)
+  if (!stack) { stack = Object.assign(document.createElement('div'), { className: 'tools-stack' }); $('#stage').appendChild(stack); }
   const inEdit = () => EDIT_TOOLS.has(app.tool);
   const vis = (li) => !app.layerVisible || !!app.layerVisible[li];
   const N = (v) => fmtNum(v, app.precision);

@@ -13,7 +13,7 @@ const TYPES = [
 export const backupName = (n) => { const m = /^(.*?)(\.[^.]*)?$/.exec(n); return `${m[1]}.bak${m[2] || ''}`; };
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 /** Permission on a handle (a prompt needs a click or key press). */
-async function permit(h, mode) {
+export async function permit(h, mode) {
   if (!h || typeof h.queryPermission !== 'function') return true;
   const o = { mode };
   if ((await h.queryPermission(o)) === 'granted') return true;
@@ -30,10 +30,12 @@ export function initFiles(app, api) {
   async function pick() {
     if (typeof window.showOpenFilePicker !== 'function') { $('#file-input').click(); return; }
     let hs;
-    try { hs = await window.showOpenFilePicker({ id: 'linework-open', types: TYPES }); } catch (e) {
+    try { hs = await window.showOpenFilePicker({ id: 'linework-open', types: TYPES, multiple: true }); } catch (e) {
       if (!(e && e.name === 'AbortError')) $('#file-input').click(); // not allowed here (a frame...)
       return;
     }
+    const drawings = (hs || []).filter((h) => !/\.json$/i.test(h.name));
+    if (drawings.length > 1) { (await app.loadSheets()).openHandles(drawings); return; } // several: a sheet set
     if (hs && hs[0]) await openHandle(hs[0]);
   }
   /** Open a file handle (picker, recent list, "Open with"); extra.dir: its folder. */
@@ -57,13 +59,16 @@ export function initFiles(app, api) {
     if (!doc.hash) return;
     F.journal = new Journal(db, doc);
     if (!doc.keep) F.warned = false;
-    try {
-      F.list = await addRecent(db, { name: doc.name, format: doc.format, size: doc.size, hash: doc.hash, when: Date.now(), handle: doc.handle || null, dir: doc.dir || null, sample: doc.sample || null });
-      if (app.doc === doc) {
-        doc.recent = F.list[0];
-        if (!doc.dir && doc.recent.dir) doc.dir = doc.recent.dir; // folder access given earlier
-      }
-    } catch { /* storage unavailable: no list */ }
+    // a sheet of a set: the set is the recent entry (src/app/sheets.js)
+    if (!doc.set) {
+      try {
+        F.list = await addRecent(db, { name: doc.name, format: doc.format, size: doc.size, hash: doc.hash, when: Date.now(), handle: doc.handle || null, dir: doc.dir || null, sample: doc.sample || null });
+        if (app.doc === doc) {
+          doc.recent = F.list[0];
+          if (!doc.dir && doc.recent.dir) doc.dir = doc.recent.dir; // folder access given earlier
+        }
+      } catch { /* storage unavailable: no list */ }
+    }
     if (doc.keep || app.doc !== doc) { render(); return; }
     const j = await F.journal.read().catch(() => null);
     await render();
@@ -79,8 +84,8 @@ export function initFiles(app, api) {
       <p><button type="button" class="btn sm" data-recent-clear title="Forget this list (the files themselves are not touched)">Clear list</button></p>` : '';
     if (!$('#menu-recent').hidden) fillMenu();
   }
-  const meta = (r) => [r.format, r.size ? fmtBytes(r.size) : '', fmtWhen(r.when), F.kept.has(journalKey(r)) ? 'unsaved edits kept' : '', !r.handle && !r.sample && r.format ? 'pick again' : ''].filter(Boolean).join(' · ');
-  const item = (r) => `<button type="button" class="sample" data-recent="${esc(r.id)}" title="${esc(r.handle || r.sample ? 'Open ' + r.name : 'Choose ' + r.name + ' in the file dialog')}"><strong>${esc(r.name)}</strong><span>${esc(meta(r))}</span></button>`;
+  const meta = (r) => (r.set ? ['Sheet set', plural(r.set.n, 'sheet'), fmtWhen(r.when), r.handle || (r.handles && r.handles.length) ? '' : 'pick again'] : [r.format, r.size ? fmtBytes(r.size) : '', fmtWhen(r.when), F.kept.has(journalKey(r)) ? 'unsaved edits kept' : '', !r.handle && !r.sample && r.format ? 'pick again' : '']).filter(Boolean).join(' · ');
+  const item = (r) => `<button type="button" class="sample" data-recent="${esc(r.id)}" title="${esc(r.handle || r.sample || r.handles ? 'Open ' + r.name : 'Choose ' + r.name + ' in the file dialog')}"><strong>${esc(r.name)}</strong><span>${esc(meta(r))}</span></button>`;
   function fillMenu() {
     const m = $('#menu-recent');
     m.innerHTML = F.list.map((r) => `<button type="button" role="menuitem" data-recent="${esc(r.id)}"><span><strong>${esc(r.name)}</strong><small>${esc(meta(r))}</small></span></button>`).join('')
@@ -95,6 +100,7 @@ export function initFiles(app, api) {
   async function reopen(id) {
     const r = F.list.find((x) => x.id === id);
     if (!r) return;
+    if (r.set) { (await app.loadSheets()).reopen(r); return; }
     if (r.sample) { api.openSample(r.sample); return; }
     if (r.handle) { await openHandle(r.handle, { dir: r.dir }); return; }
     toast(`Choose ${r.name} again`, { key: 'recent', detail: 'This browser cannot reopen files by itself: pick it in the file dialog.' });
@@ -210,7 +216,7 @@ export function initFiles(app, api) {
     }
     // carry on from the file on disk (view, layers, markups kept)
     await (F.journal ? F.journal.discard().catch(() => {}) : null);
-    api.showDrawing(done.read, doc.name, { handle: doc.handle, dir: doc.dir, modified: done.modified, saveOk: true, backup: doc.backup, backupDone: doc.backupDone, keep: true });
+    api.showDrawing(done.read, doc.name, { set: doc.set, sheet: doc.sheet, handle: doc.handle, dir: doc.dir, modified: done.modified, saveOk: true, backup: doc.backup, backupDone: doc.backupDone, keep: true });
     toast(`Saved over ${doc.name}`, {
       key: 'saved', timeout: 7000, list: notes, listTitle: 'Notes',
       detail: [done.bak, 'Nothing was uploaded. Undo starts again from the saved file.'].filter(Boolean).join(' '),

@@ -9,14 +9,17 @@ export const JOURNAL_MAX_DOCS = 6; // the oldest are forgotten first
 const STORES = ['recent', 'journal', 'edits'];
 const ORIG = { orig: 1 }; // a stored entry's "entity as read from the file"
 
-/** get(store, id), all(store, idPrefix?), batch([{ s, put } | { s, del } | { s, prefix }]) in one transaction. */
-export function openStore(idb = globalThis.indexedDB) {
-  const mem = memoryStore();
+/**
+ * get(store, id), all(store, idPrefix?), batch([{ s, put } | { s, del } | { s, prefix }]) in one transaction.
+ * name / stores: another database (the sheet-set index cache, src/app/sheets.js, keeps its own).
+ */
+export function openStore(idb = globalThis.indexedDB, name = 'linework', stores = STORES) {
+  const mem = memoryStore(stores);
   if (!idb) return mem;
   let dbp = null;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
-    const r = idb.open('linework', 1);
-    r.onupgradeneeded = () => { for (const s of STORES) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s, { keyPath: 'id' }); };
+    const r = idb.open(name, 1);
+    r.onupgradeneeded = () => { for (const s of stores) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s, { keyPath: 'id' }); };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
     r.onblocked = () => rej(new Error('blocked'));
@@ -61,8 +64,8 @@ export function openStore(idb = globalThis.indexedDB) {
 }
 
 /** The same API in memory (values kept as given). */
-export function memoryStore() {
-  const S = Object.fromEntries(STORES.map((s) => [s, new Map()]));
+export function memoryStore(stores = STORES) {
+  const S = Object.fromEntries(stores.map((s) => [s, new Map()]));
   return {
     kind: 'memory',
     async get(s, id) { return S[s].get(id); },

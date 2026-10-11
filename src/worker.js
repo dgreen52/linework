@@ -4,6 +4,7 @@
 // After 'done', the drawing model (needed for editing and saving) follows in small pieces so the
 // main thread never spends long deserialising it: { id, type: 'model-part', entities } ... then
 // { id, type: 'model', meta, paperEntities, bytes? } (bytes = the original file, DGN only).
+// { type: 'index', id, name, buffer }: a sheet of a set, only its text index comes back (tools/sheets.js).
 import { parseDrawingAsync } from './formats/detect.js';
 import { buildScene, sceneTransferables, packTexts } from './scene.js';
 import { buildChunks, chunkTransferables } from './view/batches.js';
@@ -61,6 +62,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof self.
   self.onmessage = async (ev) => {
     const msg = ev.data;
     if (msg && msg.type === 'ping') { self.postMessage({ type: 'pong' }); return; } // the page checks the reader runs
+    if (msg && msg.type === 'index') { self.postMessage(await (await import('./tools/sheets.js')).indexJob(msg, loadInWorkerScope)); return; }
     try {
       const { scene: sc, model, bytes } = await loadInWorkerScope(msg, (m) => self.postMessage(m));
       const scene = packTexts(sc);

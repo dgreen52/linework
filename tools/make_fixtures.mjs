@@ -31,6 +31,40 @@ if (!process.argv.includes('--no-stress')) {
   out(FIX, 'stress-50k.dxf', s.text);
 }
 
+// ---------------------------------------------------------------- sheet set: PNL-04 and PNL-05 (PNL-01..03 are DGN, see make_dgn_fixtures.py)
+// An invented pump control panel set: wire numbers repeat across sheets, texts refer to other sheets, the
+// title block is a block with attributes (TITLE / DWG_TITLE, sheet number, drawing number).
+{
+  mkdirSync(join(FIX, 'sheets'), { recursive: true });
+  const sheets = [
+    { k: 4, tag: 'TITLE', title: 'PUMP CONTROL I/O', wires: ['W201', 'W240'], refs: ['SEE SHEET 3'] },
+    { k: 5, tag: 'DWG_TITLE', title: 'PUMP CONTROL CABLES', wires: ['W202', 'W250'], refs: ['BACK TO SH 1'], note: 'NOTES' },
+  ];
+  for (const s of sheets) {
+    const w = new DxfWriter({ version: 'AC1015', insunits: 6 });
+    w.layer('BORDER', 8).layer('WIRES', 3).layer('LABELS', 2).layer('REFS', 4).layer('TITLE', 7);
+    w.block('TBLOCK', [0, 0], (b) => {
+      b.lwpolyline([[0, 0], [58, 0], [58, 18], [0, 18]], true, { layer: '0' });
+      b.attdef(s.tag, 'Title', '-', [2, 12], { h: 2.5 }, { layer: '0' });
+      b.attdef('SHEET', 'Sheet', '-', [2, 6], { h: 1.5 }, { layer: '0' });
+      b.attdef('DWGNO', 'Drawing number', '-', [2, 2], { h: 1.5 }, { layer: '0' });
+    });
+    w.lwpolyline([[0, 0], [200, 0], [200, 120], [0, 120]], true, { layer: 'BORDER' });
+    s.wires.forEach((n, i) => {
+      w.line([30, 95 - 15 * i], [120, 95 - 15 * i], { layer: 'WIRES' });
+      w.text(n, [60, 96 - 15 * i], { h: 2 }, { layer: 'LABELS' });
+    });
+    s.refs.forEach((r, i) => w.text(r, [150, 95 - 15 * i], { h: 2 }, { layer: 'REFS' }));
+    if (s.note) w.text(s.note, [160, 30], { h: 4 }, { layer: 'TITLE' }); // bigger than the title: the attribute still wins
+    w.insert('TBLOCK', [140, 2], { attribs: [
+      { tag: s.tag, value: s.title, at: [142, 14], h: 2.5 },
+      { tag: 'SHEET', value: `SHEET ${s.k} OF 5`, at: [142, 8], h: 1.5 },
+      { tag: 'DWGNO', value: `PNL-0${s.k}`, at: [142, 4], h: 1.5 },
+    ] }, { layer: 'TITLE' });
+    out(join(FIX, 'sheets'), `PNL-0${s.k}.dxf`, w.toString());
+  }
+}
+
 // ---------------------------------------------------------------- edge cases
 // 1) CRLF line endings + cp1252 bytes + %% control codes
 {

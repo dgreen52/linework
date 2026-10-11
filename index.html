@@ -71,6 +71,7 @@
   <button type="button" class="btn primary" id="btn-open" title="Open a drawing (Ctrl+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open</span></button>
   <button type="button" class="btn icon" id="btn-recent" title="Recent drawings" aria-label="Recent drawings" aria-haspopup="menu" aria-expanded="false" hidden><svg class="ic" aria-hidden="true"><use href="#i-down"/></svg></button>
   <div class="menu" id="menu-recent" role="menu" aria-label="Recent drawings" hidden></div>
+  <button type="button" class="btn hide-sm" data-action="open-folder" title="Open a folder of drawings as a sheet set (Ctrl+Shift+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open folder</span></button>
   <div class="docinfo" id="docinfo" hidden>
     <span class="docname" id="doc-name"></span>
     <span class="dirty" id="doc-dirty" hidden title="The drawing has edits that are not saved yet (Edit › Save). They are also kept in this browser until saved.">•<span class="hide-sm"> unsaved</span></span>
@@ -85,6 +86,7 @@
   <div class="menu" id="menu-more" role="menu" hidden>
     <button type="button" role="menuitem" data-action="export"><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg>Export PNG</button>
     <button type="button" role="menuitem" data-action="print"><svg class="ic" aria-hidden="true"><use href="#i-print"/></svg>Print / PDF</button>
+    <button type="button" role="menuitem" data-action="open-folder"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg>Open folder…</button>
   </div>
 </header>
 
@@ -191,7 +193,8 @@
         <h1 id="empty-title">Open a CAD drawing</h1>
         <p class="lead">View, measure, mark up and edit <strong>DXF</strong>, <strong>DWG</strong> and <strong>DGN v7</strong> drawings in your browser.</p>
         <button type="button" class="btn primary big" id="btn-open-empty"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg>Open a drawing…</button>
-        <p class="hint">or drag a file anywhere onto this window</p>
+        <button type="button" class="btn big" data-action="open-folder" title="All the drawings of a folder as a sheet set: a list of sheets, Find in all of them, links between them (Ctrl+Shift+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg>Open a folder of sheets…</button>
+        <p class="hint">or drag files or a folder anywhere onto this window</p>
         <section class="recent" id="recent" aria-label="Recent drawings" hidden></section>
         <p class="promise"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg><span><strong>Your files never leave this device.</strong> Nothing is uploaded — the drawing is read inside this browser tab, and it keeps working offline.</span></p>
         <h2>No file handy? Try a sample</h2>
@@ -274,7 +277,7 @@
   <span class="st hide-sm" id="st-perf"></span>
 </footer>
 
-<div class="drop-overlay" id="drop-overlay" hidden><div>Drop the drawing to open it<small>DXF · DWG · DGN v7 · or a .markup.json file</small></div></div>
+<div class="drop-overlay" id="drop-overlay" hidden><div>Drop the drawing to open it<small>DXF · DWG · DGN v7 · or a .markup.json file · several files or a folder: a sheet set</small></div></div>
 
 <dialog id="dlg-help" aria-labelledby="help-title">
   <form method="dialog" class="dlg">
@@ -349,6 +352,8 @@
       <section><h3>Files</h3>
         <dl>
           <dt><kbd>Ctrl</kbd>+<kbd>O</kbd></dt><dd>Open a drawing (or drop it on the window)</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd></dt><dd>Open a folder as a sheet set (or choose or drop several drawings): a list of sheets with their titles, Find in all sheets, sheet references (“SHEET 4”, “SEE DWG …”) become links</dd>
+          <dt><kbd>Page Up</kbd> / <kbd>Page Down</kbd></dt><dd>Previous / next sheet of the set (each keeps its view and hidden layers)</dd>
           <dt><kbd>Ctrl</kbd>+<kbd>P</kbd></dt><dd>Print or save as PDF, to scale (1:50, 1"=20') on Letter to ANSI D or A4 to A1</dd>
           <dt>Open <svg class="ic" aria-hidden="true"><use href="#i-down"/></svg></dt><dd>Recent drawings: one click reopens them (names only are kept; Clear list forgets them)</dd>
           <dt>Edit › Save</dt><dd>Saves over the file you opened when the browser allows it (asks once, keeps a backup copy if it may); otherwise downloads a copy</dd>
@@ -420,7 +425,7 @@
   </form>
 </dialog>
 
-<input type="file" id="file-input" accept=".dxf,.dgn,.dwg,.json,application/dxf,image/vnd.dxf" hidden>
+<input type="file" id="file-input" accept=".dxf,.dgn,.dwg,.json,application/dxf,image/vnd.dxf" multiple hidden>
 <input type="file" id="markup-input" accept=".json,application/json" hidden>
 <input type="file" id="names-input" accept=".csv,.txt,text/csv,text/plain" hidden>
 <div id="print-root" aria-hidden="true"></div>

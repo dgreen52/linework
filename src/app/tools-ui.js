@@ -68,7 +68,9 @@ export function initTools(app, api) {
   const model = () => X.model();
 
   // ---------------------------------------------------------------- find and replace
-  const F = { open: false, q: '', o: { matchCase: false, wholeWord: false, vis: true }, hits: [], k: -1, sig: '' };
+  const F = { open: false, q: '', o: { matchCase: false, wholeWord: false, vis: true, all: true }, hits: [], k: -1, sig: '' };
+  /** A sheet set is open and its scope is on: matches in every sheet, listed by sheet (src/app/sheets.js). */
+  const allOn = () => !!(F.o.all && app.sheets && app.sheets.active);
   const bar = document.createElement('div');
   bar.className = 'findbar card';
   bar.setAttribute('role', 'search');
@@ -80,6 +82,7 @@ export function initTools(app, api) {
     <button type="button" class="btn sm opt" data-o="matchCase" aria-pressed="false" title="Match case">Aa</button>
     <button type="button" class="btn sm opt" data-o="wholeWord" aria-pressed="false" title="Whole words only">Word</button>
     <button type="button" class="btn sm opt" data-o="vis" aria-pressed="true" title="Only levels / layers that are shown">Visible</button>
+    <button type="button" class="btn sm opt" data-o="all" aria-pressed="true" title="Every sheet of the open set (Enter goes from sheet to sheet; Replace works on the sheet shown)" hidden>All sheets</button>
     <button type="button" class="btn icon sm" id="find-close" aria-label="Close find" title="Close (Esc)">${ICON_CLOSE}</button>
     <div class="find-rep" id="find-rep" hidden>
       <input type="text" id="find-r" placeholder="Replace with" aria-label="Replace with" spellcheck="false" autocomplete="off">
@@ -101,8 +104,11 @@ export function initTools(app, api) {
     F.sig = sig();
     F.k = keep && cur ? F.hits.findIndex((h) => h.ent === cur.ent && h.sub === cur.sub) : -1;
     count();
+    if (allOn()) app.sheets.findIn(bar, F.q, F.o);
+    else { const box = $('.find-sets', bar); if (box) box.hidden = true; }
   }
   function count() {
+    if (allOn()) return; // the set's list says where the matches are
     const n = F.hits.length;
     $('#find-n', bar).textContent = !F.q ? '' : !n ? 'No matches' : F.k >= 0 ? `${F.k + 1} of ${n}` : `${n} match${n === 1 ? '' : 'es'}`;
     for (const id of ['#find-prev', '#find-next']) $(id, bar).disabled = !n;
@@ -111,6 +117,7 @@ export function initTools(app, api) {
     if (!app.scene) return;
     F.open = true;
     bar.hidden = false;
+    $('[data-o="all"]', bar).hidden = !(app.sheets && app.sheets.active);
     toolChanged();
     qIn.focus();
     qIn.select();
@@ -126,6 +133,7 @@ export function initTools(app, api) {
   /** Next (d = 1) or previous (-1) match: zoom to it, and in Edit select its item. */
   function findStep(d = 1) {
     if (!F.open) return;
+    if (allOn()) { app.sheets.findStep(d); return; }
     if (F.sig !== sig()) search(true);
     const n = F.hits.length;
     if (!n) { count(); return; }
@@ -143,6 +151,14 @@ export function initTools(app, api) {
     if (!fits || x0 < 30 || y0 < 90 || x1 > v.w - 30 || y1 > v.h - 30) { v.cx = (b[0] + b[2]) / 2; v.cy = (b[1] + b[3]) / 2; }
     if (inEdit() && E.ready && X.entity(h.ent)) X.setSel([h.ent]);
     api.invalidate(true);
+  }
+  /** A match of Find in all sheets, on the sheet now shown: the same text here (or its place when hidden). */
+  function showHit(h) {
+    if (!app.scene) return;
+    if (F.sig !== sig()) search(true);
+    const k = F.hits.findIndex((x) => x.ent === h.ent && x.sub === h.sub && x.s === h.text);
+    if (k >= 0) { F.k = k; goTo(F.hits[k]); return; }
+    app.zoomToWorld(h.x - 12 * h.h, h.y - 6 * h.h, h.x + 12 * h.h, h.y + 6 * h.h);
   }
   function replace(all) {
     if (!inEdit() || !ready() || !F.q) return;
@@ -560,7 +576,7 @@ export function initTools(app, api) {
     if (info) renderInfo();
   }
   function docChanged() {
-    if (F.open) closeFind();
+    if (F.open && allOn()) { $('[data-o="all"]', bar).hidden = false; search(false); } else if (F.open) closeFind();
     KP = null; infoKey = null;
     renderInfo();
   }
@@ -570,7 +586,7 @@ export function initTools(app, api) {
     names: () => levelNames(...a),
   }[cmd] || (() => {}))();
   return {
-    run, drawOverlay, findStep, toolChanged, docChanged,
+    run, drawOverlay, findStep, toolChanged, docChanged, showHit,
     selChanged: () => { if (info) renderInfo(); },
     // (for tests and automation)
     get find() { return { open: F.open, hits: F.hits.length, k: F.k }; },

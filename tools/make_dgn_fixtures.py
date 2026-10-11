@@ -378,6 +378,53 @@ def wiring(path):
             "levels": [1, 4, 5, 6, 10, 12, 20, 30], "labels": ["W101", "W102", "W103", "W1010", "w104"]}
 
 
+# --------------------------------------------------------------------------- sheet set (open a folder, find in all sheets, links)
+# An invented five-sheet pump control panel set: PNL-01..03 here (DGN), PNL-04 and PNL-05 come from
+# tools/make_fixtures.mjs (DXF). Wire numbers repeat across sheets; some texts refer to other sheets.
+SHEET_TITLES = ["PUMP CONTROL POWER", "PUMP CONTROL RELAYS", "PUMP CONTROL TERMINALS"]
+SHEET_WIRES = [["W201", "W202", "W210"], ["W201", "W203", "W220"], ["W202", "W203", "W230"]]
+SHEET_REFS = [["CONT ON SHEET 2", "SEE DWG PNL-05"], ["FROM SH 1", "TO SHT. 3"], ["PNL-04", "SHEET 9"]]
+
+
+def sheet(path, k):
+    ds, lyr = create(path, ["MASTER_UNIT_NAME=m", "SUB_UNIT_NAME=mm", "SUB_UNITS_PER_MASTER_UNIT=1000",
+                            "UOR_PER_SUB_UNIT=10", "ORIGIN=0,0,0"])
+    add(lyr, wkt_line([(0, 0), (200, 0), (200, 120), (0, 120), (0, 0)]), Level=1, ColorIndex=1)  # sheet border
+    ds = None
+    ctx = R.Ctx(10000, (0, 0))
+    C = R.as_component
+    els = []
+    # wires (level 5) with their numbers (level 10); the first wire's number again in a marker cell
+    for n, w in enumerate(SHEET_WIRES[k - 1]):
+        y = 95 - 15 * n
+        els.append(R.line3(ctx, (30, y), (120, y), level=5, color=2, weight=2))
+        els.append(R.text17(ctx, (60, y + 1), w, 2.0, level=10, color=3))
+    w = SHEET_WIRES[k - 1][0]
+    comps = [C(R.multipoint(6, ctx, [(124, 93), (136, 93), (136, 97), (124, 97), (124, 93)], level=12, color=1)),
+             C(R.text17(ctx, (125, 94), w, 2.0, level=12, color=3))]
+    els += [R.cell2(ctx, "MARKER", (124, 93), comps, rng=(124, 93, 136, 97), level=12, color=1)] + comps
+    # references to other sheets (level 20), at the wire ends
+    for n, s in enumerate(SHEET_REFS[k - 1]):
+        els.append(R.text17(ctx, (150, 95 - 15 * n), s, 2.0, level=20, color=0))
+    # title block cell (level 4): title, sheet number, drawing number, revision
+    comps = [C(R.multipoint(6, ctx, [(140, 2), (198, 2), (198, 20), (140, 20), (140, 2)], level=4, color=1)),
+             C(R.text17(ctx, (142, 14), SHEET_TITLES[k - 1], 2.5, level=4, color=0)),
+             C(R.text17(ctx, (142, 8), "SHEET %d OF 5" % k, 1.5, level=4, color=0)),
+             C(R.text17(ctx, (142, 4), "PNL-%02d" % k, 1.5, level=4, color=0)),
+             C(R.text17(ctx, (180, 8), "REV A", 1.5, just=14, level=4, color=0))]
+    els += [R.cell2(ctx, "TBLOCK", (140, 2), comps, rng=(140, 2, 198, 20), level=4, color=1)] + comps
+    R.append_elements(path, els)
+
+
+def sheet_set():
+    out = os.path.join(FIX, "sheets")
+    os.makedirs(out, exist_ok=True)
+    for k in (1, 2, 3):
+        path = os.path.join(out, "PNL-%02d.dgn" % k)
+        sheet(path, k)
+        print("wrote", os.path.relpath(path, ROOT), os.path.getsize(path), "bytes")
+
+
 def main():
     os.makedirs(SAMPLES, exist_ok=True)
     os.makedirs(FIX, exist_ok=True)
@@ -395,6 +442,8 @@ def main():
         extra = fn(path)
         feats = oracle(path, extra)
         print("wrote", os.path.relpath(path, ROOT), os.path.getsize(path), "bytes,", len(feats), "OGR features")
+    if not only or "sheets" in only:  # tests/fixtures/sheets/PNL-01..03.dgn (no oracles)
+        sheet_set()
 
 
 if __name__ == "__main__":

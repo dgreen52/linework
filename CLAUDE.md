@@ -54,9 +54,10 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/view/renderer2d.js` | Canvas2D renderer (interface designed so WebGL can replace it). |
 | `src/tools/snap.js`, `measure.js` | Snaps and measurement maths (pure, unit tested). |
 | `src/tools/compare.js` | Revision compare (pure): items described from the scene (+ DGN element-byte hashes), matched, paired as moved / changed. |
+| `src/tools/sheets.js` | Sheet sets (pure): `SHEET_EXTS` (the one list of file types a set takes — add new readers' extensions here), the compact text index of a sheet (built in the parse worker, `type: 'index'` messages), titles / own sheet numbers, search across sheets, sheet-reference patterns and resolution, the LRU. |
 | `src/markup/*` | Markup model, sidecar format (see MARKUP_FORMAT.md), history, drawing. |
 | `src/edit/*` | Edit operations, edit document (changes, undo), live scene updates, clipboard (copy / paste payloads and their conversion between drawings); v0.4 editing tools, pure and unit tested: `find.js` (find / replace text, also in cells), `keyin.js` (XY= DL= DI= AA= key-ins), `xform.js` (mirror, scale, array), `attrs.js` (select same, match attributes, element info), `levels.js` (DGN level-name files). |
-| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. Loaded after start-up / on first use (keep them out of the static graph): `files.js` + `store.js` (file picker handles, Save over the original, recent drawings, IndexedDB journal of unsaved edits), `compare.js` (compare overlay), `print-svg.js` (vector print to scale), and `tools-ui.js` (the editing tools' UI: find bar, key-in preview, More menu, dialogs, info card, level names; imported on first use through `app.loadTools`). Modules hook in through `app.hooks` (`open`, `history`, `draw`). |
+| `src/app.js`, `src/app/*` | UI shell, input, tools, export/print. Loaded after start-up / on first use (keep them out of the static graph): `files.js` + `store.js` (file picker handles, Save over the original, recent drawings, IndexedDB journal of unsaved edits), `compare.js` (compare overlay), `print-svg.js` (vector print to scale), `tools-ui.js` (the editing tools' UI: find bar, key-in preview, More menu, dialogs, info card, level names; imported on first use through `app.loadTools`), and `sheets.js` (sheet sets: navigator, background index in a second parse worker with its IndexedDB cache `linework-sheets`, find in all sheets, reference links; imported through `app.loadSheets`, exposes `app.sheets`). Modules hook in through `app.hooks` (`open`, `history`, `draw`). |
 | `src/worker.js` | Parse worker. |
 | `lib/core.js` | Library entry (`linework/core` package export) for Node and other hosts: re-exports readers, scene, find, compare, writers, SVG builder. Not part of the app — never import it from `src/`, never add it to `sw.js` (`core.test.mjs` checks). |
 | `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` if loaded lazily) and bump the version in `src/version.js`** (the one place it lives; the about line, saved files and the cache name read it). The DWG reader has its own cache (`READER_CACHE`). |
@@ -81,7 +82,7 @@ File pickers (`showOpenFilePicker`, `showDirectoryPicker`) cannot be driven head
 them to return real handles from the origin-private file system (`navigator.storage.getDirectory()`),
 and cover the fallback (plain chooser, downloads) by setting `window.showOpenFilePicker = undefined`.
 The journal must never hold file contents, only the EditDoc change list (entities as read from the
-file are stored as markers); recent drawings hold names, sizes, dates and handles only.
+file are stored as markers); recent drawings hold names, sizes, dates and handles only (a sheet set is one entry); the sheet-set cache holds text indexes only.
 
 Look at the e2e screenshots after UI changes (dark + paper, 1440/1024/390) and fix anything
 that looks wrong before reporting.

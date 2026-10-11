@@ -604,8 +604,8 @@ Install it from a tag, e.g. `npm install github:dgreen52/linework#v0.4.2`. `buil
 ## Tests
 
 ```bash
-npm test                                  # 253 Node unit tests (node --test, no dependencies)
-NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 55 Playwright end-to-end tests
+npm test                                  # 276 Node unit tests (node --test, no dependencies)
+NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 62 Playwright end-to-end tests
 ```
 
 Some unit tests read the files the writers produce with GDAL/OGR through Python (`from osgeo

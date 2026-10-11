@@ -102,6 +102,9 @@ export function buildSvg(scene, L, o = {}) {
     }
   }
   const body = [...groups.values()].sort((a, b) => a.order - b.order).map((g) => g.open + g.d.join('') + '"/>');
+  // a PDF page's pictures (o.picture: the image as a data URL), under everything
+  const u = scene.underlay;
+  if (u && o.picture) body.unshift(`<image href="${o.picture}" x="${X(u.box[0])}" y="${Y(u.box[3])}" width="${r3((u.box[2] - u.box[0]) * s)}" height="${r3((u.box[3] - u.box[1]) * s)}" preserveAspectRatio="none"/>`);
   // real text, placed as on screen
   const texts = new Map();
   for (const t of scene.texts) {
@@ -232,7 +235,7 @@ export const layoutFor = (app, o) => printLayout({ ...o, rect: areaOf(app, o.are
 /** Build the sheet into #print-root and size the page (o: the dialog's values). */
 export function printSheet(app, o = optionsOf($('#print-form'))) {
   const L = layoutFor(app, o);
-  const svg = buildSvg(app.scene, L, { mono: o.mono, layerVisible: app.layerVisible, annotate: o.markups !== false ? (ctx, v) => app.drawAnnotations(ctx, v, { theme: 'paper', fontScale: 1.6 }) : null });
+  const svg = buildSvg(app.scene, L, { mono: o.mono, layerVisible: app.layerVisible, picture: pictureUrl(app.scene.underlay), annotate: o.markups !== false ? (ctx, v) => app.drawAnnotations(ctx, v, { theme: 'paper', fontScale: 1.6 }) : null });
   const date = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   const cell = (k, v) => `<div><small>${k}</small>${v}</div>`;
   $('#print-root').innerHTML = `<div class="vsheet">${svg}<div class="title-strip">${cell('Title', `<strong>${esc(o.title || app.doc.name)}</strong>`)}${cell('File', esc(app.doc.name))}`
@@ -242,6 +245,20 @@ export function printSheet(app, o = optionsOf($('#print-form'))) {
   style.textContent = `@page { size: ${L.W}mm ${L.H}mm; margin: 0; } @media print { .vsheet { width: ${L.W}mm; height: ${r3(L.H - 0.5)}mm; } }`;
   app.lastPrint = { sheet: L.name, W: L.W, H: L.H, s: L.s, label: L.label, fits: L.fits, win: L.win };
   return L;
+}
+
+/** A PDF page's pictures as a data URL for the sheet (made once per page). */
+function pictureUrl(u) {
+  if (!u) return null;
+  if (!u.url) {
+    const c = document.createElement('canvas');
+    c.width = u.w; c.height = u.h;
+    const g = c.getContext('2d');
+    if (!u.dark) { g.fillStyle = '#fff'; g.fillRect(0, 0, u.w, u.h); } // JPEG has no transparency: paper white
+    g.drawImage(u.image, 0, 0);
+    u.url = c.toDataURL(u.dark ? 'image/png' : 'image/jpeg', 0.92); // greyscale scans: PNG (sharp); photos: JPEG
+  }
+  return u.url;
 }
 
 /** The dialog: sheet (remembered; Letter or A4 by language) and what will print. */

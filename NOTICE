@@ -86,12 +86,75 @@ files" (Open Design Alliance). No vendor software was decompiled,
 disassembled or copied.
 
 ------------------------------------------------------------------------------
+pdf.js  (https://github.com/mozilla/pdf.js)  -  Apache License 2.0
+------------------------------------------------------------------------------
+PDF files are read by Mozilla's pdf.js (vendor/pdfjs/: the legacy build of the
+npm package pdfjs-dist 6.3.289, installed unchanged by tools/vendor_pdfjs.mjs),
+loaded only when a PDF is opened. vendor/pdfjs/README.md records the package,
+its integrity and the SHA-256 of every file.
+
+* pdf.js is Copyright 2024 Mozilla Foundation and contributors, licensed under
+  the Apache License, Version 2.0 (the full text is in vendor/pdfjs/LICENSE).
+  The Apache License 2.0 is compatible with the GPL-3.0 licence of this app.
+* The legacy build bundles core-js 3.50.0 (https://github.com/zloirock/core-js),
+  Copyright (c) Denis Pushkarev (zloirock.ru) and the core-js contributors,
+  under the MIT licence:
+
+  Permission is hereby granted, free of charge, to any person obtaining a
+  copy of this software and associated documentation files (the "Software"),
+  to deal in the Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, sublicense,
+  and/or sell copies of the Software, and to permit persons to whom the
+  Software is furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included
+  in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+  OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+  DEALINGS IN THE SOFTWARE.
+
+* vendor/pdfjs/openjpeg.wasm (JPEG 2000 images) is OpenJPEG, BSD 2-Clause
+  licence, Copyright (c) 2002-2014 Universite catholique de Louvain (UCL),
+  Belgium, Professor Benoit Macq and the other authors listed in
+  vendor/pdfjs/LICENSE_OPENJPEG (full text there), with pdf.js glue under the
+  BSD 2-Clause licence, Copyright (c) 2024 Mozilla Foundation
+  (vendor/pdfjs/LICENSE_PDFJS_OPENJPEG).
+* vendor/pdfjs/jbig2.wasm (JBIG2 and CCITT fax images, as in scanned pages) is
+  PDFium's decoders, Copyright 2014 The PDFium Authors, BSD 3-Clause licence,
+  with parts under the Apache License 2.0 (full texts in
+  vendor/pdfjs/LICENSE_JBIG2), and pdf.js glue under the Apache License 2.0
+  (vendor/pdfjs/LICENSE_PDFJS_JBIG2).
+* src/formats/pdf.js follows pdf.js's canvas renderer (src/display/canvas.js)
+  for how shown text advances (glyph widths, character and word spacing,
+  horizontal scaling, TJ adjustments) to give each piece of text its colour and
+  layer. No pdf.js source code is copied into this app's own files.
+
+The test fixture writer tools/pdf-writer.mjs (not part of the app) writes PDF
+files from the public PDF 1.7 reference (ISO 32000-1).
+
+------------------------------------------------------------------------------
+DejaVu Sans  (https://dejavu-fonts.github.io)  -  Bitstream Vera licence
+------------------------------------------------------------------------------
+tools/fonts/DejaVuSans.ttf (not part of the app, not deployed) is the only font
+used for the test fixtures printed by Linework (tests/fixtures/pdf-print-*.pdf,
+made by tools/make_pdf_fixtures.mjs --print), which embed subsets of it.
+Fonts are (c) Bitstream (Bitstream Vera Fonts, Copyright (c) 2003 by
+Bitstream, Inc.; Bitstream Vera is a trademark of Bitstream, Inc.); DejaVu
+changes are in the public domain; glyphs imported from Arev fonts are (c)
+Tavmjong Bah. The full licence text is in tools/fonts/DejaVu-LICENSE.txt.
+
+------------------------------------------------------------------------------
 File formats
 ------------------------------------------------------------------------------
 The DXF reader and writer (src/formats/dxf.js, dxf-write.js) were written from
 the publicly published DXF reference. No vendor software was decompiled, disassembled or copied.
 src/formats/dwg.js maps the objects LibreDWG decodes to the same DXF semantics.
-"DXF", "DWG" and "DGN" are used only to name the file formats this app opens.
+"DXF", "DWG", "DGN" and "PDF" are used only to name the file formats this app opens.
 
 ------------------------------------------------------------------------------
 Not bundled

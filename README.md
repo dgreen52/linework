@@ -1,7 +1,8 @@
 # Linework
 
 **A free, open-source CAD drawing viewer, markup tool and light editor that runs in your browser.**
-Open DXF, DWG and DGN v7 drawings, find your way around, measure, mark them up with clouds,
+Open DXF, DWG and DGN v7 drawings — and PDF drawings, manuals and wiring diagrams, a page at a
+time — find your way around, measure, mark them up with clouds,
 arrows and notes, fix the drawing itself (move, reshape, retype, draw) and save it as DXF or
 DGN v7 — on a desktop, a tablet or a phone, online or offline.
 
@@ -19,6 +20,14 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   built-in synthetic samples. DWG files are read with GNU LibreDWG compiled to WebAssembly, inside
   this browser tab; the reader (about 2 MB compressed) downloads from the same site the first time
   you open a DWG and works offline after that ([details](DWG.md)).
+* **Opens PDF pages as drawings** (new, [details](PDF.md)): a page's lines, arcs, circles,
+  fills and text become drawing items in paper units (mm, or inches for inch-sized pages), with
+  layers from the PDF's own layers or by colour, so find, measure with snaps, markups, editing
+  and saving as DXF / DGN work as on any drawing; a page picker (and Page Up / Page Down) moves
+  between pages, each with its own markups. Scanned pages and photos are shown as a picture under
+  the drawing at their true scale (measure and mark up; no text recognition). PDFs are read with
+  Mozilla pdf.js inside this tab; it (about 0.7 MB compressed) downloads from the same site the
+  first time you open a PDF and works offline after that.
 * **Views**: pan (drag, middle mouse, Space+drag, one finger), zoom at the cursor (wheel, pinch,
   `+`/`−`), **F** fits, box zoom, dark CAD background or white paper (white/black colour 7 swaps
   correctly), layer panel (toggle, isolate, colour swatches, filter), live coordinates in drawing
@@ -44,7 +53,8 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
 * **Saves** the edited drawing as **DXF** (R2000) or **DGN v7** — **over the original file**
   where the browser allows it (asked once per file, with a backup copy), otherwise downloaded to
   your device; never uploaded. A DGN you opened is saved back with every untouched element
-  byte-for-byte. Linework does not write DWG: a DWG you opened is saved as DXF (the default) or DGN v7.
+  byte-for-byte. Linework does not write DWG or PDF: a DWG or a PDF page you opened is saved as DXF
+  (the default) or DGN v7.
 * **Keeps your work**: **recent drawings** reopen in one click, and **unsaved edits survive** a
   crash, a closed tab or an update reload — open the drawing again and Linework offers them back
   ([Files](#files-recent-drawings-saving-over-the-original-recovery)).
@@ -97,8 +107,10 @@ index.html  app.css  sw.js  manifest.webmanifest   app shell (precached by the s
 icons/  src/  samples/                            app code (served as-is, no build step), samples
 vendor/libredwg/                                  DWG reader: libredwg-web.wasm (9.4 MB) + .js glue
                                                   + README (provenance); fetched only for DWGs
+vendor/pdfjs/                                     PDF reader: pdf.js (legacy build) + image decoders
+                                                  + licences + README; fetched only for PDFs
 _headers                                          HTTP headers, from deploy/_headers
-LICENSE  NOTICE                                   GPL-3.0 + third-party notices (LibreDWG, GDAL)
+LICENSE  NOTICE                                   GPL-3.0 + third-party notices (LibreDWG, pdf.js, GDAL)
 ```
 
 `_headers` (Cloudflare Pages / Netlify format; on other hosts set the same headers in their
@@ -106,7 +118,9 @@ configuration) sets the Content-Security-Policy — `script-src 'self' 'wasm-uns
 page compile the DWG reader, no `'unsafe-eval'` — plus `X-Content-Type-Options: nosniff`,
 `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and HSTS; `Cache-Control: no-cache` for
 `/`, `/index.html` and `/sw.js`; a one-year immutable cache and `Content-Type: application/wasm`
-for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/dwg.js`).
+for `vendor/libredwg/` (its URLs carry a version, `READER_REV` in `src/formats/dwg.js`) and the
+same for `vendor/pdfjs/` (`PDF_READER_REV` in `src/formats/pdf.js`; `.mjs` served as
+`text/javascript`).
 `tools/serve.mjs` applies the same file, so local runs and the tests use the real policy.
 
 ## Keyboard shortcuts
@@ -332,6 +346,9 @@ How saving works:
 * **Drawing opened from a DWG**: Linework does not write DWG. **Save** writes DXF and **Save
   as…** offers DXF (default) or DGN v7; the dialog says so first, and DWG-only data (layouts,
   dimension styles, extended data) is not carried over.
+* **Page opened from a PDF**: Linework does not write PDF. **Save** writes the page's lines, fills
+  and text as DXF (`name-edited.dxf`, `name-p3-edited.dxf` for page 3) and **Save as…** offers DXF
+  (default) or DGN v7; the dialog says so first. Pictures and fonts are not kept.
 * Items the reader could not load ("not shown") cannot be written: Save warns first ("N items
   from the original file weren't loaded and won't be in the saved copy"). A DGN saved as DGN
   keeps them.
@@ -504,6 +521,14 @@ vector PDF with sharp lines and real (searchable) text:
 DWG versions: the tests use synthetic R2000 (AC1015) files; LibreDWG also reads R13/R14 and
 R2004–R2018, which are not covered by synthetic fixtures yet ([DWG.md](DWG.md)).
 
+**PDF** (pdf.js, one page at a time, [details](PDF.md)): paths → lines, polylines, circles and arcs
+(from their Béziers), splines, fills (solid; pattern fills as pattern hatches); text with its
+position, size, angle, width, colour and layer; line widths and dashes; colours from every colour
+space (spot colours too); optional content as layers (off ones hidden), annotation appearances;
+form XObjects, `/Rotate`, crop and media box offsets; pictures and gradients as one picture of
+the page under the drawing; units mm or inches (paper). Not supported: OCR, password-protected
+PDFs (owner-password-only PDFs open), clipping of vector items, writing PDF.
+
 Coordinates far from the origin (state-plane style millions) are rendered with a local origin, so
 millimetre detail stays crisp at deep zoom.
 
@@ -516,6 +541,7 @@ rendering, 1440×900, on the development laptop. Real GPUs do better.
 |---|---|
 | App shell (HTML + CSS + JS + icons, gzip) | **≈161 KB** total, **≈146 KB** code (v0.1: 100 / 81; before copy / paste, duplicate and line weights: 147 / 132) — no dependencies |
 | DWG reader (only when a DWG is opened) | 9.4 MB WebAssembly, **≈2.1 MB gzip** (≈1.1 MB brotli) + 12 KB `dwg.js`; cached for offline use |
+| PDF reader (only when a PDF is opened) | pdf.js 2.2 MB, **≈0.66 MB gzip** (incl. its JPEG 2000 / JBIG2 decoders) + 14 KB `pdf.js` + 2 KB `pdf-ui.js`; cached for offline use |
 | First open (DOMContentLoaded, local server) | ≈0.4 s |
 | 53,100-entity stress drawing: generate + parse + index | ≈0.6–1.3 s, in a Web Worker with a progress bar |
 | Main-thread long tasks while that drawing loads | **0** (UI never freezes) |
@@ -543,8 +569,9 @@ the first frame, so opening a large file never blocks the page.
 ## Privacy and security
 
 * No network requests except loading the app's own files from where it is hosted; a unit test
-  fails if any external URL appears in the app shell. The DWG reader is one of those files: it
-  comes from the same site, only when a DWG is opened, and runs in the browser like the rest.
+  fails if any external URL appears in the app shell. The DWG and PDF readers are among those
+  files: they come from the same site, only when a DWG or a PDF is opened, and run in the browser
+  like the rest (pdf.js installs no fonts and fetches nothing else; see [PDF.md](PDF.md)).
 * Drawings are read with `FileReader`/`File.arrayBuffer` and parsed in a Web Worker in the same
   browser tab. The service worker caches only the app's own files and never sees your drawings.
 * Markups stay in the sidecar file you save and in this browser's local storage.
@@ -685,9 +712,20 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   a reload with the index from this browser; the plain chooser with several files, dropped files
   (a sheet that does not read is marked and skipped), the panel and find at 390 px, and a
   120-sheet set (all read, at most three drawings kept, small index, heap growth bounded).
+* PDF: pdf.js runs in the Node tests too: every PDF fixture is read with exact coordinates (a 100 mm
+  line is 100 mm; circles, arcs, colours, spot colours, dashes, fills, a turned form XObject,
+  optional content layers, page labels, an offset media box, a `/Rotate` page, invisible OCR text,
+  passwords and damaged files), the operator-list conversion is tested on hand-built operator
+  lists, Linework's own vector print reads back at 1:100, and saves as DXF / DGN read back. End to
+  end: pdf.js loads only for PDFs and once; no CSP violation in the page **or the parse worker**
+  (the test server collects CSP reports, with a negative control without `'wasm-unsafe-eval'`);
+  measure, find, colour layers, the page picker, markups per page, the scanned page (picture,
+  note, hidden OCR layer, print), Save as DXF, offline re-open. See [PDF.md](PDF.md).
 * **All test drawings are synthetic**, generated by `tools/make_fixtures.mjs` (DXF),
-  `tools/make_dgn_fixtures.py` (DGN, via GDAL) and `tools/make_dwg_fixtures.mjs` (DWG, from the
-  synthetic DXF files). No real drawings are used or committed.
+  `tools/make_dgn_fixtures.py` (DGN, via GDAL), `tools/make_dwg_fixtures.mjs` (DWG, from the
+  synthetic DXF files) and `tools/make_pdf_fixtures.mjs` (PDF: hand-written by
+  `tools/pdf-writer.mjs`, plus Linework's own print of the synthetic samples). No real drawings,
+  manuals or documents are used or committed.
 
 ## Project layout
 
@@ -695,9 +733,10 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
 index.html, app.css, sw.js, manifest.webmanifest   app shell (installable PWA)
 src/model.js            common drawing model
 src/formats/            dxf.js, dgn.js, detect.js (format detection); dwg.js (DWG via LibreDWG,
-                        loaded only for DWG); dxf-write.js, dgn-write.js (+ dgn-seed.js) — loaded
-                        only when saving
+                        loaded only for DWG); pdf.js (PDF pages via pdf.js, loaded only for PDF);
+                        dxf-write.js, dgn-write.js (+ dgn-seed.js) — loaded only when saving
 vendor/libredwg/        LibreDWG WebAssembly + glue (GPL-3.0-or-later; provenance in its README)
+vendor/pdfjs/           pdf.js legacy build + image decoders (Apache-2.0 etc.; provenance in its README)
 deploy/_headers         HTTP headers for the static host (CSP etc.)
 src/scene.js            blocks → flat primitives, colours, local origin, spatial grid
 src/edit/               edit operations, edit document (changes, undo, selection), live scene,
@@ -713,9 +752,11 @@ src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, 
                         tools-ui.js (editing tools: find, key-ins, More menu, info, level names),
                         trace-ui.js (the Trace tool and its panel)
                         sheets.js (sheet sets: navigator, background index, find in all sheets)
+                        pdf-ui.js (PDF page picker, app.pages; loaded with the first PDF)
 src/worker.js           parse worker
 samples/                synthetic sample drawings (+ generators in samples/gen/)
-tools/                  fixture generators (DXF, DGN, DWG), DWG reader vendoring/build scripts,
+tools/                  fixture generators (DXF, DGN, DWG, PDF; fonts/: DejaVu Sans for the printed
+                        PDF fixtures), DWG / PDF reader vendoring scripts,
                         palette extraction, icon rendering, static server, dist builder
 tests/unit, tests/e2e   tests
 ```
@@ -724,6 +765,8 @@ tests/unit, tests/e2e   tests
 
 **GPL-3.0** (see `LICENSE`; credits in `NOTICE`). The DWG reader, GNU LibreDWG
 (GPL-3.0-or-later), is distributed with the app (`vendor/libredwg/`), so the app stays GPL-3.0.
+The PDF reader, Mozilla pdf.js (`vendor/pdfjs/`), is Apache-2.0 (with core-js, MIT, and the
+OpenJPEG / PDFium image decoders, BSD), all compatible with GPL-3.0.
 
 Trade-offs, for the owner to decide before the first public release:
 
@@ -743,6 +786,8 @@ Trade-offs, for the owner to decide before the first public release:
   scale, array, element information, select same, match attributes, DGN level names); save over
   the original file (backup copy), recent drawings, unsaved-edit recovery, revision compare,
   vector print to scale.
+* **PDF (this branch)** — PDF pages as drawings via pdf.js, lazy-loaded ([details](PDF.md)):
+  vector import with layers, text, pages, scanned pages as pictures, saved as DXF / DGN.
 * **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; measurement
   export (CSV); editing the geometry inside blocks/cells and shared block-definition text.
 * **v0.5** — true linetype scaling; hatch patterns;
@@ -772,6 +817,10 @@ and block attributes can be edited since 0.2.2).
 * DWG: R12 and older are refused; 3D solids, images, MLINE/MULTILEADER and proxy objects are
   reported as not shown; only R2000 files are covered by the synthetic tests so far (see DWG.md).
   Very large DWGs need several times their size in browser memory (limit 120 MB per file).
+* PDF: no text recognition (scans are pictures); measurements are in paper units (no scale
+  calibration yet); password-protected PDFs need an unprotected copy; clipping is not applied to
+  vector items; pictures are drawn at about 200 dpi; CJK text that relies on external character
+  maps may not be extracted (see PDF.md).
 
 Editing and saving (v0.2):
 

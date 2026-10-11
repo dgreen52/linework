@@ -75,6 +75,12 @@ const SHELL = [
 const ON_DEMAND = ['src/formats/dwg.js'];
 const READER_CACHE = 'linework-reader-libredwg-0.7.16-2';
 const READER = ['vendor/libredwg/libredwg-web.js', 'vendor/libredwg/libredwg-web.wasm'];
+// The PDF reader works the same way: pdf.js (Mozilla, Apache-2.0, ~2.2 MB, ~0.66 MB compressed) is
+// loaded when the first PDF is opened and kept in its own cache; the app modules that only PDFs use
+// are cached on demand like the DWG reader's. Change PDF_READER_CACHE whenever vendor/pdfjs changes.
+const PDF_ON_DEMAND = ['src/formats/pdf.js', 'src/app/pdf-ui.js'];
+const PDF_READER_CACHE = 'linework-reader-pdfjs-6.3.289';
+const PDF_READER = ['vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs', 'vendor/pdfjs/openjpeg.wasm', 'vendor/pdfjs/jbig2.wasm'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -83,13 +89,16 @@ self.addEventListener('install', (event) => {
     if (await caches.has(READER_CACHE)) {
       await Promise.all(ON_DEMAND.map((p) => cache.add(new Request(p, { cache: 'reload' })).catch(() => {})));
     }
+    if (await caches.has(PDF_READER_CACHE)) {
+      await Promise.all(PDF_ON_DEMAND.map((p) => cache.add(new Request(p, { cache: 'reload' })).catch(() => {})));
+    }
     await self.skipWaiting();
   })());
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('linework-') && k !== VERSION && k !== READER_CACHE).map((k) => caches.delete(k))))
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('linework-') && k !== VERSION && k !== READER_CACHE && k !== PDF_READER_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -100,8 +109,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
   const isReader = READER.some((p) => new URL(p, self.registration.scope).pathname === url.pathname);
+  const isPdfReader = PDF_READER.some((p) => new URL(p, self.registration.scope).pathname === url.pathname);
   event.respondWith(
-    caches.open(isReader ? READER_CACHE : VERSION).then(async (cache) => {
+    caches.open(isReader ? READER_CACHE : isPdfReader ? PDF_READER_CACHE : VERSION).then(async (cache) => {
       const hit = await cache.match(req, { ignoreSearch: true });
       if (hit) return hit;
       try {

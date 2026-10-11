@@ -1444,7 +1444,7 @@ export function initEdit(app, api) {
     if (el) el.hidden = !d;
     document.title = (d ? '• ' : '') + document.title.replace(/^• /, '');
   }
-  const baseName = () => (app.doc ? app.doc.name.replace(/\.[^.]+$/, '') : 'drawing');
+  const baseName = () => (app.doc ? app.doc.name.replace(/\.[^.]+$/, '') + (app.scene && app.scene.page && app.scene.page.count > 1 ? '-p' + app.scene.page.n : '') : 'drawing');
   const srcFormat = () => (app.scene && app.scene.format === 'DGN' ? 'DGN' : 'DXF');
   const defaultName = (f) => `${baseName()}-edited.${f.toLowerCase()}`;
   /** Items the reader could not load (they cannot be written), for a target format. */
@@ -1459,6 +1459,7 @@ export function initEdit(app, api) {
   function saveNotes(f) {
     const m = model(), src = m ? m.format : srcFormat(), notes = [];
     if (src === 'DWG') notes.push('Opened from a DWG. Linework does not write DWG: save a DXF copy (recommended) or DGN v7. DWG-only data (layouts, dimension styles) is not kept.');
+    if (src === 'PDF') notes.push('Opened from a PDF. Linework does not write PDF: save this page’s lines and text as a DXF copy (recommended) or DGN v7. Pictures and fonts are not kept.');
     if (src === 'DGN' && f === 'DGN') notes.push('Untouched items stay exactly as they were. Edited, pasted and duplicated items are rebuilt from their original bytes and added at the end of the file; anything that cannot be kept exactly is listed after saving.');
     const np = m ? m.entities.filter((e) => e && e.pasted).length : 0;
     if (np) notes.push(`${plural(np)} pasted or duplicated${f === 'DGN' ? '; cells pasted from another drawing get new cell headers' : ''}.`);
@@ -1507,7 +1508,7 @@ export function initEdit(app, api) {
       toast(`Could not save ${name}`, { kind: 'error', detail: `Nothing was downloaded and your edits are still here. (${app.lastSaveError})` });
       return false;
     }
-    if (m.format === 'DWG') notes.unshift(`Linework does not write DWG, so this is a ${f} copy.`);
+    if (m.format === 'DWG' || m.format === 'PDF') notes.unshift(`Linework does not write ${m.format}, so this is a ${f} copy.`);
     const doc = E.doc;
     if (target) { if (!(await target(blob, notes))) return false; } else download(blob, name);
     doc.saved = at; // what was written (edits made while writing stay unsaved)

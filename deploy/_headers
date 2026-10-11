@@ -1,7 +1,7 @@
 # HTTP headers for static hosting (Cloudflare Pages / Netlify "_headers" format).
 # Copy this file to the ROOT of the deployed folder (tools/make_dist.mjs does that).
 # tools/serve.mjs applies the same rules locally and in the end-to-end tests.
-# 'wasm-unsafe-eval' lets the page compile the DWG reader (WebAssembly); no 'unsafe-eval'.
+# 'wasm-unsafe-eval' lets the page compile the DWG reader and the PDF reader's decoders (WebAssembly); no 'unsafe-eval'.
 
 /*
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
@@ -23,4 +23,13 @@
   Cache-Control: public, max-age=31536000, immutable
 
 /vendor/libredwg/*.wasm
+  Content-Type: application/wasm
+
+/vendor/pdfjs/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/vendor/pdfjs/*.mjs
+  Content-Type: text/javascript; charset=utf-8
+
+/vendor/pdfjs/*.wasm
   Content-Type: application/wasm

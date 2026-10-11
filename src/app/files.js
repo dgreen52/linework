@@ -6,7 +6,7 @@ import { openStore, addRecent, recentList, updateRecent, clearRecent, fmtWhen, J
 import { $, toast, esc, fmtBytes } from './ui.js';
 
 const TYPES = [
-  { description: 'Drawings', accept: { 'application/octet-stream': ['.dxf', '.dwg', '.dgn'] } },
+  { description: 'Drawings', accept: { 'application/octet-stream': ['.dxf', '.dwg', '.dgn'], 'application/pdf': ['.pdf'] } },
   { description: 'Markups', accept: { 'application/json': ['.json'] } },
 ];
 /** name.bak.ext (the extension stays last). */

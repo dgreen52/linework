@@ -517,6 +517,8 @@ export function buildScene(model, opts = {}) {
     entityCount: stats.entities,
     header: model.header,
     fileName: opts.fileName || '',
+    page: model.page || null, // PDF: { n, count, label, labels, box, raster }
+    underlay: model.underlay || null, // PDF pictures: { image, dark, box, w, h }
   }, ents.length);
 }
 
@@ -588,6 +590,7 @@ function finalize(B, meta, entityTotal) {
     if (b[0] < ext[0]) ext[0] = b[0]; if (b[1] < ext[1]) ext[1] = b[1];
     if (b[2] > ext[2]) ext[2] = b[2]; if (b[3] > ext[3]) ext[3] = b[3];
   }
+  if (meta.page) { const b = meta.page.box; ext[0] = Math.min(ext[0], b[0]); ext[1] = Math.min(ext[1], b[1]); ext[2] = Math.max(ext[2], b[2]); ext[3] = Math.max(ext[3], b[3]); }
   const empty = !(ext[0] <= ext[2]);
   if (empty) { ext[0] = ext[1] = 0; ext[2] = ext[3] = 1; }
   // local origin = centre of the extents: keeps float32 GPU paths precise far from 0,0
@@ -597,6 +600,9 @@ function finalize(B, meta, entityTotal) {
   for (let k = 0; k < bbox.length; k += 4) { bbox[k] -= ox; bbox[k + 1] -= oy; bbox[k + 2] -= ox; bbox[k + 3] -= oy; }
   for (const t of texts) { t.x -= ox; t.y -= oy; t.bbox[0] -= ox; t.bbox[1] -= oy; t.bbox[2] -= ox; t.bbox[3] -= oy; }
   const extents = [ext[0] - ox, ext[1] - oy, ext[2] - ox, ext[3] - oy];
+  const local = (b) => [b[0] - ox, b[1] - oy, b[2] - ox, b[3] - oy];
+  if (meta.page) meta.page = { ...meta.page, box: local(meta.page.box) };
+  if (meta.underlay) meta.underlay = { ...meta.underlay, box: local(meta.underlay.box) };
 
   // layer item counts
   for (let i = 0; i < n; i++) meta.layers[layer[i]].count++;

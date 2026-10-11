@@ -5,3 +5,5 @@
 *.dwg binary
 *.wasm binary
 vendor/** -text
+*.pdf binary
+*.ttf binary

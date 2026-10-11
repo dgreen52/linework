@@ -378,6 +378,59 @@ def wiring(path):
             "levels": [1, 4, 5, 6, 10, 12, 20, 30], "labels": ["W101", "W102", "W103", "W1010", "w104"]}
 
 
+# --------------------------------------------------------------------------- wiring sheet for the Trace tool
+def trace_sheet(path):
+    """The invented sheet of tools/trace_sheet.json (the DXF twin is made by make_fixtures.mjs): connector
+    cells J4 / P1 (frame, pin stubs, pin texts), a terminal strip cell with filled pin dots, wires as lines,
+    line strings and a complex chain with a hop arc, filled junction dots, a relay coil, wire labels (two of
+    them rotated), off-sheet notes and a title block. Levels: 1 border, 4 title, 5 wires, 10 labels,
+    12 cells, 14 dots, 20 notes, 30 coil."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "trace_sheet.json"), encoding="utf8") as fh:
+        J = json.load(fh)
+    ds, lyr = create(path, ["MASTER_UNIT_NAME=m", "SUB_UNIT_NAME=mm", "SUB_UNITS_PER_MASTER_UNIT=1000",
+                            "UOR_PER_SUB_UNIT=10", "ORIGIN=0,0,0"])
+    add(lyr, wkt_line([tuple(p) for p in J["border"]]), Level=1, ColorIndex=1)
+    ds = None
+    ctx = R.Ctx(10000, (0, 0))
+    C = R.as_component
+
+    def dot(d, level):
+        return R.with_attributes(R.ellipse15(ctx, tuple(d["c"]), d["r"], d["r"], 0, level=level, color=2), R.fill_linkage(2))
+
+    els = []
+    for c in J["cells"]:
+        lv = c["level"]
+        comps = [C(R.multipoint(6, ctx, [tuple(p) for p in c["frame"]], level=lv, color=1))]
+        comps += [C(R.line3(ctx, tuple(a), tuple(b), level=lv, color=1)) for a, b in c.get("lines", [])]
+        comps += [C(dot(d, lv)) for d in c.get("dots", [])]
+        comps += [C(R.text17(ctx, tuple(t["p"]), t["s"], t["h"], level=lv, color=3)) for t in c["texts"]]
+        xs = [p[0] for p in c["frame"]] + [t["p"][0] for t in c["texts"]] + [q[0] for ln in c.get("lines", []) for q in ln]
+        ys = [p[1] for p in c["frame"]] + [t["p"][1] + t["h"] for t in c["texts"]] + [t["p"][1] for t in c["texts"]]
+        els += [R.cell2(ctx, c["name"], tuple(c["frame"][0]), comps, rng=(min(xs), min(ys), max(xs), max(ys)), level=lv, color=1)] + comps
+    for w in J["wires"]:
+        if "chain" in w:
+            parts = []
+            for p in w["chain"]:
+                if "arc" in p:
+                    a = p["arc"]
+                    parts.append(C(R.arc16(ctx, tuple(a["c"]), a["r"], a["r"], 0, a["start"], a["sweep"], level=5, color=2, weight=1)))
+                else:
+                    parts.append(C(R.multipoint(4, ctx, [tuple(q) for q in p["pts"]], level=5, color=2, weight=1)))
+            els += [R.complex_header(12, 5, parts, color=2, weight=1)] + parts
+        elif len(w["pts"]) == 2:
+            els.append(R.line3(ctx, tuple(w["pts"][0]), tuple(w["pts"][1]), level=5, color=2, weight=1))
+        else:
+            els.append(R.multipoint(4, ctx, [tuple(p) for p in w["pts"]], level=5, color=2, weight=1))
+    els += [dot(d, 14) for d in J["dots"]]
+    els += [R.ellipse15(ctx, tuple(c["c"]), c["r"], c["r"], 0, level=c["level"], color=4) for c in J["circles"]]
+    for t in J["texts"]:
+        els.append(R.text17(ctx, tuple(t["p"]), t["s"], t["h"], t.get("rot", 0), level=t.get("level", 10), color=3))
+    R.append_elements(path, els)
+    palette = [(255, 255, 255), (40, 90, 255), (30, 190, 70), (250, 210, 0), (230, 40, 40)]
+    R.insert_after_tcb_seed(path, [R.color_table(palette, background=(0, 0, 0))])
+    return {"uor_per_master": 10000, "origin": [0, 0], "master": "m", "sub": "mm"}
+
+
 def main():
     os.makedirs(SAMPLES, exist_ok=True)
     os.makedirs(FIX, exist_ok=True)
@@ -387,7 +440,8 @@ def main():
             (os.path.join(FIX, "dgn-titleblock.dgn"), title_block),
             (os.path.join(FIX, "dgn-fidelity.dgn"), fidelity),
             (os.path.join(FIX, "dgn-3d-rot.dgn"), three_d_rot),
-            (os.path.join(FIX, "dgn-wiring.dgn"), wiring)]
+            (os.path.join(FIX, "dgn-wiring.dgn"), wiring),
+            (os.path.join(FIX, "dgn-trace.dgn"), trace_sheet)]
     only = set(sys.argv[1:])  # e.g. `python tools/make_dgn_fixtures.py dgn-titleblock` rebuilds just that one
     for path, fn in jobs:
         if only and os.path.splitext(os.path.basename(path))[0] not in only:

@@ -19,7 +19,8 @@
       "accept": {
         "image/vnd.dxf": [".dxf"],
         "image/vnd.dwg": [".dwg"],
-        "application/octet-stream": [".dgn"]
+        "application/octet-stream": [".dgn"],
+        "application/pdf": [".pdf"]
       }
     }
   ]

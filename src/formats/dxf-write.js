@@ -531,7 +531,7 @@ export function writeDxf(model, opts = {}) {
   const notes = [];
   if (stats.splines) notes.push(`${stats.splines} curve${stats.splines === 1 ? ' was' : 's were'} saved as polylines (their on-screen approximation).`);
   if (stats.cellsFlattened) notes.push(`${stats.cellsFlattened} cell${stats.cellsFlattened === 1 ? '' : 's'} saved as separate items (DXF has no cells).`);
-  if (stats.fills) notes.push(`${stats.fills} DGN fill${stats.fills === 1 ? ' was' : 's were'} saved as solid hatch${stats.fills === 1 ? '' : 'es'} under the outline.`);
+  if (stats.fills) notes.push(`${stats.fills} ${model.format === 'PDF' ? 'filled shape' : 'DGN fill'}${stats.fills === 1 ? ' was' : 's were'} saved as solid hatch${stats.fills === 1 ? '' : 'es'} under the outline.`);
   if (stats.degenerate) notes.push(`${stats.degenerate} zero-size ellipse${stats.degenerate === 1 ? ' was' : 's were'} left out (not valid in DXF).`);
   if (stats.dimsMoved) notes.push(`${stats.dimsMoved} moved dimension${stats.dimsMoved === 1 ? '' : 's'} got a copy of their block.`);
   return { text: out.join('\r\n') + '\r\n', notes, written: stats };

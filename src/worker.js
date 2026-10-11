@@ -1,5 +1,5 @@
 // Parse worker: reads + prepares drawings off the main thread so the UI never freezes.
-// Message in:  { id, name, buffer?: ArrayBuffer, sample?: 'stress' }
+// Message in:  { id, name, buffer?: ArrayBuffer, sample?: 'stress', page?: n (PDF, 1-based) }
 // Messages out: { id, type: 'progress', phase, fraction } | { id, type: 'done', scene } | { id, type: 'error', code, message }
 // After 'done', the drawing model (needed for editing and saving) follows in small pieces so the
 // main thread never spends long deserialising it: { id, type: 'model-part', entities } ... then
@@ -26,10 +26,10 @@ export async function loadInWorkerScope(msg, post) {
     post({ id, type: 'progress', phase, fraction: base + span * f });
   };
   const onPhase = (phase, fraction, watch) => post({ id, type: 'progress', phase, fraction, watch });
-  const model = await parseDrawingAsync(bytes, name, { onProgress: progress('Reading', 0, 0.7), onPhase });
+  const model = await parseDrawingAsync(bytes, name, { onProgress: progress('Reading', 0, 0.7), onPhase, page: msg.page });
   const scene = buildScene(model, { fileName: name, onProgress: progress('Preparing', 0.7, 0.3) });
   scene.fileSize = bytes.length;
-  scene.hash = hashBytes(bytes);
+  scene.hash = hashBytes(bytes) + (model.page && model.page.n > 1 ? '-p' + model.page.n : ''); // PDF: per page
   return { scene, model, bytes: model.format === 'DGN' ? bytes : null };
 }
 
@@ -51,7 +51,7 @@ export function hashBytes(b) {
 
 /** Model without the parts sent separately (and without the Map, rebuilt on arrival). */
 export function modelMeta(model) {
-  const { entities, paperEntities, layerIndex, cells, ...meta } = model;
+  const { entities, paperEntities, layerIndex, cells, underlay, ...meta } = model;
   return meta;
 }
 
@@ -65,7 +65,8 @@ if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof self.
       const { scene: sc, model, bytes } = await loadInWorkerScope(msg, (m) => self.postMessage(m));
       const scene = packTexts(sc);
       scene.chunks = buildChunks(scene); // render batches, prepared off the main thread
-      self.postMessage({ id: msg.id, type: 'done', scene }, [...sceneTransferables(scene), ...chunkTransferables(scene.chunks)]);
+      const u = scene.underlay; // PDF pictures (ImageBitmaps)
+      self.postMessage({ id: msg.id, type: 'done', scene }, [...sceneTransferables(scene), ...chunkTransferables(scene.chunks), ...(u ? [u.image, u.dark].filter(Boolean) : [])]);
       const ents = model.entities;
       for (let i = 0; i < ents.length; i += PART) self.postMessage({ id: msg.id, type: 'model-part', entities: ents.slice(i, i + PART) });
       const buf = bytes ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : null;

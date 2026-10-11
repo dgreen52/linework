@@ -202,7 +202,7 @@
           <button type="button" class="sample" data-sample="samples/site-plan.dgn"><strong>Site plan</strong><span>DGN v7 · levels, cells, curves</span></button>
           <button type="button" class="sample" data-sample="stress"><strong>Stress test</strong><span>DXF · 53,100 items, generated</span></button>
         </div>
-        <p class="formats">Opens DXF (ASCII, R12 to 2018), DWG (R13 to 2018) and DGN v7.</p>
+        <p class="formats">Opens DXF (ASCII, R12 to 2018), DWG (R13 to 2018), DGN v7 and PDF (one page at a time).</p>
       </div>
     </section>
 
@@ -274,7 +274,7 @@
   <span class="st hide-sm" id="st-perf"></span>
 </footer>
 
-<div class="drop-overlay" id="drop-overlay" hidden><div>Drop the drawing to open it<small>DXF · DWG · DGN v7 · or a .markup.json file</small></div></div>
+<div class="drop-overlay" id="drop-overlay" hidden><div>Drop the drawing to open it<small>DXF · DWG · DGN v7 · PDF · or a .markup.json file</small></div></div>
 
 <dialog id="dlg-help" aria-labelledby="help-title">
   <form method="dialog" class="dlg">
@@ -293,6 +293,7 @@
           <dt><kbd>Ctrl</kbd>+<kbd>F</kbd></dt><dd>Find text (<kbd>Enter</kbd> / <kbd>Shift</kbd>+<kbd>Enter</kbd> or <kbd>F3</kbd>: next / previous); in Edit also replace</dd>
           <dt><kbd>I</kbd></dt><dd>Element info: type, level, colour, weight, text, size, DGN element and offset</dd>
           <dt><kbd>B</kbd></dt><dd>Dark background / white paper</dd>
+          <dt><kbd>Page Up</kbd> <kbd>Page Down</kbd></dt><dd>PDF: previous / next page</dd>
         </dl>
       </section>
       <section><h3>Measure</h3>
@@ -420,7 +421,7 @@
   </form>
 </dialog>
 
-<input type="file" id="file-input" accept=".dxf,.dgn,.dwg,.json,application/dxf,image/vnd.dxf" hidden>
+<input type="file" id="file-input" accept=".dxf,.dgn,.dwg,.pdf,.json,application/dxf,image/vnd.dxf,application/pdf" hidden>
 <input type="file" id="markup-input" accept=".json,application/json" hidden>
 <input type="file" id="names-input" accept=".csv,.txt,text/csv,text/plain" hidden>
 <div id="print-root" aria-hidden="true"></div>

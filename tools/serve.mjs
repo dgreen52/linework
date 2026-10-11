@@ -47,13 +47,15 @@ export function headersFor(path) {
 
 /**
  * opts.onRequest(path) is called for every request (the e2e tests log what was fetched);
- * opts.headers(headers, path) may change the response headers (tests: a weaker or stricter CSP).
+ * opts.headers(headers, path) may change the response headers (tests: a weaker or stricter CSP);
+ * opts.handle(req, res, path) may answer a request itself and return true (tests: CSP reports).
  */
 export function startServer(port = 8080, host = '127.0.0.1', opts = {}) {
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://x');
       if (opts.onRequest) opts.onRequest(url.pathname);
+      if (opts.handle && opts.handle(req, res, url.pathname)) return;
       let p = decodeURIComponent(url.pathname);
       if (p.endsWith('/')) p += 'index.html';
       const file = normalize(join(ROOT, p));

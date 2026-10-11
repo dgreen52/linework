@@ -118,6 +118,7 @@ test('empty state, privacy promise, app shell size', async () => {
   const startup = new Set(['index.html', 'app.css', ...staticGraph('src/app.js'), ...staticGraph('src/worker.js')]);
   assert(startup.has('src/scene.js') && startup.has('src/app/edit-ui.js') && startup.has('src/formats/dxf.js'), 'static import graph found: ' + [...startup].join(' '));
   assert(!startup.has('src/formats/dxf-write.js') && !startup.has('src/formats/dgn-write.js'), 'writers are not loaded at startup');
+  assert(!startup.has('src/formats/pdf.js') && !startup.has('src/app/pdf-ui.js') && ![...startup].some((p) => p.startsWith('vendor/')), 'the DWG and PDF readers are not loaded at startup');
   let startGz = 0;
   for (const p of startup) startGz += gz(p);
   const sw = readFileSync(join(ROOT, 'sw.js'), 'utf8');
@@ -2952,6 +2953,318 @@ test('level names (DGN): name a level in the Layers panel, import a names file, 
   eq(await page.locator('#layer-list .lvn').count(), 0, 'Clear');
   await page.click('.toast button:has-text("Undo")');
   assert(/Level 5\s*Wires/.test(await rowOf(5).textContent()), 'Clear can be undone');
+  await close(page);
+});
+
+// ------------------------------------------------------------------ PDF (pdf.js)
+const PDF_READER_CACHE = /PDF_READER_CACHE = '([^']+)'/.exec(SW_SRC)[1];
+const PDF_FILES = /\/vendor\/pdfjs\/|\/src\/formats\/pdf\.js$|\/src\/app\/pdf-ui\.js$/;
+/**
+ * A page on its own server whose Content-Security-Policy (the deployed one, or without
+ * 'wasm-unsafe-eval' when strict) reports every violation to /csp-report: violations in the parse
+ * worker are reported too (Playwright does not see a worker's console). page.reports, page.paths.
+ */
+async function reportingPage(strict = false, viewport = { width: 1440, height: 900 }) {
+  const reports = [], paths = [];
+  const srv = await startServer(0, '127.0.0.1', {
+    onRequest: (p) => paths.push(p),
+    handle: (req, res, p) => { if (p !== '/csp-report') return false; reports.push(p); req.resume(); res.writeHead(204).end(); return true; },
+    headers: (h) => ({ ...h, 'Content-Security-Policy': (strict ? h['Content-Security-Policy'].replace(" 'wasm-unsafe-eval'", '') : h['Content-Security-Policy']) + '; report-uri /csp-report' }),
+  });
+  const ctx = await browser.newContext({ viewport, acceptDownloads: true });
+  const page = await ctx.newPage();
+  page.errors = [];
+  page.on('console', (m) => { if (m.type() === 'error') page.errors.push('console: ' + m.text()); });
+  page.on('pageerror', (e) => page.errors.push('pageerror: ' + e.message));
+  Object.assign(page, { ctx, reports, paths, srv });
+  await page.goto(`http://127.0.0.1:${srv.address().port}/?nosw`);
+  await page.waitForFunction(() => !!window.__linework);
+  return page;
+}
+const pdfPaths = (page) => page.paths.filter((p) => PDF_FILES.test(p)).map((p) => p.split('/').pop());
+const sceneInfo = (page) => page.evaluate(() => { const a = window.__linework, s = a.scene; return { fmt: s.format, units: s.units.abbr, page: s.page && { n: s.page.n, count: s.page.count, label: s.page.label, box: s.page.box, raster: s.page.raster }, n: s.n, texts: s.textCount, layers: s.layers.map((l) => l.name), u: s.underlay && { w: s.underlay.w, h: s.underlay.h, dark: !!s.underlay.dark } }; });
+/** World corners of the closed four-sided outline that is w x h drawing units (a wall, a box). */
+const boxOf = (page, w, h) => page.evaluate(([w, h]) => {
+  const s = window.__linework.scene, [ox, oy] = s.origin;
+  for (let i = 0; i < s.n; i++) {
+    if (s.count[i] !== 4 || !(s.flags[i] & 1)) continue;
+    const b = s.bbox.subarray(4 * i, 4 * i + 4);
+    if (Math.abs(b[2] - b[0] - w) < 0.01 && Math.abs(b[3] - b[1] - h) < 0.01) return [b[0] + ox, b[1] + oy, b[2] + ox, b[3] + oy];
+  }
+  return null;
+}, [w, h]);
+
+test('PDF: pdf.js loads only when a PDF is opened, once; no CSP violation from the page or the parse worker (reported to the server); a vector page: mm, layers, exact measure with snaps, find; Linework\'s own vector print reads back to scale', async () => {
+  const page = await reportingPage();
+  // reports reach the server: code compiled from a string by the page is refused and reported
+  page.allowErrors = [/Evaluating a string as JavaScript violates|Refused to evaluate a string/];
+  await page.evaluate(() => setTimeout('window.__ranFromString = true', 0)); // eslint-disable-line no-implied-eval
+  for (let t = 0; t < 40 && !page.reports.length; t++) await page.waitForTimeout(100);
+  eq(page.reports.length, 1, 'a violation is reported');
+  page.reports.length = 0;
+  await page.setInputFiles('#file-input', FIX('house-plan.dxf'));
+  await page.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'house-plan.dxf' && !window.__linework.loading);
+  await page.setInputFiles('#file-input', FIX('site-plan.dgn'));
+  await page.waitForFunction(() => window.__linework.doc && window.__linework.doc.name === 'site-plan.dgn' && !window.__linework.loading);
+  eq(pdfPaths(page).length, 0, 'DXF and DGN never load the PDF reader');
+  await page.evaluate(() => { window.__labels = []; new MutationObserver(() => window.__labels.push(document.querySelector('#progress-label').textContent)).observe(document.querySelector('#progress-label'), { childList: true, characterData: true, subtree: true }); });
+  await openFixture(page, 'pdf-plan.pdf');
+  await page.waitForFunction(() => !!window.__linework.pages);
+  for (let t = 0; t < 30 && pdfPaths(page).length < 6; t++) await page.waitForTimeout(100);
+  const loaded = pdfPaths(page);
+  assert(['pdf.js', 'pdf-ui.js', 'pdf.min.mjs', 'pdf.worker.min.mjs', 'openjpeg.wasm', 'jbig2.wasm'].every((f) => loaded.filter((x) => x === f).length === 1), 'reader loaded once (and its image decoders fetched for offline use): ' + loaded);
+  assert(await page.evaluate(() => window.__labels.some((l) => /Loading the PDF reader for pdf-plan\.pdf/.test(l))), 'progress names the reader download');
+  const info = await sceneInfo(page);
+  eq(info.fmt, 'PDF', 'format');
+  eq(info.units, 'mm', 'A4: millimetres');
+  assert(info.layers.includes('Lines (red)') && info.layers.includes('Annotations') && info.layers.includes('Text'), 'layers: ' + info.layers);
+  eq(info.page.count, 1, 'one page');
+  assert((await page.$eval('#doc-pages', (e) => e.style.display)) === 'none', 'no page picker for a one-page PDF');
+  assert(/PDF 1\.7/.test(await page.getAttribute('#doc-name', 'title')), 'file info');
+  eq(await page.textContent('#doc-units'), 'mm', 'units chip');
+  await shot(page, 'pdf-plan-dark-1440');
+  // measure exactly as drawn: the 100 mm line, endpoints snapped
+  await clearToasts(page);
+  await page.click('#tab-measure');
+  await page.click('[data-tool="distance"]');
+  await clickWorld(page, 20, 20, 4, -3);
+  await clickWorld(page, 120, 20, -3, 4);
+  eq((await mcValue(page)).trim(), '100.00 mm', 'a 100 mm line measures 100.00 mm');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('h');
+  // find text
+  await page.keyboard.press('Control+f');
+  await page.waitForSelector('.findbar:not([hidden]) #find-q');
+  await page.keyboard.type('PUMP-7');
+  eq(await findN(page), '1 match', 'find text in a PDF');
+  await page.keyboard.press('Escape');
+  // layers by colour: hide the red lines (pixel check)
+  await page.evaluate(() => window.__linework.fit());
+  await settle(page);
+  const before = await pixelAt(page, 100, 100);
+  assert(before[0] > 150 && before[1] < 90, 'red line drawn red: ' + before);
+  await page.locator('#layer-list li', { hasText: 'Lines (red)' }).locator('input').uncheck();
+  await settle(page);
+  const after = await pixelAt(page, 100, 100);
+  assert(!(after[0] > 150 && after[1] < 90), 'red layer hidden: ' + after);
+  // Linework's own vector print of the house plan (A3, 1:100), opened as a PDF: the 12 x 8 m outer wall is 120 x 80 mm
+  await openFixture(page, 'pdf-print-house-plan.pdf');
+  const wall = await boxOf(page, 120, 80);
+  assert(wall, 'the outer wall is a 120 x 80 mm outline');
+  await clearToasts(page);
+  await zoomTo(page, wall[0] - 4, wall[1] - 4, wall[2] + 4, wall[1] + 4);
+  await page.click('#tab-measure');
+  await page.click('[data-tool="distance"]');
+  await clickWorld(page, wall[0], wall[1], 2, -2);
+  await clickWorld(page, wall[2], wall[1], -2, -2);
+  eq((await mcValue(page)).trim(), '120.00 mm', 'to scale: 1:100');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('h');
+  await shot(page, 'pdf-print-house-plan-dark-1440');
+  await openFixture(page, 'pdf-schematic.pdf');
+  eq((await sceneInfo(page)).units, 'in', 'Tabloid: inches');
+  await page.waitForTimeout(1500); // reports are sent asynchronously
+  eq(page.reports.length, 0, 'no CSP violation while reading PDFs, in the page or the parse worker');
+  await page.ctx.close();
+  page.srv.close();
+  const errs = page.errors.filter((e) => !(page.allowErrors || []).some((re) => re.test(e)));
+  assert(!errs.length, 'no console errors: ' + errs.join(' | '));
+});
+
+test('PDF under a CSP without wasm-unsafe-eval: the parse worker\'s refused WebAssembly is reported (so the test above would see one); the PDF still opens', async () => {
+  const page = await reportingPage(true);
+  await openFixture(page, 'pdf-plan.pdf');
+  for (let t = 0; t < 40 && !page.reports.length; t++) await page.waitForTimeout(100);
+  assert(page.reports.length >= 1, 'pdf.js compiles the spot colour\'s PostScript function to WebAssembly in the parse worker: refused and reported');
+  const info = await sceneInfo(page);
+  eq(info.fmt, 'PDF', 'opens anyway: pdf.js falls back to JavaScript');
+  assert(info.layers.includes('Lines (red)'), 'the spot colour line is still red');
+  await page.ctx.close();
+  page.srv.close();
+});
+
+test('PDF pages: picker with the PDF\'s page labels, Page Down / Page Up / list / buttons; markups kept per page; a /Rotate page is landscape; app.pages; a non-PDF hides the picker; 390 px', async () => {
+  const page = await newPage();
+  await openFixture(page, 'pdf-multipage.pdf');
+  await page.waitForFunction(() => !!window.__linework.pages && document.querySelector('#doc-pages').style.display !== 'none');
+  assert(/Opened pdf-multipage\.pdf, page i of 3/.test(await page.textContent('#toasts')), 'the open note names the page');
+  eq(await page.$eval('#sel-page', (s) => s.selectedOptions[0].textContent), 'Page i / 3', 'page label');
+  eq(await page.$$eval('#sel-page option', (o) => o.map((x) => x.textContent).join(',')), 'Page i / 3,Page 1 / 3,Page 2 / 3', 'all pages');
+  assert(await page.isDisabled('#btn-page-prev') && !(await page.isDisabled('#btn-page-next')), 'first page');
+  eq((await sceneInfo(page)).units, 'in', 'Letter: inches');
+  await clearToasts(page);
+  await shot(page, 'pdf-pages-dark-1440');
+  // a markup on page 1
+  await page.click('#tab-markup'); await page.click('[data-tool="rect"]');
+  const box = await stageBox(page);
+  await dragScreen(page, [box.x + box.w * 0.4, box.y + box.h * 0.4], [box.x + box.w * 0.5, box.y + box.h * 0.5]);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'a markup on page 1');
+  await page.click('#tab-view');
+  await page.keyboard.press('PageDown');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 2 && !window.__linework.loading);
+  let info = await sceneInfo(page);
+  eq(info.page.label, '1', 'page 2 is labelled 1');
+  eq(info.units, 'mm', 'A4 landscape: mm');
+  eq(await page.evaluate(() => window.__linework.markups.length), 0, 'page 2 has its own markups');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => t.s === 'PAGE TWO')), 'page 2 content');
+  eq(await page.$eval('#sel-page', (s) => s.value), '2', 'picker follows');
+  await page.selectOption('#sel-page', '3');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 3 && !window.__linework.loading);
+  info = await sceneInfo(page);
+  assert(info.page.box[2] - info.page.box[0] > info.page.box[3] - info.page.box[1], 'a /Rotate 90 page shows landscape');
+  const rot = await page.evaluate(() => { const t = window.__linework.scene.texts.find((x) => x.s === 'PAGE THREE'); return Math.atan2(t.m[1], t.m[0]); });
+  assert(Math.abs(rot + Math.PI / 2) < 1e-6, 'its text reads downwards: ' + rot);
+  assert(await page.isDisabled('#btn-page-next'), 'last page');
+  await clearToasts(page);
+  await shot(page, 'pdf-page3-rotated-dark-1440');
+  await page.keyboard.press('b');
+  await shot(page, 'pdf-page3-rotated-paper-1440');
+  await page.keyboard.press('b');
+  await page.click('#btn-page-prev');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 2 && !window.__linework.loading);
+  await page.keyboard.press('PageUp');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 1 && !window.__linework.loading);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'page 1 markup back');
+  // the pages API (sheet sets can use it)
+  const api = await page.evaluate(async () => { const p = window.__linework.pages; const r = { count: p.count, current: p.current, l2: p.label(2), ok: await p.goto(3) }; r.after = p.current; return r; });
+  assert(api.count === 3 && api.current === 1 && api.l2 === '1' && api.ok === true && api.after === 3, 'app.pages: ' + JSON.stringify(api));
+  await openFixture(page, 'bracket.dxf');
+  eq(await page.$eval('#doc-pages', (e) => e.style.display), 'none', 'no picker for a DXF');
+  eq(await page.evaluate(() => window.__linework.pages.count), 0, 'app.pages: not a PDF');
+  await close(page);
+  // 390 px: the picker (in the status bar) is on screen and overlaps nothing
+  const phone = await newPage({ context: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true } });
+  await openFixture(phone, 'pdf-multipage.pdf');
+  await phone.waitForFunction(() => !!window.__linework.pages);
+  await clearToasts(phone);
+  const r = await phone.evaluate(() => {
+    const box = (e) => e.getBoundingClientRect(), p = box(document.querySelector('#doc-pages'));
+    const others = [...document.querySelectorAll('.statusbar > *, .topbar > *')].filter((e) => e.id !== 'doc-pages' && !e.classList.contains('spacer') && box(e).width > 0);
+    return { p: [p.left, p.right, p.top, p.bottom], w: innerWidth, h: innerHeight, hits: others.filter((e) => { const b = box(e); return b.left < p.right && b.right > p.left && b.top < p.bottom && b.bottom > p.top; }).map((e) => e.id || e.className) };
+  });
+  assert(r.p[0] >= 0 && r.p[1] <= r.w && r.p[3] <= r.h && !r.hits.length, 'page picker on screen at 390 px, overlapping nothing: ' + JSON.stringify(r));
+  await shot(phone, 'pdf-pages-dark-390');
+  await close(phone);
+});
+
+test('PDF scanned page: shown as a picture with a note (no text recognition), inverted on the dark background; measure and mark up on it; its invisible text on a hidden layer; printed with the picture', async () => {
+  const page = await newPage();
+  await openFixture(page, 'pdf-scan.pdf');
+  await page.waitForSelector('.toast.warn');
+  assert(/scanned image: it is shown as a picture.*no text recognition/.test(await page.textContent('#toasts')), 'the open note says so: ' + await page.textContent('#toasts'));
+  const info = await sceneInfo(page);
+  assert(info.page.raster && info.u && info.u.w === 1700 && info.u.h === 2200 && info.u.dark, 'picture at 200 dpi, with a dark-theme copy: ' + JSON.stringify(info.u));
+  await clearToasts(page);
+  // the scan's frame line (left edge, image column 12-13 of 425 = 0.25 in) and empty paper
+  const at = (x, y) => page.evaluate(([x, y]) => { const a = window.__linework, [sx, sy] = a.worldToScreen(x, y), d = a.dpr; const g = document.querySelector('#cv-drawing').getContext('2d').getImageData(Math.round(sx * d) - 3, Math.round(sy * d), 7, 1).data; let mx = 0, mn = 765; for (let i = 0; i < g.length; i += 4) { const v = g[i] + g[i + 1] + g[i + 2]; mx = Math.max(mx, v); mn = Math.min(mn, v); } return [mx, mn]; }, [x, y]);
+  let line = await at(0.25, 5), paper = await at(6, 1.5);
+  assert(line[0] > 600 && paper[0] < 100, `dark theme: the scan is inverted (line ${line}, paper ${paper})`);
+  await shot(page, 'pdf-scan-dark-1440');
+  await page.keyboard.press('b');
+  await settle(page);
+  line = await at(0.25, 5); paper = await at(6, 1.5);
+  assert(line[1] < 200 && paper[1] > 700, `paper theme: as scanned (line ${line}, paper ${paper})`);
+  await shot(page, 'pdf-scan-paper-1440');
+  // measure on the picture (inches) and mark it up
+  await page.click('#tab-measure'); await page.click('[data-tool="distance"]');
+  await clickWorld(page, 1, 1); await clickWorld(page, 4, 1);
+  eq((await mcValue(page)).trim(), '3.00 in', 'measure across the page');
+  await page.keyboard.press('Escape');
+  await page.click('#tab-markup'); await page.click('[data-tool="cloud"]');
+  const box = await stageBox(page);
+  await dragScreen(page, [box.x + box.w * 0.45, box.y + box.h * 0.4], [box.x + box.w * 0.55, box.y + box.h * 0.5]);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'a markup on the scan');
+  // the scanner's invisible text: hidden, searchable once shown
+  await page.click('#tab-view');
+  await page.keyboard.press('Control+f');
+  await page.waitForSelector('.findbar:not([hidden]) #find-q');
+  await page.keyboard.type('PUMP-7');
+  assert(!/^1 match/.test(await findN(page)), 'a hidden layer is not searched: ' + (await findN(page)));
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { const li = [...document.querySelectorAll('#layer-list li')].find((l) => /Text \(invisible\)/.test(l.textContent)); li.querySelector('input').click(); });
+  await page.keyboard.press('Control+f');
+  await page.fill('#find-q', 'PUMP-7');
+  eq(await findN(page), '1 match', 'shown: found');
+  await page.keyboard.press('Escape');
+  // print: the vector sheet carries the picture
+  await page.evaluate(() => window.__linework.printSheet({ sheet: 'letter', orient: 'portrait', scale: 'Fit', area: 'all' }));
+  assert(await page.evaluate(() => { const i = document.querySelector('#print-root svg image'); return !!i && /^data:image\/png;base64,/.test(i.getAttribute('href')); }), 'the print sheet has the scan');
+  await page.evaluate(() => { document.querySelector('#print-root').innerHTML = ''; });
+  await close(page);
+});
+
+test('PDF: password-protected and damaged files give friendly messages and keep the open drawing; a PDF with only an owner password opens', async () => {
+  const page = await newPage();
+  await openFixture(page, 'pdf-plan.pdf');
+  for (const [file, re] of [['pdf-password.pdf', /protected by a password/], ['pdf-broken.pdf', /This PDF could not be read/]]) {
+    await clearToasts(page);
+    await page.setInputFiles('#file-input', FIX(file));
+    await page.waitForSelector('.toast.error');
+    assert(re.test(await page.textContent('#toasts')), `${file}: ${await page.textContent('#toasts')}`);
+    eq(await page.textContent('#doc-name'), 'pdf-plan.pdf', 'the previous drawing is still open');
+  }
+  await openFixture(page, 'pdf-owner.pdf');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => t.s === 'OWNER ONLY')), 'owner-only encryption: opens');
+  await close(page);
+});
+
+test('PDF: Edit and Save give a DXF copy (Linework does not write PDF), named after the page; it reopens', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'pdf-plan.pdf');
+  // retype a text of the page (Edit works on a PDF page like on any drawing)
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  await zoomTo(page, 10, 230, 80, 270);
+  await page.mouse.dblclick(...(await client(page, ...(await textAt(page, 'PLAN VIEW A')))));
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
+  await page.keyboard.press('Control+a'); await page.keyboard.type('PLAN VIEW B'); await page.keyboard.press('Enter');
+  assert(await ED.dirty(page), 'unsaved edit');
+  assert(await page.evaluate(() => !!window.__linework.scene.page), 'still a PDF page after the edit');
+  await page.click('#btn-esaveas');
+  await page.waitForSelector('#dlg-save[open]');
+  assert(/^Opened from a PDF\. Linework does not write PDF/.test(await page.textContent('#save-notes li')), 'the dialog says first, plainly, that PDF is not written');
+  assert(/Pictures and fonts are not kept/.test(await page.textContent('#save-notes')), 'and what a copy leaves out');
+  assert(await page.isChecked('input[name="fmt"][value="DXF"]'), 'DXF by default');
+  eq(await page.inputValue('#save-name'), 'pdf-plan-edited.dxf', 'default name');
+  await shot(page, 'save-dialog-pdf-dark-1440');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-do-save')]);
+  eq(dl.suggestedFilename(), 'pdf-plan-edited.dxf', 'downloads a DXF');
+  const out = join(OUT, 'pdf-plan-edited.dxf');
+  await dl.saveAs(out);
+  assert(/Linework does not write PDF, so this is a DXF copy/.test(await page.textContent('#toasts')), 'the save note says so');
+  await page.setInputFiles('#file-input', out);
+  await page.waitForFunction(() => window.__linework.doc.name === 'pdf-plan-edited.dxf' && !window.__linework.loading);
+  const info = await sceneInfo(page);
+  eq(info.fmt, 'DXF', 'reopened as DXF');
+  eq(info.units, 'mm', 'in millimetres');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => t.s === 'PLAN VIEW B') && window.__linework.scene.texts.some((t) => t.s === 'PUMP-7 INLET')), 'with its text and the edit');
+  // page 2 of a multi-page PDF: the name says which page
+  await openForEdit(page, 'pdf-multipage.pdf');
+  await page.waitForFunction(() => !!window.__linework.pages);
+  await page.evaluate(() => window.__linework.pages.goto(2));
+  await page.waitForFunction(() => window.__linework.scene.page.n === 2 && !window.__linework.loading && window.__linework.edit.ready);
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
+  eq(dl2.suggestedFilename(), 'pdf-multipage-p2-edited.dxf', 'Save on page 2');
+  await close(page);
+});
+
+test('PDF offline: after the first PDF, pdf.js is cached in its own cache and PDFs (scanned pages too) open with no network', async () => {
+  const page = await newPage({ sw: true });
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 30000 });
+  await openFixture(page, 'pdf-scan.pdf');
+  await page.waitForFunction(async (name) => (await (await caches.open(name)).keys()).length === 4, PDF_READER_CACHE, { timeout: 30000 });
+  assert(await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('linework-')).length === 2), 'app cache + PDF reader cache');
+  await page.ctx.setOffline(true);
+  await page.reload();
+  await page.waitForFunction(() => !!window.__linework);
+  await openFixture(page, 'pdf-multipage.pdf');
+  await page.waitForFunction(() => !!window.__linework.pages);
+  await page.keyboard.press('PageDown');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 2 && !window.__linework.loading);
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => t.s === 'PAGE TWO')), 'pages switch offline');
+  await openFixture(page, 'pdf-scan.pdf');
+  assert(await page.evaluate(() => !!window.__linework.scene.underlay), 'a scanned page opens offline');
+  await page.ctx.setOffline(false);
   await close(page);
 });
 

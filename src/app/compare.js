@@ -26,7 +26,7 @@ export async function startCompare(app) {
     return;
   }
   if (family(r.scene.format) !== family(app.scene.format)) {
-    toast('Compare needs two drawings of the same kind', { kind: 'warn', detail: 'DGN with DGN, or DXF / DWG with DXF / DWG.' });
+    toast('Compare needs two drawings of the same kind', { kind: 'warn', detail: 'DGN with DGN, or DXF / DWG / PDF with DXF / DWG / PDF.' });
     return;
   }
   for (let t = 0; t < 600 && !(app.edit && app.edit.ready); t++) await new Promise((res) => setTimeout(res, 50));
@@ -49,13 +49,13 @@ function chooseFile() {
   const input = () => {
     let inp = $('#compare-input');
     if (!inp) {
-      inp = Object.assign(document.createElement('input'), { type: 'file', id: 'compare-input', hidden: true, accept: '.dxf,.dgn,.dwg' });
+      inp = Object.assign(document.createElement('input'), { type: 'file', id: 'compare-input', hidden: true, accept: '.dxf,.dgn,.dwg,.pdf' });
       document.body.appendChild(inp);
     }
     return new Promise((res) => { inp.onchange = () => { const f = inp.files[0]; inp.value = ''; res(f || null); }; inp.click(); });
   };
   if (typeof window.showOpenFilePicker !== 'function') return input();
-  return window.showOpenFilePicker({ id: 'linework-compare', types: [{ description: 'Drawings', accept: { 'application/octet-stream': ['.dxf', '.dwg', '.dgn'] } }] })
+  return window.showOpenFilePicker({ id: 'linework-compare', types: [{ description: 'Drawings', accept: { 'application/octet-stream': ['.dxf', '.dwg', '.dgn'], 'application/pdf': ['.pdf'] } }] })
     .then((hs) => hs[0].getFile(), (e) => (e && e.name === 'AbortError' ? null : input()));
 }
 

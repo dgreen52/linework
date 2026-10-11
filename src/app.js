@@ -447,7 +447,7 @@ app.readDrawing = async (name, buffer) => {
 /** Show a drawing read by readDrawing (src as for openDrawing; keep: true keeps the view, layers and markups). */
 app.showDrawing = (r, name, src) => { setDocument(r.scene, name, r.scene.fileSize, 0, src); edit.setModel(r.model, r.bytes); };
 
-async function parseOffThread(name, buffer, sample, progress) {
+async function parseOffThread(name, buffer, sample, progress, page) {
   const w = getWorker();
   const ok = w && (w.alive || (await w.started));
   if (ok === 'stopped') throw Object.assign(new Error('Opening was cancelled.'), { code: 'cancelled' });
@@ -456,7 +456,7 @@ async function parseOffThread(name, buffer, sample, progress) {
       return await new Promise((resolve, reject) => {
         const id = ++jobSeq;
         jobs.set(id, { resolve, reject, progress });
-        w.postMessage({ id, name, buffer, sample }, buffer ? [buffer] : []);
+        w.postMessage({ id, name, buffer, sample, page }, buffer ? [buffer] : []);
       });
     } catch (e) {
       if (e.code !== 'worker') throw e;
@@ -467,7 +467,7 @@ async function parseOffThread(name, buffer, sample, progress) {
   const { loadInWorkerScope } = await import('./worker.js');
   progress('Reading', 0.1);
   await new Promise((r) => setTimeout(r, 30));
-  const r = await loadInWorkerScope({ id: 0, name, buffer, sample }, () => {});
+  const r = await loadInWorkerScope({ id: 0, name, buffer, sample, page }, () => {});
   const id = 'local-' + ++jobSeq;
   r.scene.jobId = id;
   setTimeout(() => gotModel(id, r.model, r.bytes), 0);
@@ -487,15 +487,16 @@ function okToReplace() {
 }
 
 let loadSeq = 0;
-async function openDrawing(name, buffer, size, sample, src) {
+async function openDrawing(name, buffer, size, sample, src = {}) {
   if (app.loading) stopReader('Replaced by another file.'); // a new file replaces the one still opening
+  if (buffer && !src.blob) src = { ...src, blob: new Blob([buffer]) }; // the file (a PDF's other pages are read from it)
   const my = ++loadSeq;
   app.loading = true;
   $('#btn-cancel-load').hidden = false;
   showProgress(`Opening ${name}…`, 0);
   const t0 = performance.now();
   try {
-    const scene = await parseOffThread(name, buffer, sample, (phase, f) => { if (my === loadSeq) showProgress(`${phase} ${name}…`, f); });
+    const scene = await parseOffThread(name, buffer, sample, (phase, f) => { if (my === loadSeq) showProgress(`${phase} ${name}…`, f); }, src.page);
     if (my !== loadSeq) return;
     setDocument(scene, name, size ?? scene.fileSize, performance.now() - t0, src);
   } catch (e) {
@@ -520,7 +521,7 @@ async function openFile(file, src) {
   if (file.size > 400 * 1024 * 1024) { toast('This file is too large to open in the browser (over 400 MB).', { kind: 'error' }); return; }
   let buf;
   try { buf = await readFileAsArrayBuffer(file); } catch { toast(`Could not read ${file.name}`, { kind: 'error', detail: 'The file could not be read from this device (moved, locked or not allowed).' }); return; }
-  await openDrawing(file.name, buf, file.size, undefined, src && { ...src, modified: file.lastModified });
+  await openDrawing(file.name, buf, file.size, undefined, { ...src, modified: src ? file.lastModified : undefined, blob: file });
 }
 app.openFile = openFile;
 /** Open: the browser's file picker when there is one (it gives a handle), else the plain chooser. */
@@ -588,7 +589,8 @@ function setDocument(scene, name, size, ms, src = {}) {
   const nsCount = ns.reduce((s, [, v]) => s + v, 0);
   const notes = [...scene.warnings];
   for (const k of ['open', 'skipped']) for (const el of document.querySelectorAll(`#toasts [data-key="${k}"]`)) el.remove();
-  toast(`Opened ${name}`, { key: 'open', detail: `${plural(items, 'item')} · ${plural(nLayers, scene.format === 'DGN' ? 'level' : 'layer')} · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
+  const pg = scene.page;
+  toast(`Opened ${name}${pg && pg.count > 1 ? `, page ${pg.label || pg.n} of ${pg.count}` : ''}`, { key: 'open', detail: `${plural(items, 'item')} · ${plural(nLayers, scene.format === 'DGN' ? 'level' : 'layer')} · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
   if (nsCount) {
     toast(`${fmtNum(nsCount, 0)} item${nsCount === 1 ? '' : 's'} not shown`, {
       key: 'skipped', kind: 'warn', detail: 'Everything else loaded normally.', listTitle: 'What was skipped',
@@ -1446,6 +1448,8 @@ window.addEventListener('beforeprint', () => {
   if (printMod) printMod.printSheet(app); else buildPrintSheet(app, { title: app.doc.name, author: app.author });
 });
 hooks.open.push(() => setTimeout(() => loadPrint().catch(() => {}), 1500));
+// PDF pages (picker, Page Up / Down, app.pages): loaded with the first PDF
+hooks.open.push(() => { if (app.scene.page && !app.pages) import('./app/pdf-ui.js').then((m) => m.initPages(app), () => {}); });
 window.addEventListener('afterprint', () => clearPrintSheet());
 
 // ------------------------------------------------------------------ drag and drop anywhere

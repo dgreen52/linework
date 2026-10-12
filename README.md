@@ -13,7 +13,7 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
 
 *Working title — the name lives in one place: `src/config.js` (`APP_NAME`).*
 
-## What it does (v0.3)
+## What it does
 
 * **Opens** ASCII DXF (R12 through 2018), **DWG (R13 through 2018)** and DGN v7 (2D and 3D
   design files, shown in plan). Drag a file anywhere onto the window, or use **Open**. Try the
@@ -417,8 +417,9 @@ same way). View › **Trace** (`J`) — in any mode, and it never changes the dr
 * **Gap** (*Options*): ends closer than this touch — by default 5 % of the drawing's usual text height
   (so a sloppy end still connects); type a larger value for drawings with bigger gaps.
 * Hidden levels / layers are not traced through. After an edit the net is traced again from the same
-  point. When a set of sheets is open ([Sheet sets](#sheet-sets)), **Find on other sheets** looks for
-  the net's label on the other sheets.
+  point. When a set of sheets is open ([Sheet sets](#sheet-sets)), **Find on other sheets** opens
+  *Find in all sheets* with the net's label (whole words): its matches listed by sheet, a click on one
+  opens that sheet at the match.
 * The connections are found once per drawing (a slice at a time, so the page never freezes): about
   0.1–0.3 s for a 50,000-item drawing, then each trace takes a few milliseconds.
 
@@ -539,7 +540,8 @@ rendering, 1440×900, on the development laptop. Real GPUs do better.
 
 | | |
 |---|---|
-| App shell (HTML + CSS + JS + icons, gzip) | **≈161 KB** total, **≈146 KB** code (v0.1: 100 / 81; before copy / paste, duplicate and line weights: 147 / 132) — no dependencies |
+| Startup code (index.html, app.css, `src/app.js` and the parse worker with their static imports, gzip) | **≈149 KB** (31 files; budget 150 KB) — no dependencies |
+| Everything precached for offline use (lazily loaded tools, writers, icons, manifest; not the samples) | **≈272 KB** gzip, 781 KB raw (53 files; budget 320 KB) |
 | DWG reader (only when a DWG is opened) | 9.4 MB WebAssembly, **≈2.1 MB gzip** (≈1.1 MB brotli) + 12 KB `dwg.js`; cached for offline use |
 | PDF reader (only when a PDF is opened) | pdf.js 2.2 MB, **≈0.66 MB gzip** (incl. its JPEG 2000 / JBIG2 decoders) + 14 KB `pdf.js` + 2 KB `pdf-ui.js`; cached for offline use |
 | First open (DOMContentLoaded, local server) | ≈0.4 s |
@@ -586,9 +588,10 @@ the first frame, so opening a large file never blocks the page.
 
 ## Use as a library (Node)
 
-The readers, scene builder, find, compare, writers and vector (SVG) builder are plain ES modules
-that also run in Node. `lib/core.js` gathers them behind one package export (it is not part of the
-web app: nothing in `src/` imports it, it is not cached by the service worker and not deployed):
+The readers, scene builder, find, compare, wire tracing, sheet-set helpers, writers and vector (SVG)
+builder are plain ES modules that also run in Node. `lib/core.js` gathers them behind one package
+export (it is not part of the web app: nothing in `src/` imports it, it is not cached by the service
+worker and not deployed):
 
 ```js
 import { readFileSync } from 'node:fs';
@@ -598,14 +601,29 @@ const scene = buildScene(model);
 console.log(findTexts(scene, 'PUMP').map((m) => m.s));
 ```
 
-Install it from a tag, e.g. `npm install github:dgreen52/linework#v0.4.2`. `buildSvg` takes
+Install it from a tag, e.g. `npm install github:dgreen52/linework#v0.5.2`. `buildSvg` takes
 `theme: 'dark'` (colours for a dark background) and `frame: false`; `findTexts` also takes a RegExp.
+
+Since 0.5.2 the entry also has **wire tracing** (`buildNetGraph` / `buildNetGraphAsync` once per
+drawing, then `pickWire` and `traceNet` with `{ crossings, throughPins }`; `endText`, `netText`, `ROLE`)
+and the **sheet-set helpers** (`indexSheet`: a sheet's texts, title and own sheet number;
+`searchSheets` / `searchIndex`; `xrefContext`, `findXrefs`, `resolveRef`, `compilePatterns`,
+`XREF_DEFAULT`: references such as "SHEET 2" resolved to a sheet of the set; `isSheetName`, `naturalCmp`).
+Tracing works in scene coordinates (add `scene.origin`):
+
+```js
+import { parseDrawing, buildScene, buildNetGraph, pickWire, traceNet, endText } from 'linework/core';
+const scene = buildScene(parseDrawing(readFileSync('panel.dxf'), 'panel.dxf'));
+const G = buildNetGraph(scene), [ox, oy] = scene.origin;
+const net = traceNet(G, pickWire(G, 120 - ox, 80 - oy, 0.5));
+console.log(net.length, net.labels.map((l) => l.s), net.ends.map(endText)); // length, wire numbers, ends like "J1 · 4 (CONN)"
+```
 
 ## Tests
 
 ```bash
-npm test                                  # 276 Node unit tests (node --test, no dependencies)
-NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 62 Playwright end-to-end tests
+npm test                                  # 278 Node unit tests (node --test, no dependencies)
+NODE_PATH=/path/to/node_modules node tests/e2e/run.mjs   # 63 Playwright end-to-end tests
 ```
 
 Some unit tests read the files the writers produce with GDAL/OGR through Python (`from osgeo
@@ -680,8 +698,10 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   and pin dots, rotated wire labels, off-sheet notes at open ends, hidden levels, picking a dot or a pin
   stub, edits and undo, the sliced build, the DXF schematic sample, and 50,000 items (build < 300 ms,
   a trace < 50 ms). End to end: click to trace (pixel probes of the lit and unlit wires), the panel,
-  stepping, zoom, copy, `Esc`, the options, paper, the cross-sheet hook, re-tracing after an edit in
-  Edit mode, a drag that pans, a tap at 390 px, and the 53k stress drawing (no long task while building).
+  stepping, zoom, copy, `Esc`, the options, paper, re-tracing after an edit in Edit mode, a drag that
+  pans, a tap at 390 px, *Find on other sheets* in a real sheet set (the find bar opens with the label,
+  its matches listed by sheet, a listed match opens that sheet; 1440 and 390 px), and the 53k stress
+  drawing (no long task while building). The library entry (`core.test.mjs`) traces and searches a set too.
 * Editing tools (`tools.test.mjs`, synthetic wiring sheet `dgn-wiring.dgn`, read like GDAL/OGR):
   find (substring, whole word, case, visible levels, text in cells, reading order), replace one / all
   as one change list with every other element byte-identical and the cell rebuilt from its bytes,
@@ -782,16 +802,19 @@ Trade-offs, for the owner to decide before the first public release:
 * **v0.2** — Edit mode and saving as DXF / DGN v7.
 * **v0.3** — DWG (R13–2018) via LibreDWG compiled to WebAssembly, lazy-loaded
   ([details](DWG.md)); copy / paste between drawings, duplicate and line weights.
-* **v0.4 (this version)** — editing tools (find / replace text, MicroStation key-ins, mirror,
+* **v0.4** — editing tools (find / replace text, MicroStation key-ins, mirror,
   scale, array, element information, select same, match attributes, DGN level names); save over
   the original file (backup copy), recent drawings, unsaved-edit recovery, revision compare,
   vector print to scale.
-* **PDF (this branch)** — PDF pages as drawings via pdf.js, lazy-loaded ([details](PDF.md)):
-  vector import with layers, text, pages, scanned pages as pictures, saved as DXF / DGN.
+* **v0.5** — wire tracing (View › Trace), sheet sets (navigator, find in all sheets, sheet links),
+  PDF pages as drawings via pdf.js, lazy-loaded ([details](PDF.md)): vector import with layers, text,
+  pages, scanned pages as pictures, saved as DXF / DGN.
+* **0.5.2 (this version)** — tracing and the sheet-set helpers in the `linework/core` library entry;
+  Trace › *Find on other sheets* opens *Find in all sheets* with the net's label.
 * **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; measurement
-  export (CSV); editing the geometry inside blocks/cells and shared block-definition text.
-* **v0.5** — true linetype scaling; hatch patterns;
-  layouts / paper space tabs; markup resize handles and markup list panel.
+  export (CSV); editing the geometry inside blocks/cells and shared block-definition text; true
+  linetype scaling; hatch patterns; layouts / paper space tabs; markup resize handles and markup
+  list panel.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
   markup review (still file-based, no server).
 

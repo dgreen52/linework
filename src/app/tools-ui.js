@@ -113,15 +113,22 @@ export function initTools(app, api) {
     $('#find-n', bar).textContent = !F.q ? '' : !n ? 'No matches' : F.k >= 0 ? `${F.k + 1} of ${n}` : `${n} match${n === 1 ? '' : 'es'}`;
     for (const id of ['#find-prev', '#find-next']) $(id, bar).disabled = !n;
   }
-  function openFind() {
+  /** Open the find bar. preset { q, matchCase, wholeWord, all } searches for q at once (Trace › Find on other sheets). */
+  function openFind(preset) {
     if (!app.scene) return;
     F.open = true;
     bar.hidden = false;
     $('[data-o="all"]', bar).hidden = !(app.sheets && app.sheets.active);
+    const fresh = !!(preset && preset.q);
+    if (fresh) {
+      for (const k of ['matchCase', 'wholeWord', 'all']) if (k in preset) F.o[k] = !!preset[k];
+      for (const b of bar.querySelectorAll('.opt')) b.setAttribute('aria-pressed', String(!!F.o[b.dataset.o]));
+      F.q = qIn.value = String(preset.q);
+    }
     toolChanged();
     qIn.focus();
     qIn.select();
-    if (F.q) search(true);
+    if (F.q) search(!fresh);
     api.invalidate();
   }
   function closeFind() {
@@ -581,7 +588,7 @@ export function initTools(app, api) {
     renderInfo();
   }
   const run = (cmd, ...a) => ({
-    find: openFind, menu: openMenu, same: openSelectSame, match: startMatch,
+    find: () => openFind(a[0]), menu: openMenu, same: openSelectSame, match: startMatch,
     info: () => toggleInfo(a[0] === true ? true : undefined), keyin: () => previewKeyin(a[0]), apply: () => applyKeyin(a[0], a[1]),
     names: () => levelNames(...a),
   }[cmd] || (() => {}))();

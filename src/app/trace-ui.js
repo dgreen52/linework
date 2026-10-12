@@ -150,7 +150,7 @@ export function initTrace(app, api) {
     q('#tr-nends').textContent = `Ends (${net.ends.length})`;
     q('#tr-ends').innerHTML = net.ends.map((e, k) => `<li${k === T.cur ? ' class="on"' : ''}><button type="button" data-k="${k}">${esc(endText(e))}</button></li>`).join('');
     q('#tr-prev').disabled = q('#tr-next').disabled = !net.ends.length;
-    q('#tr-sheets').hidden = !(app.sheets && typeof app.sheets.findAcross === 'function' && net.labels.length); // (a sheet set is open)
+    q('#tr-sheets').hidden = !(app.sheets && app.sheets.active && net.labels.length); // (a sheet set is open)
     if (document.activeElement !== q('#tr-tol')) q('#tr-tol').value = fmtNum(T.G ? T.G.tol : T.tol, 6).replace(/\.?0+$/, '');
     q('#tr-unit').textContent = s.units.abbr || '';
     $('#st-info').textContent = `Net${net.labels.length ? ' ' + net.labels[0].s : ''} · ${fmtNum(net.length, app.precision)}${u} · ${pl(net.ends.length, 'end')}`;
@@ -177,7 +177,7 @@ export function initTrace(app, api) {
     else if (id === 'tr-copy') {
       navigator.clipboard.writeText(netText(net, { name: app.doc && app.doc.name, origin: app.scene.origin, dec: app.precision, abbr: app.scene.units.abbr, fmt: fmtNum }))
         .then(() => toast('Copied the net', { key: 'trace', timeout: 2000 }), () => toast('Copy is not available here.', { kind: 'warn' }));
-    } else if (id === 'tr-sheets') app.sheets.findAcross(net.labels[0].s, { wholeWord: true });
+    } else if (id === 'tr-sheets') app.loadTools('find', { q: net.labels[0].s, wholeWord: true, all: true }); // Find in all sheets: the matches listed by sheet
     else if (b.dataset.k) goEnd(+b.dataset.k);
     else if (b.dataset.l) { // a label: show (each copy in turn)
       const k = +b.dataset.l, l = net.labels[k];

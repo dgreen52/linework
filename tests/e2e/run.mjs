@@ -3202,7 +3202,7 @@ async function traceAt(page, x, y) {
   await settle(page);
 }
 
-test('trace (View › Trace, J): a click lights up the net (pixel probes), panel with length, labels and ends; step, zoom, copy, Esc; options; paper; cross-sheet hook; edits re-trace; a drag pans', async () => {
+test('trace (View › Trace, J): a click lights up the net (pixel probes), panel with length, labels and ends; step, zoom, copy, Esc; options; paper; edits re-trace; a drag pans', async () => {
   const page = await newPage(CLIP);
   await openFixture(page, TRACE);
   await clearToasts(page);
@@ -3286,13 +3286,7 @@ test('trace (View › Trace, J): a click lights up the net (pixel probes), panel
   assert(traceColour(await overlayPx(page, 120, 160), 'paper'), 'paper colour: ' + (await overlayPx(page, 120, 160)));
   await shot(page, 'trace-paper-1440');
   await page.keyboard.press('b');
-  // the cross-sheet hook (another module provides app.sheets.findAcross)
-  await page.evaluate(() => { window.__linework.sheets = { findAcross: (q, o) => { window.__found = [q, o]; } }; });
-  await traceAt(page, 100, 160);
-  assert(await page.isVisible('#tr-sheets'), 'Find on other sheets is offered');
-  await page.click('#tr-sheets');
-  eq(await page.evaluate(() => window.__found[0]), 'W9434', 'the label goes to the sheet search');
-  await page.evaluate(() => { delete window.__linework.sheets; });
+  // (Find on other sheets in a real sheet set: the test after the next one)
   // works in Edit too: an edit re-traces (the branch deleted: the coil is no longer an end), undo restores it
   await page.evaluate(() => window.__linework.fit());
   await traceAt(page, 60, 150);
@@ -3334,6 +3328,60 @@ test('trace at 390 px with touch: tap Trace, tap a wire; the panel docks at the 
   await ph.tap('#tr-close');
   eq(await trNet(ph), null, 'the close button clears');
   await close(ph);
+});
+
+test('trace in a sheet set: Find on other sheets opens Find in all sheets with the label of the net (whole words): matches listed by sheet, a listed match opens that sheet; 390 px', async () => {
+  const page = await newPage();
+  await filesReady(page);
+  await putSheets(page, 'PNL-trace');
+  await page.evaluate(() => { window.showDirectoryPicker = async () => window.__dir; });
+  await page.click('.topbar [data-action="open-folder"]');
+  await waitSheet(page, 'PNL-01.dgn');
+  await sheetsIndexed(page, 5);
+  await page.click('#sheets-hide');
+  await clearToasts(page);
+  await page.keyboard.press('j');
+  await page.waitForFunction(() => window.__linework.trace && window.__linework.trace.graph);
+  await traceAt(page, 90, 95); // the wire numbered W201 (also on sheets 2 and 4)
+  eq(JSON.stringify((await trNet(page)).labels), JSON.stringify(['W201']), 'the net of W201');
+  assert(await page.isVisible('#tr-sheets'), 'Find on other sheets is offered in a set');
+  assert(await page.evaluate(() => !window.__linework.tools || !window.__linework.tools.find.open), 'the find bar is closed');
+  // the real sheet search (nothing stubbed): the find bar opens with the label, whole words, all sheets
+  await page.click('#tr-sheets');
+  await page.waitForSelector('.findbar:not([hidden])');
+  eq(await page.inputValue('#find-q'), 'W201', 'the label is the query');
+  eq(await page.getAttribute('.findbar [data-o="wholeWord"]', 'aria-pressed'), 'true', 'whole words');
+  eq(await page.getAttribute('.findbar [data-o="all"]', 'aria-pressed'), 'true', 'all sheets');
+  await page.waitForFunction(() => /5 in 3 sheets/.test(document.querySelector('#find-n').textContent));
+  eq((await page.$$eval('.find-sets h4', (hs) => hs.map((h) => h.textContent))).join('|'), 'PNL-01.dgn2|PNL-02.dgn2|PNL-04.dxf1', 'matches listed by sheet');
+  eq(await page.$$eval('.find-sets button[data-g]', (bs) => bs.map((b) => b.textContent).join()), 'W201,W201,W201,W201,W201', 'each match listed');
+  eq(await page.$$eval('#sheet-list em', (es) => es.map((e) => e.textContent).join()), '2,2,1', 'counts in the navigator');
+  assert(await page.isVisible('#trace-card'), 'the net stays traced');
+  await shot(page, 'trace-sheets-find-dark-1440');
+  // a listed match on another sheet opens it and zooms to it
+  await page.click('.find-sets button[data-g="2"]');
+  await waitSheet(page, 'PNL-02.dgn');
+  eq(await findN(page), '3 of 5', 'the listed match on sheet 2');
+  await settle(page);
+  const z = await page.evaluate(() => { const a = window.__linework, t = a.scene.texts.find((x) => x.s === 'W201'), [ox, oy] = a.scene.origin, [sx, sy] = a.worldToScreen((t.bbox[0] + t.bbox[2]) / 2 + ox, (t.bbox[1] + t.bbox[3]) / 2 + oy); return [sx, sy, a.view.w, a.view.h]; });
+  assert(z[0] > 0 && z[0] < z[2] && z[1] > 0 && z[1] < z[3], 'W201 on sheet 2 in view: ' + z);
+  // the same on a phone-sized window: the trace panel and the find bar both fit
+  await page.click('#find-close');
+  await page.keyboard.press('j');
+  eq(await page.evaluate(() => window.__linework.tool), 'trace', 'still tracing');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; }); // (it covers the drawing at this width)
+  await settle(page);
+  await page.evaluate(() => window.__linework.fit());
+  await traceAt(page, 90, 95);
+  eq(JSON.stringify((await trNet(page)).labels), JSON.stringify(['W201']), 'W201 on sheet 2');
+  await page.click('#tr-sheets');
+  await page.waitForFunction(() => /in 3 sheets|of 5/.test(document.querySelector('#find-n').textContent));
+  const fit = await page.evaluate(() => [...document.querySelectorAll('#trace-card, .findbar')].map((el) => { const r = el.getBoundingClientRect(); return [r.left, r.right, r.top, r.bottom]; }));
+  assert(fit.every((r) => r[0] >= 0 && r[1] <= 390 && r[2] >= 0 && r[3] <= 844), 'both fit the window: ' + JSON.stringify(fit));
+  await clearToasts(page);
+  await shot(page, 'trace-sheets-find-dark-390');
+  await close(page);
 });
 
 test('performance: Trace on the 53k stress drawing — the graph is built in slices (no long task), < 300 ms of work; a trace < 50 ms', async () => {

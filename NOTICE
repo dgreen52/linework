@@ -64,7 +64,7 @@ DWG files are read by GNU LibreDWG compiled to WebAssembly
 * The binary is built from the libredwg-web project
   (https://github.com/mlightcad/libredwg-web, GPL-3.0): LibreDWG's source tree
   with JavaScript (embind) bindings, tag v0.7.16, commit
-  0d4fd3fbe6eb1a451d7c5ce286d0785e4d65dd29, compiled with Emscripten 3.1.74 by
+  0d4fd3fbe6eb1a451d7c5ce286d0785e4d65dd29, compiled with Emscripten 4.0.6 by
   tools/build_dwg_wasm.sh (on GitHub Actions, see DWG.md).
 * Also linked into that binary: the Emscripten runtime and system libraries
   (MIT / University of Illinois NCSA; musl libc: MIT; LLVM libc++ and

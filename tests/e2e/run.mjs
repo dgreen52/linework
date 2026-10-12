@@ -3207,6 +3207,16 @@ test('trace (View › Trace, J): a click lights up the net (pixel probes), panel
   await openFixture(page, TRACE);
   await clearToasts(page);
   await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
+  // a host traces the wire a text labels without reading the graph: app.loadTrace('label', k) loads the tool's code
+  // (in any tool), then app.trace.run('label', k); a text next to no wire gives null; clearing empties the status line
+  const byLabel = await page.evaluate(async () => {
+    const a = window.__linework, k = (s) => a.scene.texts.findIndex((t) => t.s === s);
+    const n = await a.loadTrace('label', k('W2001')), none = await a.trace.run('label', k('TRACE TEST SHEET'));
+    const r = { tool: a.tool, labels: n && n.labels.map((l) => l.s), ends: n && n.ends.length, none, info: document.querySelector('#st-info').textContent };
+    a.trace.clear();
+    return { ...r, after: document.querySelector('#st-info').textContent, net: a.trace.net };
+  });
+  eq(JSON.stringify(byLabel), JSON.stringify({ tool: 'pan', labels: ['W2001'], ends: 3, none: null, info: 'Net W2001 · 312.00 m · 3 ends', after: '', net: null }), 'trace by label');
   await page.keyboard.press('j');
   eq(await page.evaluate(() => window.__linework.tool), 'trace', 'J picks Trace');
   assert(await page.evaluate(() => document.querySelector('[data-tool="trace"]').getAttribute('aria-pressed')) === 'true', 'the View tab button is pressed');
@@ -3247,10 +3257,12 @@ test('trace (View › Trace, J): a click lights up the net (pixel probes), panel
   await page.click('#tr-copy');
   const txt = (await clipText(page)).replace(/\r\n/g, '\n'); // (the system clipboard may use CRLF)
   assert(txt.startsWith('Net W9434 · dgn-trace.dgn\nLength 282.00 m · 5 wires · 26 segments\nEnds (2):\n  1. J4 · 1 (CONN) at X 34.00 Y 160.00'), txt);
-  // Esc clears
+  // Esc clears (the net, the panel and the status line)
+  eq(await page.textContent('#st-info'), 'Net W9434 · 282.00 m · 2 ends', 'the net in the status line');
   await page.keyboard.press('Escape');
   await settle(page);
   eq(await trNet(page), null, 'Esc clears the net');
+  eq(await page.textContent('#st-info'), '', 'and the status line');
   assert(await page.isHidden('#trace-card'), 'and the panel');
   eq(await page.evaluate(() => document.querySelector('#cv-drawing').style.opacity), '', 'no longer dimmed');
   assert(!traceColour(await overlayPx(page, 120, 160)), 'nothing lit');
@@ -3327,6 +3339,7 @@ test('trace at 390 px with touch: tap Trace, tap a wire; the panel docks at the 
   await shot(ph, 'trace-dark-390');
   await ph.tap('#tr-close');
   eq(await trNet(ph), null, 'the close button clears');
+  eq(await ph.textContent('#st-info'), '', 'the status line too');
   await close(ph);
 });
 

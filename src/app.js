@@ -1534,6 +1534,7 @@ function trace(cmd, ...args) {
   }
   return traceP.then((T) => T.run(cmd, ...args));
 }
+app.loadTrace = trace; // for hosts: e.g. await app.loadTrace('label', k)
 
 // Sheet sets (src/app/sheets.js, loaded on first use): a folder or several drawings open as one set.
 let sheetsP = null;

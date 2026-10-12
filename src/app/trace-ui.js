@@ -40,7 +40,7 @@ export function initTrace(app, api) {
   const visSig = () => (app.layerVisible ? app.layerVisible.join('') : '');
   const docSig = () => (app.edit && app.edit.doc ? app.edit.doc.cur : 0); // changes with every edit, undo and redo
   // G: the graph of `scene` (made for edit state `doc`); net: the traced net; seed: the clicked point (drawing coordinates)
-  const T = { G: null, scene: null, doc: 0, building: null, gen: 0, net: null, seed: null, cur: -1, vis: '', opt: { crossings: false, throughPins: false, dim: true }, tol: 0, paths: null, timer: 0 };
+  const T = { G: null, scene: null, doc: 0, building: null, gen: 0, net: null, seed: null, cur: -1, vis: '', opt: { crossings: false, throughPins: false, dim: true }, tol: 0, paths: null, timer: 0, info: '' };
   const st = (app.traceStats = { buildMs: 0, traceMs: 0 });
 
   /** The graph of the drawing on screen (null when the drawing changed while it was being made). */
@@ -75,6 +75,26 @@ export function initTrace(app, api) {
     st.traceMs = net.ms;
     render(); dim(); api.invalidate();
   }
+  /** Trace the wire that scene text k labels (its nearest wire, as the net's labels are found): the net, or null when no wire is next to it. */
+  async function label(k) {
+    const s = app.scene, t = s && s.texts[k];
+    if (!t || t.dead) return null;
+    const G = await graph(), w = G && app.scene === s ? G.textWire[k] : -1;
+    if (w < 0 || !vis(s.layer[w])) return null;
+    // the seed: the point of that wire nearest the text (an edit traces again from there)
+    const cx = (t.bbox[0] + t.bbox[2]) / 2, cy = (t.bbox[1] + t.bbox[3]) / 2, S = G.seg, [ox, oy] = s.origin;
+    let px = cx, py = cy, bd = Infinity;
+    for (let j = 0; j < G.caps; j++) {
+      if (G.capPrim[j] !== w) continue;
+      const ax = S[4 * j], ay = S[4 * j + 1], dx = S[4 * j + 2] - ax, dy = S[4 * j + 3] - ay, L2 = dx * dx + dy * dy;
+      const u = L2 ? Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / L2)) : 0, x = ax + u * dx, y = ay + u * dy, d = Math.hypot(x - cx, y - cy);
+      if (d < bd) { bd = d; px = x; py = y; }
+    }
+    T.seed = { x: px + ox, y: py + oy, w };
+    T.cur = -1;
+    run(G, w);
+    return T.net;
+  }
   /** The drawing changed (or the gap): build again, then trace from the same point if a wire is still there. */
   function again() {
     T.G = null; T.building = null; T.gen++;
@@ -90,6 +110,8 @@ export function initTrace(app, api) {
     Object.assign(T, { net: null, seed: null, paths: null, cur: -1 });
     clearTimeout(T.timer);
     card.hidden = true;
+    if (T.info && $('#st-info').textContent === T.info) $('#st-info').textContent = ''; // (only the trace's own line)
+    T.info = '';
     dim(); api.invalidate();
   }
   function dim() { if (!app.compare) $('#cv-drawing').style.opacity = T.net && T.opt.dim ? '0.35' : ''; } // (compare dims it itself)
@@ -153,7 +175,7 @@ export function initTrace(app, api) {
     q('#tr-sheets').hidden = !(app.sheets && app.sheets.active && net.labels.length); // (a sheet set is open)
     if (document.activeElement !== q('#tr-tol')) q('#tr-tol').value = fmtNum(T.G ? T.G.tol : T.tol, 6).replace(/\.?0+$/, '');
     q('#tr-unit').textContent = s.units.abbr || '';
-    $('#st-info').textContent = `Net${net.labels.length ? ' ' + net.labels[0].s : ''} · ${fmtNum(net.length, app.precision)}${u} · ${pl(net.ends.length, 'end')}`;
+    $('#st-info').textContent = T.info = `Net${net.labels.length ? ' ' + net.labels[0].s : ''} · ${fmtNum(net.length, app.precision)}${u} · ${pl(net.ends.length, 'end')}`;
   }
   const zoomBox = (b, p) => { const [ox, oy] = app.scene.origin; app.zoomToWorld(b[0] - p + ox, b[1] - p + oy, b[2] + p + ox, b[3] + p + oy); };
   function goEnd(k) {
@@ -200,7 +222,9 @@ export function initTrace(app, api) {
   app.hooks.open.push(() => { clear(); T.G = null; T.building = null; T.gen++; T.tol = 0; });
   app.hooks.history.push(() => { if ((T.G || T.building) && T.doc !== docSig()) again(); }); // (not for markups)
   return {
-    run: (cmd, ...a) => (cmd === 'at' ? at(...a) : cmd === 'tool' ? app.scene && graph() : cmd === 'clear' && clear()),
+    // 'at' (sx, sy, pointer): the wire at a screen point; 'label' (k): the wire scene text k labels (-> the net or null);
+    // 'tool': the graph of the drawing (made once); 'clear'
+    run: (cmd, ...a) => (cmd === 'at' ? at(...a) : cmd === 'label' ? label(...a) : cmd === 'tool' ? app.scene && graph() : cmd === 'clear' && clear()),
     clear,
     get net() { return T.net; },
     get cur() { return T.cur; },

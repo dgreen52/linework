@@ -17,7 +17,8 @@ test('core: the package export resolves to lib/core.js and names the version and
   for (const name of ['detectFormat', 'parseDrawing', 'parseDrawingAsync', 'buildScene', 'findTexts', 'describeScene', 'diffScenes',
     'writeDxf', 'writeDgn', 'buildSvg', 'printLayout', 'cssColor', 'entityItems', 'entityInfo', 'typeName', 'queryRect', 'primPoints',
     'measure', 'bulgePolylineLength', 'hashBytes', 'flatEntities', 'FormatError',
-    'buildNetGraph', 'buildNetGraphAsync', 'pickWire', 'traceNet', 'endText', 'netText', 'textQuad',
+    'buildNetGraph', 'buildNetGraphAsync', 'pickWire', 'traceNet', 'traceAll', 'endText', 'netText', 'textQuad',
+    'buildNetlist', 'netlistCsv', 'netEnd', 'isTrivial', 'isSheetRef', 'csvCell',
     'isSheetName', 'stemOf', 'naturalCmp', 'indexSheet', 'searchIndex', 'searchSheets', 'compilePatterns', 'xrefContext', 'resolveRef',
     'findXrefs']) assert.equal(typeof core[name], 'function', name);
   assert.deepEqual(Object.keys(core.ROLE), ['WIRE', 'DOT', 'PART', 'SHAPE']);
@@ -84,6 +85,21 @@ test('core: wire tracing runs through the entry (net length, labels, ends with c
   assert.equal(q.length, 8);
   const A = await core.buildNetGraphAsync(scene, {}, 1);
   assert.equal(core.traceNet(A, at(100, 160)).wires.length, n.wires.length, 'the sliced build gives the same net');
+});
+
+test('core: the netlist through the entry (every net from one graph, classified ends in drawing coordinates, from-to CSV)', () => {
+  const scene = core.buildScene(core.parseDrawing(bytes('trace-sheet.dxf'), 'trace-sheet.dxf'));
+  const G = core.buildNetGraph(scene), nets = core.buildNetlist(scene, G);
+  assert.equal(nets.length, 10);
+  const n = nets.find((x) => x.labels.includes('W9434'));
+  assert.deepEqual([n.id, Math.round(n.length), n.wires, n.junctions, n.ends.map((e) => e.text)], ['N3', 282, 5, 0, ['J4-1', 'P1-A']]);
+  assert.deepEqual([n.ends[0].kind, n.ends[0].ref, n.ends[0].pin, n.ends[0].x, n.ends[0].y], ['pin', 'J4', '1', 34, 160]);
+  assert.equal(core.traceNet(G, n.seed).labels[0].s, 'W9434', 'seed: the net again');
+  assert.equal(core.traceAll(G).length, core.buildNetlist(scene, G, { trivial: true }).length);
+  const csv = core.netlistCsv(nets).split('\r\n');
+  assert.equal(csv[0], 'net,labels,from,to,length,wires,junctions');
+  assert.ok(csv.includes('N3,W9434,J4-1,P1-A,282,5,0'), csv.join('\n'));
+  assert.equal(core.csvCell('=1+1'), "'=1+1");
 });
 
 test('core: sheet sets through the entry (titles, own numbers, search across sheets, sheet references)', () => {

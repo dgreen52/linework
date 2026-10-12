@@ -50,6 +50,7 @@ const SHELL = [
   'src/scene.js',
   'src/tools/compare.js',
   'src/tools/measure.js',
+  'src/tools/nets.js',
   'src/tools/sheets.js',
   'src/tools/snap.js',
   'src/tools/trace.js',

@@ -424,8 +424,9 @@ export function traceNet(G, seed, opts = {}) {
   // labels: texts whose nearest wire is in the net (not the pin texts of the cells it ends in)
   const byS = new Map(), T = S.texts;
   for (let t = 0; t < T.length; t++) {
-    const w = G.textWire[t], s = T[t].s.trim();
-    if (w < 0 || !seen[w] || T[t].dead || !vis(T[t].layer) || endCells.has(T[t].ent)) continue;
+    const w = G.textWire[t];
+    if (w < 0 || !seen[w] || T[t].dead || !vis(T[t].layer) || endCells.has(T[t].ent)) continue; // (cheap checks first: this runs per net)
+    const s = T[t].s.trim();
     if (!byS.has(s)) byS.set(s, { s, texts: [] });
     byS.get(s).texts.push(t);
   }

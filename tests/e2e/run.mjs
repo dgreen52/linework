@@ -3636,6 +3636,53 @@ test('PDF under a CSP without wasm-unsafe-eval: the parse worker\'s refused WebA
   page.srv.close();
 });
 
+test('line types at their true size and hatch patterns as lines: dashes in drawing units, solid when too small to see, pattern lines that move with their hatch', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'linetypes.dxf');
+  const lines = () => page.evaluate(() => { const s = window.__linework.scene; let n = 0, added = 0; for (let i = 0; i < s.n; i++) if ((s.flags[i] & 96) === 64 && !(s.dead && s.dead[i])) { n++; if (i >= (window.__n0 ?? Infinity)) added++; } return [n, added]; }); // FLAG.HL without FLAG.PATTERN; added: since __n0
+  eq((await lines())[0], 4, 'the parse worker drew four hatches as lines (the dense one is a tone)');
+  await page.click('#tab-view');
+  // a line within 2 px of a drawing point (the dark background is about 60)
+  const lit = (x, y) => page.evaluate(([x, y]) => { const a = window.__linework, [sx, sy] = a.worldToScreen(x, y), d = a.dpr; const g = document.querySelector('#cv-drawing').getContext('2d').getImageData(Math.round(sx * d) - 2, Math.round(sy * d) - 2, 5, 5).data; let m = 0; for (let i = 0; i < g.length; i += 4) m = Math.max(m, g[i] + g[i + 1] + g[i + 2]); return m > 150; }, [x, y]);
+  // DASHED at $LTSCALE 10: 5 on, 2.5 off, from the line's start
+  await zoomTo(page, 0, -4, 30, 14);
+  eq(JSON.stringify(await Promise.all([2.5, 6.25, 10, 13.75, 17.5].map((x) => lit(x, 0)))), '[true,false,true,false,true]', 'dashes 5 and gaps 2.5 drawing units long');
+  eq(JSON.stringify(await Promise.all([5, 12.5, 20].map((x) => lit(x, 10)))), '[true,false,true]', 'its own scale 2: dashes 10, gaps 5');
+  await clearToasts(page);
+  await shot(page, 'linetypes-zoom-dark-1440');
+  // the pattern lines: 5 apart inside the first hatch
+  await zoomTo(page, 0, 40, 40, 80);
+  await shot(page, 'linetypes-hatch-dark-1440');
+  eq(JSON.stringify(await Promise.all([62.5, 65, 67.5].map((y) => lit(20, y)))), '[true,false,true]', 'hatch lines 5 apart');
+  // zoomed far out a whole pattern is under 3 px: drawn solid (no dash pattern set)
+  await page.evaluate(() => { window.__dashes = []; const f = CanvasRenderingContext2D.prototype.setLineDash; CanvasRenderingContext2D.prototype.setLineDash = function (a) { window.__dashes.push([...a].join(' ')); return f.call(this, a); }; });
+  await zoomTo(page, -40000, -40000, 40000, 40000);
+  await page.evaluate(() => window.__linework.invalidate(true)); await settle(page);
+  const far = await page.evaluate(() => window.__dashes.filter((d) => d));
+  assert(!far.some((d) => /^(5 2\.5|10 5|15 7\.5|5 2\.5 0 2\.5)$/.test(d)), 'no drawing-unit dashes when they would be under 3 px: ' + far);
+  await page.keyboard.press('f'); await settle(page);
+  const fit = await page.evaluate(() => window.__dashes.filter((d) => d));
+  assert(['5 2.5', '10 5', '15 7.5', '5 2.5 0 2.5'].every((d) => fit.includes(d)), 'fitted: the dashes in drawing units: ' + [...new Set(fit)]);
+  await clearToasts(page);
+  await shot(page, 'linetypes-dark-1440');
+  await page.keyboard.press('b');
+  await shot(page, 'linetypes-paper-1440');
+  await page.keyboard.press('b');
+  // move a hatch in Edit: its lines are made again with it (src/hatch.js in this tab too)
+  await page.click('#tab-edit'); await page.click('[data-tool="eselect"]');
+  await zoomTo(page, -10, 30, 50, 90);
+  await clickWorld(page, 20, 63.75);
+  eq(await page.evaluate(() => window.__linework.edit.sel.size), 1, 'the hatch is selected by a click inside it');
+  await page.evaluate(() => { window.__n0 = window.__linework.scene.n; });
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.waitForFunction(() => window.__linework.edit.doc.dirty);
+  eq(JSON.stringify(await lines()), '[4,1]', 'the moved hatch still has its lines (one new item, the old one gone)');
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => !window.__linework.edit.doc.dirty);
+  eq((await lines())[0], 4, 'undo: the lines are back where they were');
+  await close(page);
+});
+
 test('layouts (DXF): Model and the layouts in the picker; a layout shows its sheet and the model through its viewports; read-only; markups per layout; 390 px', async () => {
   const page = await newPage();
   await openFixture(page, 'layouts.dxf');

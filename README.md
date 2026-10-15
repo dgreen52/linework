@@ -521,12 +521,12 @@ vector PDF with sharp lines and real (searchable) text:
 | Text | TEXT (12 alignments, fit/aligned, width factor, oblique, mirrored), MTEXT (plain text, `\P` paragraphs, wrapping, attachment), ATTRIB/ATTDEF, `%%c %%d %%p`, `\U+xxxx`, cp1252/UTF-8 | TEXT, MTEXT, ATTRIB/ATTDEF as for DXF; code-page text (pre-2007) and Unicode (2007+) | Text (17), text node (7), 16-bit text |
 | Blocks / cells | INSERT with position/scale (incl. negative = mirrored)/rotation, MINSERT arrays, nested blocks, BYBLOCK colour & linetype, attributes | INSERT, MINSERT, nested blocks, attributes, anonymous blocks; tables (ACAD_TABLE) via their block | Cell header (2): components shown where they are placed; the cell transform is read and reported |
 | Dimensions, leaders | DIMENSION via its block (fallback drawing when the block is missing), LEADER with arrowhead | All dimension types via their block (same fallback), LEADER | — |
-| Fills | SOLID, TRACE, HATCH (solid fill; pattern hatches as a light screen pattern) | SOLID, TRACE, HATCH (polyline and edge boundaries, pattern data kept for saving) | Fill colour linkage on shapes, complex shapes and ellipses (junction dots, arrowheads); saved as solid HATCH in DXF |
+| Fills | SOLID, TRACE, HATCH (solid fill; pattern hatches drawn as their pattern lines, dashed, cut to the boundary; very dense ones as a light screen pattern) | SOLID, TRACE, HATCH (polyline and edge boundaries, pattern lines as for DXF) | Fill colour linkage on shapes, complex shapes and ellipses (junction dots, arrowheads); saved as solid HATCH in DXF |
 | Points | POINT | POINT | — |
 | Layers / levels | LAYER table: colour (ACI and true colour), on/off, frozen, linetype, lineweight | LAYER table: colour (index; true colour from 2004), on/off, frozen, linetype | Levels 1–63 (swatch = most common colour); levels off in the saved open view start hidden |
 | Line weights | Lineweight (370) on items and layers, ByLayer / ByBlock / default, drawn and saved | Not read yet (drawn at the default weight) | Weight 0–31, drawn and saved |
 | Colours | ACI 256-colour table, true colour (420) | Colour index; true colour (2004+) | Colour table element (type 5) or the default DGN palette |
-| Line types | LTYPE dash patterns (shown at screen scale) | LTYPE dash patterns | Line styles 0–7 |
+| Line types | LTYPE dash patterns at their true size: `$LTSCALE` × the item's own scale × its block's scale; `$PSLTSCALE` in layout viewports; solid when a pattern is too small to see | LTYPE dash patterns, as for DXF | Line styles 0–7 (screen patterns) |
 | Units | `$INSUNITS` | `INSUNITS` | Master/sub units and UORs from the TCB, global origin |
 | Other | OCS/extrusion (e.g. mirrored arcs), layouts as pages (viewports at their scale, clipped, per-viewport frozen layers), paper space shown if model space is empty, `$EXTMIN/$EXTMAX`, CRLF/LF, padded group codes, missing HEADER/TABLES sections, truncated files | OCS/extrusion, paper space as for DXF, damaged files (shows what LibreDWG could read), 120 MB size limit, 2-minute read limit | Deleted elements skipped, 2D and 3D files (Z of every vertex kept), truncated files, several colour tables (the last counts, as in GDAL), files without an end-of-design marker |
 | Skipped (reported as "not shown") | 3DSOLID, REGION, BODY, MESH, IMAGE, WIPEOUT, OLE, XREFs, proxy/custom entities | Same as DXF, plus MLINE, MULTILEADER, TOLERANCE, RAY/XLINE, SHAPE | Shared cells, B-splines (21/24–28, one item each), point strings, tag values, reference file attachments (with their file names), raster, dimensions (33) — all kept when the DGN is saved as DGN |
@@ -760,6 +760,18 @@ installed (set `LINEWORK_PYTHON` to choose the interpreter).
   (the test server collects CSP reports, with a negative control without `'wasm-unsafe-eval'`);
   measure, find, colour layers, the page picker, markups per page, the scanned page (picture,
   note, hidden OCR layer, print), Save as DXF, offline re-open. See [PDF.md](PDF.md).
+* Layouts (`layouts.test.mjs`, synthetic `layouts.dxf`: three layouts out of tab order, a detail
+  viewport with a frozen layer, an empty layout): the pages and their names, exact paper
+  coordinates through each viewport, cutting at the frame, text in or out, the model page saving
+  as before, the clipping helpers. End to end: the picker, a layout read-only, measuring in paper
+  units, markups per page, 390 px.
+* Line types and hatch patterns (`linetypes.test.mjs`, synthetic `linetypes.dxf`): dash arrays at
+  `$LTSCALE`, an item's own scale and a scaled block's; `$PSLTSCALE` in a viewport; pattern lines
+  exact (spacing, dashes and dots from the base point, holes, a 45° pattern in a scaled block),
+  the per-hatch and per-drawing limits, no snaps on pattern lines, DXF round trip, print dash
+  lengths on paper, DGN output unchanged, and the pattern moving, turning, scaling, mirroring and
+  stretching with its hatch. End to end: dashes measured on screen, solid when zoomed far out,
+  pattern lines on screen, a hatch moved in Edit keeps its lines, undo.
 * **All test drawings are synthetic**, generated by `tools/make_fixtures.mjs` (DXF),
   `tools/make_dgn_fixtures.py` (DGN, via GDAL), `tools/make_dwg_fixtures.mjs` (DWG, from the
   synthetic DXF files) and `tools/make_pdf_fixtures.mjs` (PDF: hand-written by
@@ -779,6 +791,7 @@ vendor/pdfjs/           pdf.js legacy build + image decoders (Apache-2.0 etc.; p
 deploy/_headers         HTTP headers for the static host (CSP etc.)
 src/scene.js            blocks → flat primitives, colours, local origin, spatial grid
 src/layout.js           DXF layouts as pages, viewports (clipping); loaded by the worker when needed
+src/hatch.js            hatch patterns as lines; loaded by the worker and Edit mode when needed
 src/edit/               edit operations, edit document (changes, undo, selection), live scene,
                         find / replace, key-ins, transforms, attributes + element info, level names
 src/view/               viewport, Canvas2D renderer (WebGL-replaceable interface), batches, colours
@@ -836,10 +849,10 @@ Trade-offs, for the owner to decide before the first public release:
   (also `buildNetlist` / `netlistCsv` in `linework/core`); every net traced from one graph (the 53k-item
   stress drawing's 31,501 nets in under a second).
 * **Since 0.5.3** — measurements saved as CSV; markup resize handles and a markup list; DXF
-  layouts as pages (paper space with its viewports).
+  layouts as pages (paper space with its viewports); line types at their true size; hatch
+  patterns drawn as their lines.
 * **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; editing the
-  geometry inside blocks/cells and shared block-definition text; true linetype scaling; hatch
-  patterns; DWG layouts with their viewports.
+  geometry inside blocks/cells and shared block-definition text; DWG layouts with their viewports.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
   markup review (still file-based, no server).
 
@@ -850,8 +863,11 @@ and block attributes can be edited since 0.2.2).
 
 * Text uses the system sans-serif font (not the drawing's SHX/TrueType fonts), so text widths are
   approximate; MTEXT inline formatting (fonts, colours, stacking) is reduced to plain text.
-* Linetype dashes are drawn at a fixed screen scale; complex linetypes with shapes/text show as
-  their dash pattern only. Pattern hatches use a generic screen pattern.
+* Complex linetypes with shapes/text show as their dash pattern only; DGN line styles are screen
+  patterns. A dash pattern is drawn solid when a whole repeat is under 3 screen pixels (0.5 mm in
+  print), as CAD programs do. Hatch pattern lines are drawn up to 20,000 segments per hatch and
+  300,000 per drawing; a denser hatch shows a light screen pattern instead. Snaps ignore pattern
+  lines (as AutoCAD does by default).
 * Dimensions are drawn from their stored block (as CAD programs do); dimension styles are not
   re-evaluated.
 * 3D drawings are shown in plan (top) view only; DGN 3D cells and views are not interpreted.
@@ -884,8 +900,9 @@ Editing and saving (v0.2):
 * Copy / paste: DXF blocks pasted into a DGN are exploded; DGN cells pasted into a DXF stay cells
   in Linework but are saved as separate items (DXF has no cells). A DGN cell pasted into another
   DGN gets a new header with class 0 and no attribute data of its own (its components keep
-  theirs); pasted or duplicated in its own file it is a copy of its original bytes. Hatch pattern
-  scales are not changed when a paste is scaled between units.
+  theirs); pasted or duplicated in its own file it is a copy of its original bytes. A hatch's
+  pattern moves, turns and scales with it (a paste scaled between units too); line type scales
+  are not changed by a paste (dashes follow the target drawing's `$LTSCALE`, as in AutoCAD).
 * The DXF writer writes the drawing model, not the original file: non-graphical data (layouts,
   dimension styles, extended data, plot settings, groups) is not carried over (lineweights are:
   see *Line weights* above). TEXT/MTEXT that you did not edit is written exactly as stored; edited MTEXT

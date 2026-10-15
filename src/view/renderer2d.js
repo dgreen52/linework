@@ -157,6 +157,7 @@ export class Canvas2DRenderer {
         continue;
       }
       if (g0.bk === BK.PATTERN) {
+        if (g0.bare) continue; // (its lines are drawn)
         ctx.fillStyle = this.pattern(ctx, color, M);
         for (const g of list) { if (!ready(g)) continue; ctx.fill(g.path, 'evenodd'); batches++; }
         continue;
@@ -164,9 +165,10 @@ export class Canvas2DRenderer {
       ctx.strokeStyle = color;
       const wpx = g0.bk === BK.POINT ? 3 : weightPx(g0.weight, scene.format);
       ctx.lineWidth = wpx / s;
-      const dash = g0.bk === BK.POINT ? null : g0.dash;
+      // line types in drawing units (solid once a whole pattern is under 3 px), DGN styles in screen pixels
+      const dash = g0.bk === BK.POINT ? null : g0.wd ? (g0.per * s < 3 ? null : g0.wd) : g0.dash;
       if (dash !== lastDash) {
-        ctx.setLineDash(dash ? dash.map((v) => v / s) : []);
+        ctx.setLineDash(!dash ? [] : dash === g0.wd ? dash : dash.map((v) => v / s));
         lastDash = dash;
       }
       for (const g of list) { if (!ready(g)) continue; ctx.stroke(g.path); batches++; }

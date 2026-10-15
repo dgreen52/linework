@@ -81,6 +81,10 @@ export const clipper = {
         for (let i = 0; i + 1 < pts.length; i += 2) { if (Number.isNaN(pts[i])) flush(); else ring.push(pts[i], pts[i + 1]); }
         flush();
         if (all.length) B.poly(all, flags, a);
+      } else if (flags & FLAG.HL) { // hatch pattern lines: each segment cut
+        const all = [];
+        for (let i = 0; i + 3 < pts.length; i += 6) for (const p of clipPolyline([pts[i], pts[i + 1], pts[i + 2], pts[i + 3]], false, c)) all.push(p[0], p[1], p[2], p[3], NaN, NaN);
+        if (all.length) B.poly(all.slice(0, -2), flags, a);
       } else for (const piece of clipPolyline(pts, !!(flags & FLAG.CLOSED), c)) B.poly(piece, flags & ~FLAG.CLOSED, a);
     } finally { B.clip = c; }
     return true;
@@ -148,7 +152,7 @@ export function emitViewport(e, M, a, depth, api) {
   B.curSub = '#v'; // (model space seen through a viewport: not an item of this page)
   B.clip = [x0, y0, x1, y1];
   try {
-    const ctx = { ...api.top, M: Mv, depth: 1 };
+    const ctx = { ...api.top, M: Mv, depth: 1, lk: model.header && model.header.psltscale === 0 ? 1 : 1 / s }; // $PSLTSCALE 1: dashes as long on paper as in paper space
     for (const m of ms) {
       if (!m || m.invisible || (frozen.size && frozen.has(String(m.layer == null ? '0' : m.layer).toUpperCase()))) continue;
       if (api.over()) { api.ns(NS_COPIES); break; }

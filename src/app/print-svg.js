@@ -95,9 +95,11 @@ export function buildSvg(scene, L, o = {}) {
     const d = k === KIND.CONIC ? conicD(scene, i, X, Y, s) : polyD(scene, i, X, Y);
     if (!d) continue;
     if (f & FLAG.FILL) group('f' + c + (f & FLAG.EVENODD), 0, `<path fill="${c}" fill-rule="${f & FLAG.EVENODD ? 'evenodd' : 'nonzero'}" d="`).push(d);
-    else if (f & FLAG.PATTERN) group('p' + c, 1, `<path fill="${c}" fill-opacity=".22" fill-rule="evenodd" d="`).push(d);
+    else if (f & FLAG.PATTERN) { if (!(f & FLAG.HL)) group('p' + c, 1, `<path fill="${c}" fill-opacity=".22" fill-rule="evenodd" d="`).push(d); } // (HL: drawn by its lines)
     else {
-      const w = r3(widthMm(scene.weight[i], scene.format)), lt = scene.ltypes[scene.style[i]], dash = lt && lt.dash ? lt.dash.map((v) => r3(v * DASH_MM)).join(' ') : '';
+      const w = r3(widthMm(scene.weight[i], scene.format)), lt = scene.ltypes[scene.style[i]];
+      // line types at their size on paper (solid when a whole pattern is under 0.5 mm); DGN styles as on screen
+      const dash = !lt ? '' : lt.wd ? (lt.per * s < 0.5 ? '' : lt.wd.map((v) => r3(v * s)).join(' ')) : lt.dash ? lt.dash.map((v) => r3(v * DASH_MM)).join(' ') : '';
       group(`s${c}|${w}|${dash}`, 2, `<path stroke="${c}" stroke-width="${w}"${dash ? ` stroke-dasharray="${dash}"` : ''} d="`).push(d);
     }
   }

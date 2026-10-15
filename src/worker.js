@@ -6,7 +6,7 @@
 // { id, type: 'model', meta, paperEntities, bytes? } (bytes = the original file, DGN only).
 // { type: 'index', id, name, buffer }: a sheet of a set, only its text index comes back (tools/sheets.js).
 import { parseDrawingAsync } from './formats/detect.js';
-import { buildScene, sceneTransferables, packTexts } from './scene.js';
+import { buildScene, sceneTransferables, packTexts, plug } from './scene.js';
 import { buildChunks, chunkTransferables } from './view/batches.js';
 
 export async function loadInWorkerScope(msg, post) {
@@ -29,6 +29,7 @@ export async function loadInWorkerScope(msg, post) {
   const onPhase = (phase, fraction, watch) => post({ id, type: 'progress', phase, fraction, watch });
   const model = await parseDrawingAsync(bytes, name, { onProgress: progress('Reading', 0, 0.7), onPhase, page: msg.page });
   let layout = null;
+  if (model.patterns && !plug.hatch) plug.hatch = await import('./hatch.js');
   if (model.layoutData) { layout = await import('./layout.js'); layout.applyLayouts(model, msg.page); }
   const scene = buildScene(model, { fileName: name, onProgress: progress('Preparing', 0.7, 0.3), layout });
   scene.fileSize = bytes.length;

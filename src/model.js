@@ -26,7 +26,7 @@
 //   { type:'dimension', block, p:[x,y], text, fallback:[entities], dim:{...raw definition points} }
 //   { type:'cell', name, origin:[x,y], children:[entities] }   DGN cell: children already placed
 // Common props: layer (name), color (ACI 0..256; 0=BYBLOCK 256=BYLAYER), rgb (true colour or null),
-//               ltype (name | 'BYLAYER' | 'BYBLOCK'), weight (0..31 screen weight), group (cell id)
+//               ltype (name | 'BYLAYER' | 'BYBLOCK'), lts (its line type scale), weight (0..31 screen weight), group (cell id)
 // Write-back props (readers keep them so a saved file loses as little as possible):
 //   DXF: ext (OCS extrusion [x,y,z]), style (text style name), raw (TEXT/MTEXT string as stored),
 //        tag (ATTRIB tag); DGN: dgn ([start, end) byte range of the element(s)), ci (colour index)

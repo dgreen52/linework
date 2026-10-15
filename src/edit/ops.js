@@ -23,6 +23,31 @@ const isConformal = (M, tol = 1e-9) => {
   return Math.abs(M[0] * M[2] + M[1] * M[3]) <= tol * n1 * n2 && Math.abs(n1 - n2) <= tol * Math.max(n1, n2);
 };
 
+/**
+ * A hatch's pattern groups (e.tail, kept for saving and read by src/hatch.js) moved with it by M: the pattern's angle
+ * (52) and scale (41), each pattern line's angle (53), base point (43/44), offset (45/46) and dashes (49), the seed
+ * points (10/20 after 98). An affine M keeps the lines parallel: the pattern stays on the hatch as it moves.
+ */
+function xfTail(tail, M) {
+  const out = tail.map((g) => g.slice()), deg = (a) => ((angleOf(M, (a * Math.PI) / 180) * 180) / Math.PI + 360) % 360;
+  let k = 1, at = -1, seeds = false;
+  for (let i = 0; i < out.length; i++) {
+    const c = out[i][0], v = parseFloat(out[i][1]);
+    if (c === 98) seeds = true;
+    if (!Number.isFinite(v)) continue;
+    const pair = (j, f) => { const w = j >= 0 ? parseFloat(out[j][1]) : NaN; if (Number.isFinite(w)) [out[j][1], out[i][1]] = f(M, w, v); at = -1; };
+    if (seeds) { if (c === 10) at = i; else if (c === 20) pair(at, apply); continue; }
+    if (c === 52) out[i][1] = deg(v);
+    else if (c === 41) out[i][1] = v * scaleOf(M);
+    else if (c === 53) { out[i][1] = deg(v); k = Math.hypot(...applyVec(M, Math.cos((v * Math.PI) / 180), Math.sin((v * Math.PI) / 180))); }
+    else if (c === 43 || c === 45) at = i;
+    else if (c === 44) pair(at, apply);
+    else if (c === 46) pair(at, applyVec);
+    else if (c === 49) out[i][1] = v * k;
+  }
+  return out;
+}
+
 /** Entity with its OCS transform (e.xf from an extrusion vector) applied: plain plan geometry. */
 export function bakeOcs(e) {
   if (!e || !e.xf) return e;
@@ -54,6 +79,7 @@ export function transformEntity(e, M, baking = false) {
     case 'spline': case 'solid': o.pts = xfPts(M, e.pts); break;
     case 'hatch':
       o.loops = e.loops.map((L) => ({ ...L, pts: xfPts(M, L.pts), bulges: L.bulges ? (flip ? L.bulges.map((b) => -b) : L.bulges.slice()) : L.bulges }));
+      if (e.tail) o.tail = xfTail(e.tail, M);
       break;
     case 'circle':
       if (isConformal(M)) { o.c = apply(M, ...e.c); o.r = e.r * s; }

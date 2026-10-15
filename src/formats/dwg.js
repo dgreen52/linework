@@ -486,6 +486,7 @@ class DwgMapper {
       else if (lf === 3) { const n = this.names.ltype.get(num(M.dwg_object_entity_get_ltype_object_ref(ent).absolute_ref)); if (n) this.p(6, n); }
     } catch { /* by layer */ }
     try { if (M.dwg_object_entity_get_invisible(ent)) this.p(60, 1); } catch { /* visible */ }
+    try { const s = M.dwg_object_entity_get_ltype_scale(ent); if (s > 0 && s !== 1) this.p(48, s); } catch { /* 1 */ }
     if (paper) this.p(67, 1);
   }
 

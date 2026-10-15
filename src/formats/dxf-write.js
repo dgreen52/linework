@@ -179,6 +179,7 @@ export function writeDxf(model, opts = {}) {
     colorGroups(e);
     const lw = isDgn ? weightToLw(e.weight) : e.lw ?? -1; // DGN weights: see weightToLw (scene.js)
     if (lw !== -1) E(370, lw);
+    if (e.lts > 0 && e.lts !== 1) E(48, e.lts);
     if (e.invisible) E(60, 1);
     if (sub) E(100, sub);
     stats.entities++;
@@ -415,6 +416,9 @@ export function writeDxf(model, opts = {}) {
   P(9, '$EXTMIN'); P(10, ext[0]); P(20, ext[1]); P(30, 0);
   P(9, '$EXTMAX'); P(10, ext[2]); P(20, ext[3]); P(30, 0);
   P(9, '$INSUNITS'); P(70, model.units ? model.units.code | 0 : 0);
+  const hd = model.header || {};
+  if (hd.ltscale > 0 && hd.ltscale !== 1) { P(9, '$LTSCALE'); P(40, hd.ltscale); }
+  if (hd.psltscale === 0) { P(9, '$PSLTSCALE'); P(70, 0); }
   const seedAt = out.length;
   P(9, '$HANDSEED'); P(5, 'FFFF');
   P(0, 'ENDSEC');

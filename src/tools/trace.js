@@ -137,7 +137,7 @@ function* graphSteps(scene, opts) {
   for (let i = 0; i < n; i++) {
     if (!(i & 4095)) yield;
     const f = flags[i], o = 4 * i, small = Math.max(bb[o + 2] - bb[o], bb[o + 3] - bb[o + 1]) <= dotMax;
-    if ((dead && dead[i]) || kind[i] === KIND.POINT || f & FLAG.PATTERN) continue;
+    if ((dead && dead[i]) || kind[i] === KIND.POINT || f & (FLAG.PATTERN | FLAG.HL)) continue;
     if (f & FLAG.FILL) { if (small) role[i] = ROLE.DOT; continue; }
     let closed = !!(f & (FLAG.FULL | FLAG.CLOSED));
     if (kind[i] === KIND.POLY) {

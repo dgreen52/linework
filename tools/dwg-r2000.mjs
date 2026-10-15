@@ -1,8 +1,10 @@
-// Minimal DWG R2000 (AC1015) writer, used ONLY to make synthetic test fixtures from the repo's own
-// synthetic DXF files (see tools/make_dwg_fixtures.mjs). It is not part of the app.
+// Minimal DWG R2000 (AC1015) and R2004 (AC1018) writer, used ONLY to make synthetic test fixtures from
+// the repo's own synthetic DXF files (see tools/make_dwg_fixtures.mjs). It is not part of the app.
 //
 // Written from the publicly available "Open Design Specification for .dwg files" (bit codes,
-// section layout, object encodings). It writes just enough for a reader to rebuild the drawing:
+// section layout, object encodings; for R2004 its chapter 4: the paged, compressed file layout, and
+// the R2004+ fields of the header variables, classes and objects). It writes just enough for a
+// reader to rebuild the drawing:
 // file header, header variables, classes (none), tables (LTYPE, LAYER, STYLE, BLOCK_HEADER and
 // the other control objects), a root dictionary, blocks and these entities: LINE, POINT, CIRCLE,
 // ARC, ELLIPSE, LWPOLYLINE, POLYLINE (2D) + VERTEX, SPLINE, TEXT, MTEXT, ATTDEF, INSERT/MINSERT +
@@ -62,7 +64,19 @@ class Bits {
     this.RC(((code & 15) << 4) | out.length);
     for (const b of out) this.RC(b);
   }
-  CMC(index) { this.BS(index); } // R2000: colour index only
+  /** A colour (header, tables). R2000: the index; R2004+: index, colour method + value (BL), flags (RC). rgb: a true colour. */
+  CMC(index, rgb) {
+    this.BS(R18 && rgb != null ? 0 : index);
+    if (!R18) return;
+    this.BL((rgb != null ? 0xc2000000 | rgb : index === 256 ? 0xc0000000 : index === 0 ? 0xc1000000 : 0xc3000000 | index) >>> 0);
+    this.RC(0);
+  }
+  /** An entity's colour. R2000: the index; R2004+: the index, or flag 0x8000 + the index and the true colour (method 0xC2) as a BL. */
+  ENC(index, rgb) {
+    if (!R18 || rgb == null) { this.BS(index); return; }
+    this.BS(0x8000 | (index > 0 && index < 256 ? index : 0));
+    this.BL((0xc2000000 | rgb) >>> 0);
+  }
   setRL(pos, v) {
     const save = this.p;
     this.p = pos;
@@ -161,14 +175,18 @@ const D2R = Math.PI / 180;
  * @returns {{ bytes: Uint8Array, notes: string[] }}
  */
 let NUL_TERMINATED = false;
+let R18 = false; // writing R2004 (AC1018)
 /**
  * opts (test variants): nulTerminated — strings include their terminating NUL;
  * unlinkModelSpace — the model space block header lists no entities (damaged-file case).
  */
 export function writeDwgR2000(dxf, opts = {}) {
   NUL_TERMINATED = !!opts.nulTerminated;
-  try { return write(dxf, opts); } finally { NUL_TERMINATED = false; }
+  R18 = opts.version === 'R2004';
+  try { return write(dxf, opts); } finally { NUL_TERMINATED = false; R18 = false; }
 }
+/** The same drawing as DWG R2004 (AC1018): paged, compressed sections; R2004 header variables and objects. */
+export const writeDwgR2004 = (dxf, opts = {}) => writeDwgR2000(dxf, { ...opts, version: 'R2004' });
 function write(dxf, opts) {
   const notes = [];
   let nextHandle = 1;
@@ -208,7 +226,8 @@ function write(dxf, opts) {
     L.color = g.i(62, 7) || 7;
     L.flags = g.i(70, 0);
     L.ltype = g.s(6, 'Continuous').trim() || 'Continuous';
-    if (g.has(420)) notes.push(`Layer ${name}: true colour is not stored in DWG R2000 (colour index kept).`);
+    if (g.has(420) && R18) L.rgb = g.i(420) & 0xffffff;
+    else if (g.has(420)) notes.push(`Layer ${name}: true colour is not stored in DWG R2000 (colour index kept).`);
   }
   const layerOf = (g) => addLayer(g.s(8, '0').trim() || '0').handle;
   // layers used by entities but missing from the LAYER table (allowed in DXF) become table entries
@@ -250,11 +269,14 @@ function write(dxf, opts) {
     w.H(0, handle);
     w.BS(0); // no extended data
     w.BL(0); // reactors
+    if (R18) w.B(1); // no extension dictionary
     data(w);
     w.setRL(bsPos, w.p);
     handles(w);
     return w.bytes();
   }
+  /** The extension dictionary handle (none): R2000 writes a null one, R2004+ says it is missing instead. */
+  const XD = (w) => { if (!R18) w.H(3, 0); };
   /** Common entity frame. owner: block handle when entmode 0. */
   function entity(type, handle, g, ctx, data, handles) {
     const w = new Bits();
@@ -266,10 +288,13 @@ function write(dxf, opts) {
     w.B(0); // no graphics
     w.BB(ctx.entmode);
     w.BL(0); // reactors
-    w.B(0); // links present
+    if (R18) w.B(1); // no extension dictionary
+    // links present (R2000). R2004+: no bit at all; the owners list their items (the specification lists the bit,
+    // "always 1", but LibreDWG, which reads R2004 files from CAD programs, reads none)
+    if (!R18) w.B(0);
     let color = g ? g.i(62, 256) : 256;
     if (color < 0 || color > 256) color = Math.abs(color) % 257;
-    w.CMC(color);
+    w.ENC(color, R18 && g && g.has(420) ? g.i(420) & 0xffffff : null);
     w.BD(g ? g.f(48, 1) || 1 : 1);
     const lt = g ? (g.s(6, 'BYLAYER').trim() || 'BYLAYER').toUpperCase() : 'BYLAYER';
     let ltFlag = 0, ltHandle = 0;
@@ -283,9 +308,8 @@ function write(dxf, opts) {
     data(w);
     w.setRL(bsPos, w.p);
     if (ctx.entmode === 0) w.H(4, ctx.owner);
-    w.H(3, 0); // xdictionary
-    w.H(4, ctx.prev || 0);
-    w.H(4, ctx.next || 0);
+    XD(w);
+    if (!R18) { w.H(4, ctx.prev || 0); w.H(4, ctx.next || 0); }
     w.H(5, g ? layerOf(g) : layers.get('0').handle);
     if (ltFlag === 3) w.H(5, ltHandle);
     if (handles) handles(w);
@@ -421,6 +445,7 @@ function write(dxf, opts) {
         w.BS(g.i(73, 1) || 1);
         w.BD(g.f(44, 1) || 1);
         w.B(0);
+        if (R18) w.BL(0); // no background
       }, (w) => w.H(5, styleOf(g))));
     },
     INSERT(it, ctx) {
@@ -438,10 +463,14 @@ function write(dxf, opts) {
         w.BD(g.f(50, 0) * D2R);
         w.BD3(ext(g));
         w.B(attribs.length > 0);
+        if (R18 && attribs.length) w.BL(attribs.length); // owned objects
         if (minsert) { w.BS(cols); w.BS(rows); w.BD(g.f(44, 0)); w.BD(g.f(45, 0)); }
       }, (w) => {
         w.H(5, blockHandle(g.s(2, '')));
-        if (attribs.length) { w.H(4, attribs[0].handle); w.H(4, attribs[attribs.length - 1].handle); w.H(3, it.seqend); }
+        if (attribs.length) {
+          if (R18) for (const a of attribs) w.H(3, a.handle); else { w.H(4, attribs[0].handle); w.H(4, attribs[attribs.length - 1].handle); }
+          w.H(3, it.seqend);
+        }
       }));
       attribs.forEach((a, k) => {
         const actx = { entmode: 0, owner: it.handle, prev: k ? attribs[k - 1].handle : 0, next: k + 1 < attribs.length ? attribs[k + 1].handle : 0 };
@@ -510,9 +539,10 @@ function write(dxf, opts) {
         } else {
           w.BS(flags & 0xff); w.BS(g.i(75, 0)); w.BS(g.i(71, 0)); w.BS(g.i(72, 0)); w.BS(g.i(73, 0)); w.BS(g.i(74, 0));
         }
+        if (R18) w.BL(verts.length); // owned objects
       }, (w) => {
-        w.H(4, verts.length ? verts[0].handle : 0);
-        w.H(4, verts.length ? verts[verts.length - 1].handle : 0);
+        if (R18) for (const v of verts) w.H(kind === '2d' || kind === '3d' ? 3 : 4, v.handle);
+        else { w.H(4, verts.length ? verts[0].handle : 0); w.H(4, verts.length ? verts[verts.length - 1].handle : 0); }
         w.H(3, it.seqend);
       }));
       verts.forEach((v, k) => {
@@ -647,6 +677,7 @@ function write(dxf, opts) {
     const num = () => parseFloat(vals[k++]);
     const int = () => parseInt(vals[k++], 10) | 0;
     const seek = (code) => { while (k < n && codes[k] !== code) k++; return k < n; };
+    if (R18) { w.BL(0); w.BL(0); w.BD(0); w.BD(0); w.BL(0); w.BD(0); w.BL(0); w.TV([]); } // not a gradient
     w.BD(g.f(30, 0));
     w.BD3(ext(g));
     w.TV(cp1252(g.s(2, 'SOLID')));
@@ -759,11 +790,11 @@ function write(dxf, opts) {
 
   // ---------------------------------------------------------------- tables
   const tableEntryHead = (w, name) => { w.TV(cp1252(name)); w.B(0); w.BS(0); w.B(0); };
-  const tableHandles = (w, owner) => { w.H(4, owner); w.H(3, 0); w.H(5, 0); };
+  const tableHandles = (w, owner) => { w.H(4, owner); XD(w); w.H(5, 0); };
 
   const userLtypes = [...ltypes.values()].filter((l) => !/^(BYLAYER|BYBLOCK)$/i.test(l.name));
   push(H.ltypeControl, object(T.LTYPE_CONTROL, H.ltypeControl, (w) => w.BS(userLtypes.length), (w) => {
-    w.H(4, 0); w.H(3, 0);
+    w.H(4, 0); XD(w);
     for (const l of userLtypes) w.H(2, l.handle);
     w.H(3, ltypes.get('BYBLOCK').handle);
     w.H(3, ltypes.get('BYLAYER').handle);
@@ -781,7 +812,7 @@ function write(dxf, opts) {
   }
 
   push(H.layerControl, object(T.LAYER_CONTROL, H.layerControl, (w) => w.BS(layers.size), (w) => {
-    w.H(4, 0); w.H(3, 0);
+    w.H(4, 0); XD(w);
     for (const L of layers.values()) w.H(2, L.handle);
   }));
   for (const L of layers.values()) {
@@ -795,7 +826,7 @@ function write(dxf, opts) {
       f |= 16; // plot
       f |= 29 << 5; // lineweight: default
       w.BS(f);
-      w.CMC(Math.abs(L.color) || 7);
+      w.CMC(Math.abs(L.color) || 7, L.rgb);
     }, (w) => {
       tableHandles(w, H.layerControl);
       w.H(5, 0); // plot style
@@ -805,7 +836,7 @@ function write(dxf, opts) {
   }
 
   push(H.styleControl, object(T.STYLE_CONTROL, H.styleControl, (w) => w.BS(styles.size), (w) => {
-    w.H(4, 0); w.H(3, 0);
+    w.H(4, 0); XD(w);
     for (const s of styles.values()) w.H(2, s.handle);
   }));
   for (const s of styles.values()) {
@@ -826,16 +857,17 @@ function write(dxf, opts) {
 
   const userBlocks = [...blocks.values()].filter((b) => b !== ms && b !== ps);
   push(H.blockControl, object(T.BLOCK_CONTROL, H.blockControl, (w) => w.BS(userBlocks.length), (w) => {
-    w.H(4, 0); w.H(3, 0);
+    w.H(4, 0); XD(w);
     for (const b of userBlocks) w.H(2, b.handle);
     w.H(3, ms.handle);
     w.H(3, ps.handle);
   }));
-  for (const [ctl, type] of [[H.viewControl, T.VIEW_CONTROL], [H.ucsControl, T.UCS_CONTROL], [H.vportControl, T.VPORT_CONTROL], [H.appidControl, T.APPID_CONTROL], [H.vxControl, T.VX_CONTROL]]) {
-    push(ctl, object(type, ctl, (w) => w.BS(0), (w) => { w.H(4, 0); w.H(3, 0); }));
+  // (the viewport entity header control is R13-R2000 only)
+  for (const [ctl, type] of [[H.viewControl, T.VIEW_CONTROL], [H.ucsControl, T.UCS_CONTROL], [H.vportControl, T.VPORT_CONTROL], [H.appidControl, T.APPID_CONTROL], ...(R18 ? [] : [[H.vxControl, T.VX_CONTROL]])]) {
+    push(ctl, object(type, ctl, (w) => w.BS(0), (w) => { w.H(4, 0); XD(w); }));
   }
-  push(H.dimstyleControl, object(T.DIMSTYLE_CONTROL, H.dimstyleControl, (w) => { w.BS(0); w.RC(0); }, (w) => { w.H(4, 0); w.H(3, 0); }));
-  push(H.namedDict, object(T.DICTIONARY, H.namedDict, (w) => { w.BL(0); w.BS(0); w.RC(0); }, (w) => { w.H(4, 0); w.H(3, 0); }));
+  push(H.dimstyleControl, object(T.DIMSTYLE_CONTROL, H.dimstyleControl, (w) => { w.BS(0); w.RC(0); }, (w) => { w.H(4, 0); XD(w); }));
+  push(H.namedDict, object(T.DICTIONARY, H.namedDict, (w) => { w.BL(0); w.BS(0); w.RC(0); }, (w) => { w.H(4, 0); XD(w); }));
 
   // ---------------------------------------------------------------- blocks + entities
   for (const blk of blocks.values()) {
@@ -847,6 +879,7 @@ function write(dxf, opts) {
       tableEntryHead(w, blk.name);
       w.B(flags & 1); w.B(flags & 2); w.B(0); w.B(0);
       w.B(1); // loaded
+      if (R18) w.BL(items.length); // owned objects: its entities
       w.BD3(base);
       w.TV([]); // xref path
       w.RC(0); // no insert handles follow
@@ -856,8 +889,11 @@ function write(dxf, opts) {
       tableHandles(w, H.blockControl);
       w.H(3, blk.blockEnt);
       const unlinked = opts.unlinkModelSpace && blk === ms;
-      w.H(4, items.length && !unlinked ? items[0].handle : 0);
-      w.H(4, items.length && !unlinked ? items[items.length - 1].handle : 0);
+      if (R18) for (const it of items) w.H(3, it.handle);
+      else {
+        w.H(4, items.length && !unlinked ? items[0].handle : 0);
+        w.H(4, items.length && !unlinked ? items[items.length - 1].handle : 0);
+      }
       w.H(3, blk.endblk);
       w.H(5, 0); // layout
     }));
@@ -882,9 +918,10 @@ function write(dxf, opts) {
     BDs(412148564080.0, 1, 1, 1);
     for (let i = 0; i < 4; i++) w.TV([]);
     w.BL(24); w.BL(0);
-    w.H(5, 0); // current viewport entity header
+    if (!R18) w.H(5, 0); // current viewport entity header (before R2004)
     Bs(1, 1); // DIMASO DIMSHO
     Bs(0, 0, 1, 1, 0, 1, 0); // PLINEGEN ORTHOMODE REGENMODE FILLMODE QTEXTMODE PSLTSCALE LIMCHECK
+    if (R18) w.B(0); // (R2004+, undocumented)
     Bs(1, 0, 0, 0); // USRTIMER SKPOLY ANGDIR SPLFRAME
     Bs(0, 1); // MIRRTEXT WORLDVIEW
     Bs(1, 0, 1); // TILEMODE PLIMCHECK VISRETAIN
@@ -894,6 +931,7 @@ function write(dxf, opts) {
     BSs(2, 4, 0, 0); // LUNITS LUPREC AUNITS AUPREC
     w.BS(1); // ATTMODE
     w.BS(0); // PDMODE
+    if (R18) { w.BL(0); w.BL(0); w.BL(0); } // (R2004+, unknown)
     BSs(0, 0, 0, 0, 0); // USERI1-5
     BSs(8, 6, 6, 6, 6, 6, 6); // SPLINESEGS SURFU SURFV SURFTYPE SURFTAB1 SURFTAB2 SPLINETYPE
     BSs(3, 70, 0, 64, 4, 0, 50); // SHADEDGE SHADEDIF UNITMODE MAXACTVP ISOLINES CMLJUST TEXTQLTY
@@ -904,6 +942,7 @@ function write(dxf, opts) {
     BDs(0.5, 1, 1); // FACETRES CMLSCALE CELTSCALE
     w.TV(cp1252('acad')); // MENU
     w.BL(2461000); w.BL(0); w.BL(2461000); w.BL(0); // TDCREATE TDUPDATE
+    if (R18) { w.BL(0); w.BL(0); w.BL(0); } // (R2004+, unknown)
     w.BL(0); w.BL(0); w.BL(0); w.BL(0); // TDINDWG TDUSRTIMER
     w.CMC(256); // CECOLOR
     w.H(0, nextHandle); // HANDSEED
@@ -939,23 +978,31 @@ function write(dxf, opts) {
     w.H(5, styles.get('STANDARD').handle); // DIMTXSTY
     w.H(5, 0); w.H(5, 0); w.H(5, 0); w.H(5, 0); // DIMLDRBLK DIMBLK DIMBLK1 DIMBLK2
     w.BS(-2); w.BS(-2); // DIMLWD DIMLWE
-    for (const h of [H.blockControl, H.layerControl, H.styleControl, H.ltypeControl, H.viewControl, H.ucsControl, H.vportControl, H.appidControl, H.dimstyleControl, H.vxControl]) w.H(3, h);
+    for (const h of [H.blockControl, H.layerControl, H.styleControl, H.ltypeControl, H.viewControl, H.ucsControl, H.vportControl, H.appidControl, H.dimstyleControl]) w.H(3, h);
+    if (!R18) w.H(3, H.vxControl); // (R13-R2000)
     w.H(5, 0); w.H(5, 0); // ACAD_GROUP, ACAD_MLINESTYLE dictionaries
     w.H(3, H.namedDict);
     w.BS(1); w.BS(70); // TSTACKALIGN TSTACKSIZE
     w.TV([]); w.TV([]); // HYPERLINKBASE STYLESHEET
     w.H(5, 0); w.H(5, 0); w.H(5, 0); // LAYOUTS PLOTSETTINGS PLOTSTYLES dictionaries
+    if (R18) { w.H(5, 0); w.H(5, 0); } // MATERIALS COLORS dictionaries
     w.BL(0x081d | 0x200); // flags: CELWEIGHT by layer, EXTNAMES, lineweights not displayed
     w.BS(num('$INSUNITS', 70, 0)); // INSUNITS
     w.BS(0); // CEPSNTYPE
     w.TV(cp1252('{00000000-0000-0000-0000-000000000000}')); // FINGERPRINTGUID
     w.TV(cp1252('{00000000-0000-0000-0000-000000000000}')); // VERSIONGUID
+    if (R18) {
+      w.RC(0x7f); w.RC(0); w.RC(1); w.RC(0); w.RC(2); w.RC(0); // SORTENTS INDEXCTL HIDETEXT XCLIPFRAME DIMASSOC HALOGAP
+      w.BS(257); w.BS(257); w.RC(0); w.RC(0); // OBSCUREDCOLOR INTERSECTIONCOLOR OBSCUREDLTYPE INTERSECTIONDISPLAY
+      w.TV([]); // PROJECTNAME
+    }
     w.H(5, ps.handle); w.H(5, ms.handle); // BLOCK_RECORD_PSPACE / MSPACE
     w.H(5, ltypes.get('BYLAYER').handle); w.H(5, ltypes.get('BYBLOCK').handle); w.H(5, ltypes.get('CONTINUOUS').handle);
     w.BS(0); w.BS(0); w.BS(0); w.BS(0);
   }
 
-  return { bytes: assemble(objects, headerVars), notes: [...new Set(notes)] };
+  const measurement = num('$MEASUREMENT', 70, 0) === 1 ? 1 : 0;
+  return { bytes: R18 ? assembleR2004(objects, headerVars, { handseed: nextHandle, measurement }) : assemble(objects, headerVars), notes: [...new Set(notes)] };
 }
 
 // ------------------------------------------------------------------ file assembly
@@ -978,39 +1025,13 @@ function assemble(objects, headerVars) {
   const objBytes = [];
   const map = [];
   for (const o of objects) {
-    const ms = MS(o.bytes.length);
-    const body = new Uint8Array(ms.length + o.bytes.length + 2);
-    body.set(ms, 0);
-    body.set(o.bytes, ms.length);
-    const c = crc16(0xc0c1, body, 0, ms.length + o.bytes.length);
-    body[body.length - 2] = c & 0xff;
-    body[body.length - 1] = c >>> 8;
+    const body = framed(o);
     map.push([o.handle, pos]);
     objBytes.push(body);
     pos += body.length;
   }
-  // object map: sections of at most 2032 bytes; handle/offset deltas restart in each section
   const mapAt = pos;
-  const mapBytes = [];
-  let i = 0;
-  for (;;) {
-    const sec = [0, 0];
-    let lastH = 0, lastO = 0;
-    while (i < map.length) {
-      const [h, o] = map[i];
-      const ent = [...UMC(h - lastH), ...MC(o - lastO)];
-      if (sec.length + ent.length > 2032) break;
-      sec.push(...ent);
-      lastH = h; lastO = o;
-      i++;
-    }
-    const empty = sec.length === 2;
-    sec[0] = (sec.length >>> 8) & 0xff; sec[1] = sec.length & 0xff; // big-endian size, includes itself
-    const c = crc16(0xc0c1, Uint8Array.from(sec));
-    sec.push((c >>> 8) & 0xff, c & 0xff); // big-endian CRC
-    mapBytes.push(...sec);
-    if (empty) break; // the closing (empty) section
-  }
+  const mapBytes = objectMap(map);
   pos += mapBytes.length;
 
   // file header
@@ -1035,6 +1056,201 @@ function assemble(objects, headerVars) {
   let o = 0;
   for (const b of out) { file.set(b, o); o += b.length; }
   return file;
+}
+
+/** Object map: [handle, offset] pairs in sections of at most 2032 bytes; handle/offset deltas restart in each section. */
+function objectMap(map) {
+  const mapBytes = [];
+  let i = 0;
+  for (;;) {
+    const sec = [0, 0];
+    let lastH = 0, lastO = 0;
+    while (i < map.length) {
+      const [h, o] = map[i];
+      const ent = [...UMC(h - lastH), ...MC(o - lastO)];
+      if (sec.length + ent.length > 2032) break;
+      sec.push(...ent);
+      lastH = h; lastO = o;
+      i++;
+    }
+    const empty = sec.length === 2;
+    sec[0] = (sec.length >>> 8) & 0xff; sec[1] = sec.length & 0xff; // big-endian size, includes itself
+    const c = crc16(0xc0c1, Uint8Array.from(sec));
+    sec.push((c >>> 8) & 0xff, c & 0xff); // big-endian CRC
+    mapBytes.push(...sec);
+    if (empty) break; // the closing (empty) section
+  }
+  return mapBytes;
+}
+
+/** An object's bytes as stored: MS size, the object, CRC (seed 0xC0C1). */
+function framed(o) {
+  const ms = MS(o.bytes.length);
+  const body = new Uint8Array(ms.length + o.bytes.length + 2);
+  body.set(ms, 0);
+  body.set(o.bytes, ms.length);
+  const c = crc16(0xc0c1, body, 0, ms.length + o.bytes.length);
+  body[body.length - 2] = c & 0xff;
+  body[body.length - 1] = c >>> 8;
+  return body;
+}
+
+// ------------------------------------------------------------------ R2004 file assembly (Open Design Specification, chapter 4)
+// The file: a 0x100 byte header (the R2004 header data encrypted at 0x80), then pages, each starting
+// on a 0x20 boundary: the data sections' pages (32 byte masked header + compressed data), the section
+// map and the section page map (system pages), and a second copy of the header data at the end.
+const PAGE = 0x7400; // largest decompressed page of a data section
+/** The 0x100 byte pseudo-random sequence: XOR mask of the header data at 0x80, and the fill between pages. */
+const MAGIC = (() => {
+  const m = new Uint8Array(0x100);
+  let seed = 1;
+  for (let i = 0; i < 0x100; i++) { seed = (Math.imul(seed, 0x343fd) + 0x269ec3) | 0; m[i] = (seed >> 16) & 0xff; }
+  return m;
+})();
+const CRC32 = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+export function crc32(bytes, seed = 0) {
+  let c = ~seed >>> 0;
+  for (const b of bytes) c = (c >>> 8) ^ CRC32[(c ^ b) & 0xff];
+  return ~c >>> 0;
+}
+/** The section page checksum (two running sums modulo 0xFFF1, in chunks of 0x15B0 bytes). */
+export function pageChecksum(seed, bytes) {
+  let s1 = seed & 0xffff, s2 = seed >>> 16, i = 0;
+  while (i < bytes.length) {
+    const end = Math.min(bytes.length, i + 0x15b0);
+    for (; i < end; i++) { s1 += bytes[i]; s2 += s1; }
+    s1 %= 0xfff1; s2 %= 0xfff1;
+  }
+  return ((s2 << 16) | (s1 & 0xffff)) >>> 0;
+}
+/**
+ * R2004 compression, written as a single literal run: the literal length (1 byte for 4-18 bytes, else 0x00,
+ * then 0x00 for each further 0xFF, then the rest), the bytes, and the end-of-stream opcode 0x11.
+ */
+export function literalStream(data) {
+  const n = data.length, out = [];
+  if (n < 4) throw new Error('a compressed page holds at least 4 bytes');
+  if (n <= 0x12) out.push(n - 3);
+  else { out.push(0); let r = n - 3 - 0x0f; while (r > 0xff) { out.push(0); r -= 0xff; } out.push(r); }
+  const b = new Uint8Array(out.length + n + 3);
+  b.set(out, 0);
+  b.set(data, out.length);
+  b[out.length + n] = 0x11;
+  return b;
+}
+const align = (n) => (n + 0x1f) & ~0x1f;
+const u32 = (dv, o, v) => dv.setUint32(o, v >>> 0, true);
+const u64 = (dv, o, v) => { dv.setUint32(o, v % 0x100000000, true); dv.setUint32(o + 4, Math.floor(v / 0x100000000), true); };
+const cat = (parts) => { const out = new Uint8Array(parts.reduce((s, p) => s + p.length, 0)); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; } return out; };
+const le = (vals) => { const b = new Uint8Array(4 * vals.length), dv = new DataView(b.buffer); vals.forEach((v, k) => u32(dv, 4 * k, v)); return b; };
+
+function assembleR2004(objects, headerVars, { handseed, measurement }) {
+  // ---- the data sections (decompressed)
+  const hw = new Bits(4096);
+  headerVars(hw);
+  const header = sectionWithSize(SENTINEL.varsBegin, hw.bytes(), SENTINEL.varsEnd);
+  const cw = new Bits(16);
+  cw.BS(499); cw.RC(0); cw.RC(0); cw.B(1); // highest class number (no classes), 0, 0, true
+  const classes = cat([sectionWithSize(SENTINEL.classesBegin, cw.bytes(), SENTINEL.classesEnd), new Uint8Array(8)]);
+  objects.sort((a, b) => a.handle - b.handle);
+  const parts = [le([0x0dca])], map = [];
+  let at = 4;
+  for (const o of objects) { const f = framed(o); map.push([o.handle, at]); parts.push(f); at += f.length; }
+  const objData = cat(parts);
+  const handles = Uint8Array.from(objectMap(map)); // offsets into the objects section
+  const template = new Uint8Array([0, 0, measurement, 0]); // no description, MEASUREMENT
+  const aux = new Uint8Array(123), ad = new DataView(aux.buffer);
+  {
+    let o = 0;
+    const RC = (v) => { aux[o++] = v; }, RS = (v) => { ad.setUint16(o, v, true); o += 2; }, RL = (v) => { u32(ad, o, v); o += 4; };
+    RC(0xff); RC(0x77); RC(0x01); RS(25); RS(0); RL(1); RL(0xffffffff); RS(1); RS(0); RL(0); RS(25); RS(0); RS(25); RS(0);
+    RS(5); RS(0x893); RS(5); RS(0x893); RS(0); RS(1); for (let k = 0; k < 5; k++) RL(0);
+    RL(2461000); RL(0); RL(2461000); RL(0); // TDCREATE TDUPDATE
+    RL(handseed < 0x7fffffff ? handseed : 0xffffffff); RL(0); RS(0); RS(1); RL(0); RL(0); RL(0); RL(1); for (let k = 0; k < 4; k++) RL(0);
+    if (o !== aux.length) throw new Error('AuxHeader size');
+  }
+  // in the section map's order (ids count down to 1 after the empty section 0); the file stores them in reverse
+  const sections = [
+    { name: 'AcDb:AcDbObjects', data: objData }, { name: 'AcDb:Template', data: template }, { name: 'AcDb:Handles', data: handles },
+    { name: 'AcDb:Classes', data: classes }, { name: 'AcDb:AuxHeader', data: aux }, { name: 'AcDb:Header', data: header },
+  ];
+  sections.forEach((sec, k) => { sec.id = sections.length - k; sec.pages = []; });
+
+  // ---- data pages, in file order
+  const out = [new Uint8Array(0x100)];
+  let pos = 0x100, pageNo = 0;
+  const pageMap = []; // [number, size] in file order
+  const fill = (n) => { const b = new Uint8Array(n); for (let k = 0; k < n; k++) b[k] = MAGIC[k & 0xff]; return b; };
+  for (const sec of sections) {
+    for (let off = 0; off < sec.data.length; off += PAGE) {
+      const comp = literalStream(sec.data.subarray(off, Math.min(sec.data.length, off + PAGE)));
+      const size = align(0x20 + comp.length);
+      const hdr = new Uint8Array(0x20), dv = new DataView(hdr.buffer);
+      const dataSum = pageChecksum(0, comp);
+      u32(dv, 0, 0x4163043b); u32(dv, 4, sec.id); u32(dv, 8, comp.length); u32(dv, 12, size); u64(dv, 16, off); u32(dv, 24, 0); u32(dv, 28, dataSum);
+      u32(dv, 24, pageChecksum(dataSum, hdr));
+      const mask = (0x4164536b ^ pos) >>> 0;
+      for (let k = 0; k < 0x20; k += 4) u32(dv, k, dv.getUint32(k, true) ^ mask);
+      const number = ++pageNo;
+      sec.pages.push({ number, dataSize: comp.length, start: off });
+      pageMap.push([number, size]);
+      out.push(hdr, comp, fill(size - 0x20 - comp.length));
+      pos += size;
+    }
+  }
+  /** A system page: 0x14 byte header, compressed data, the header again with the sizes and checksum zeroed. */
+  const systemPage = (type, data) => {
+    const comp = literalStream(data);
+    const hdr = le([type, data.length, comp.length, 2, 0]);
+    new DataView(hdr.buffer).setUint32(16, pageChecksum(pageChecksum(0, hdr), comp), true);
+    const size = align(0x14 + comp.length + 0x14);
+    return { bytes: cat([hdr, comp, le([type, 0, 0, 2, 0]), fill(size - 0x28 - comp.length)]), size };
+  };
+  // ---- the section map
+  const desc = [le([sections.length + 1, 2, PAGE, 0, sections.length + 1])];
+  const description = (name, size, pages, id) => {
+    const b = new Uint8Array(0x60), dv = new DataView(b.buffer);
+    u64(dv, 0, size); u32(dv, 8, pages.length); u32(dv, 12, PAGE); u32(dv, 16, 1); u32(dv, 20, 2); u32(dv, 24, id); u32(dv, 28, 0);
+    for (let k = 0; k < name.length; k++) b[32 + k] = name.charCodeAt(k);
+    const list = pages.map((pg) => { const e = new Uint8Array(16), ev = new DataView(e.buffer); u32(ev, 0, pg.number); u32(ev, 4, pg.dataSize); u64(ev, 8, pg.start); return e; });
+    return cat([b, ...list]);
+  };
+  desc.push(description('', 0, [], 0));
+  for (const sec of sections) desc.push(description(sec.name, sec.data.length, sec.pages, sec.id));
+  const secMap = systemPage(0x4163003b, cat(desc));
+  const secMapNo = ++pageNo, secMapAt = pos;
+  pageMap.push([secMapNo, secMap.size]);
+  out.push(secMap.bytes);
+  pos += secMap.size;
+  // ---- the section page map (it lists itself too: its size depends only on the number of pages)
+  const pageMapNo = ++pageNo, pageMapAt = pos;
+  const pmSize = systemPage(0x41630e3b, new Uint8Array(8 * (pageMap.length + 1))).size;
+  pageMap.push([pageMapNo, pmSize]);
+  const pm = systemPage(0x41630e3b, le(pageMap.flat()));
+  out.push(pm.bytes);
+  pos += pm.size;
+  // ---- the header data (0x80 in the file, encrypted; again at the end)
+  const hd = new Uint8Array(0x6c), hv = new DataView(hd.buffer);
+  hd.set([...'AcFssFcAJMB'].map((c) => c.charCodeAt(0)), 0);
+  u32(hv, 0x0c, 0); u32(hv, 0x10, 0x6c); u32(hv, 0x14, 4); u32(hv, 0x18, 0); u32(hv, 0x1c, 0); u32(hv, 0x20, 0); u32(hv, 0x24, 1);
+  u32(hv, 0x28, pageMapNo); u64(hv, 0x2c, pos); u64(hv, 0x34, pos);
+  u32(hv, 0x3c, 0); u32(hv, 0x40, pageNo); u32(hv, 0x44, 0x20); u32(hv, 0x48, 0x80); u32(hv, 0x4c, 0x40);
+  u32(hv, 0x50, pageMapNo); u64(hv, 0x54, pageMapAt - 0x100); u32(hv, 0x5c, secMapNo); u32(hv, 0x60, pageNo); u32(hv, 0x64, 0);
+  u32(hv, 0x68, crc32(hd));
+  const enc = hd.map((b, k) => b ^ MAGIC[k]);
+  out.push(enc);
+  const fh = out[0], fv = new DataView(fh.buffer);
+  fh.set([0x41, 0x43, 0x31, 0x30, 0x31, 0x38], 0); // AC1018
+  fh[0x0b] = 0; fh[0x0c] = 3; u32(fv, 0x0d, 0); fh[0x11] = 25; fh[0x12] = 0; fv.setUint16(0x13, 30, true); // ANSI_1252
+  u32(fv, 0x18, 0); u32(fv, 0x1c, 0); u32(fv, 0x20, 0); u32(fv, 0x24, 0); u32(fv, 0x28, 0x80);
+  fh.set(enc, 0x80);
+  fh.set(MAGIC.subarray(0xec, 0x100), 0xec);
+  if (secMapAt < 0x100) throw new Error('layout');
+  return cat(out);
 }
 
 /** sentinel + RL size + data + RS CRC (over size + data, seed 0xC0C1) + end sentinel. */

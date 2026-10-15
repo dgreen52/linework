@@ -115,9 +115,19 @@ commit and the v0.7.16 tag). Keep that fork in place for as long as this build i
 
 * **Fixtures**: `tools/make_dwg_fixtures.mjs` converts the repo's own synthetic DXF files (the
   samples plus edge fixtures, and `edge-dwg-coverage.dxf`, a drawing made to exercise entity and
-  table variants) to **DWG R2000 (AC1015)** with `tools/dwg-r2000.mjs`, a small DWG writer
-  written for the tests from the public *Open Design Specification for .dwg files*. Output is
-  deterministic (a test regenerates and compares). No real or work drawings, ever.
+  table variants) to **DWG R2000 (AC1015)** and **DWG R2004 (AC1018)** with `tools/dwg-r2000.mjs`,
+  a small DWG writer written for the tests from the public *Open Design Specification for .dwg
+  files* (`dwg-*.dwg` and `dwg2004-*.dwg`). R2004 files use the paged layout of chapter 4 of that
+  specification: the header data encrypted at 0x80 with its CRC-32, data pages with masked 32 byte
+  headers and both page checksums, compressed sections (written as literal runs, which every reader
+  must accept), the section map and the section page map; and the R2004 forms of the header
+  variables, classes, colours (colour methods, true colours) and objects (owned-object lists of
+  block headers, inserts and polylines; no entity links). One deviation from the specification:
+  it lists the entity "no links" bit for R2004 too ("always 1"), but LibreDWG, which reads R2004
+  files from CAD programs, reads none, so none is written. `edge-truecolor.dxf` adds true colours
+  on layers, items, a block's insert (its ByBlock parts follow it) and a fill, which only R2004
+  stores. Output is deterministic (a test regenerates and compares). No real or work drawings,
+  ever.
 * **Oracle**: every DWG fixture must give the same model and scene as its DXF source — entity
   counts by type, "not shown" counts, warnings, layers (colour, on/off, frozen, line type), units,
   block names/base points/contents, every insert's transform and attributes, extents, every drawn
@@ -136,11 +146,12 @@ commit and the v0.7.16 tag). Keep that fork in place for as long as this build i
   edit + Save → DXF (the dialog says DWG is not written) → re-open; offline re-open through the
   service worker; time limit; CSP negative control.
 
-**Not covered by fixtures yet**: R13/R14 and R2004–R2018 files. LibreDWG reads them (its own
-test suite covers them), and the version-specific mapping paths (Unicode strings of 2007+, colour
-methods of 2004+, owned-object lists of 2004+) are written against LibreDWG's API, but there is no
-synthetic fixture in those versions because the test writer only produces R2000. Writing R2004+
-(compressed sections) is the next testing step.
+**Covered by fixtures**: R2000 and R2004, both in every check above (R2004 also: the paged
+layout itself, colours item by item and in blocks, damaged-file fuzzing, strings with their NUL).
+**Not covered yet**: R13/R14 and R2007-R2018 files. LibreDWG reads them (its own test suite
+covers them), and the Unicode-string path of 2007+ is written against LibreDWG's API, but the test
+writer does not produce those versions: R2007 has a different file layout (Reed-Solomon coded
+pages), and R2007+ objects keep their text in a separate string stream.
 
 ## Known limits
 
@@ -174,5 +185,5 @@ the DWG reader must become a clearly separate, optional GPL component — get le
 1. ~~WASM + DXF-text bridge~~ — done (now the fallback).
 2. ~~Direct object mapping, progress, partial-file handling~~ — done.
 3. ~~Rebuild from pinned sources~~ — done (`tools/build_dwg_wasm.sh` on GitHub Actions).
-4. Size/perf tuning (`-Oz`, drop unused LibreDWG parts, streaming compile); R2004+ synthetic
-   fixtures.
+4. Size/perf tuning (`-Oz`, drop unused LibreDWG parts, streaming compile); ~~R2004 synthetic
+   fixtures~~ (done); R2007+ fixtures.

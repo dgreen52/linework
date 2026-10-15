@@ -1395,6 +1395,14 @@ test('DWG: the reader loads only when a DWG is opened; open + measure under the 
   eq(readerRequests().length, 0, 'the reader is downloaded once per session');
   eq(await page.evaluate(() => window.__linework.scene.format), 'DWG', 'second DWG');
   await shot(page, 'dwg-bracket-dark-1440');
+  // R2004 (paged, compressed sections; true colours): the same reader, the same drawing
+  await openFixture(page, 'dwg2004-truecolor.dwg');
+  eq(readerRequests().length, 0, 'R2004: the same reader');
+  const tc = await page.evaluate(() => { const s = window.__linework.scene; return { v: s.version, n: s.n, colors: [...new Set(Array.from(s.color.subarray(0, s.n)))].sort((a, b) => a - b).map((c) => c.toString(16)).join(',') }; });
+  eq(tc.v, 'AC1018', 'an R2004 file');
+  assert(['3366cc', 'ff8000', '10a040', 'c0c0ff', 'aa00aa', 'ffff'].every((c) => tc.colors.split(',').includes(c)), 'its true colours are drawn: ' + tc.colors);
+  await clearToasts(page);
+  await shot(page, 'dwg2004-truecolor-dark-1440');
   await close(page); // no console errors: a CSP violation would show here
 });
 

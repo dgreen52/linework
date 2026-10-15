@@ -77,7 +77,7 @@ function readHeader(r, H) {
   }
 }
 
-/** DXF bytes -> DWG R2000 bytes (opts: test variants, see writeDwgR2000). */
+/** DXF bytes -> DWG bytes: R2000, or R2004 with opts.version 'R2004' (opts: test variants, see writeDwgR2000). */
 export function dxfToDwg(bytes, opts = {}) {
   const { text } = decodeDxfBytes(bytes);
   return writeDwgR2000(readRawDxf(text), opts);
@@ -94,10 +94,13 @@ export const DWG_FIXTURES = [
   ['tests/fixtures/edge-zero-length.dxf', 'tests/fixtures/dwg-zero-length.dwg'],
   ['tests/fixtures/edge-dwg-coverage.dxf', 'tests/fixtures/dwg-coverage.dwg'],
 ];
+// The same drawings as DWG R2004 (paged, compressed sections), plus true colours (R2004+ only): [source, output, version].
+export const DWG_FIXTURES_R2004 = [...DWG_FIXTURES, ['tests/fixtures/edge-truecolor.dxf', 'tests/fixtures/dwg-truecolor.dwg']]
+  .map(([src, out]) => [src, out.replace(/\/dwg-/, '/dwg2004-'), 'R2004']);
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  for (const [src, out] of DWG_FIXTURES) {
-    const { bytes, notes } = dxfToDwg(readFileSync(join(ROOT, src)));
+  for (const [src, out, version] of [...DWG_FIXTURES, ...DWG_FIXTURES_R2004]) {
+    const { bytes, notes } = dxfToDwg(readFileSync(join(ROOT, src)), { version });
     writeFileSync(join(ROOT, out), bytes);
     console.log(`${out}: ${bytes.length} bytes${notes.length ? ' — ' + notes.join(' ') : ''}`);
   }

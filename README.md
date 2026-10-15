@@ -36,8 +36,9 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   nearest points; values in the drawing's units with 0–6 decimals; copy to clipboard, or save every
   measurement as a CSV list (type, value, unit, ΔX/ΔY/angle, perimeter, the points).
 * **Marks up** with pen, line, arrow, box, ellipse, revision cloud (drag a box or click a
-  polygon), text callout (leader + box) and highlighter; colours and widths; select, move and
-  delete; undo/redo (Ctrl+Z / Ctrl+Y); your name and a timestamp on every markup.
+  polygon), text callout (leader + box) and highlighter; colours and widths; select, move,
+  resize (handles on the selected markup; Shift keeps the proportions) and delete; a list of every
+  markup (filter by type, text, name or date; click one to zoom to it); undo/redo (Ctrl+Z / Ctrl+Y); your name and a timestamp on every markup.
   Markups are saved to a small sidecar file, `<drawing>.markup.json`
   ([format](MARKUP_FORMAT.md)), stored in drawing coordinates, and also kept in this browser
   so a reload never loses work (per file revision; Help › *Clear stored markups* forgets them).

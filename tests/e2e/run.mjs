@@ -3636,6 +3636,69 @@ test('PDF under a CSP without wasm-unsafe-eval: the parse worker\'s refused WebA
   page.srv.close();
 });
 
+test('layouts (DXF): Model and the layouts in the picker; a layout shows its sheet and the model through its viewports; read-only; markups per layout; 390 px', async () => {
+  const page = await newPage();
+  await openFixture(page, 'layouts.dxf');
+  await page.waitForFunction(() => !!window.__linework.pages && document.querySelector('#doc-pages').style.display !== 'none');
+  eq(await page.$$eval('#sel-page option', (o) => o.map((x) => x.textContent).join(',')), 'Model,A3 Plan,Detail,Empty', 'Model first, layouts in tab order');
+  eq(await page.getAttribute('#sel-page', 'aria-label'), 'Layout', 'labelled as layouts, not pages');
+  eq(await page.evaluate(() => window.__linework.scene.page.n), 1, 'opens on Model');
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => t.s === 'MODEL ONLY')), 'model space');
+  // a markup on the model page
+  await page.click('#tab-markup'); await page.click('[data-tool="rect"]');
+  const box = await stageBox(page);
+  await dragScreen(page, [box.x + box.w * 0.4, box.y + box.h * 0.4], [box.x + box.w * 0.5, box.y + box.h * 0.5]);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'a markup on Model');
+  await page.click('#tab-view');
+  await page.selectOption('#sel-page', '2');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 2 && !window.__linework.loading);
+  const lay = await page.evaluate(() => { const s = window.__linework.scene; return { label: s.page.label, layout: s.page.layout, texts: s.texts.map((t) => t.s).sort().join('|'), markups: window.__linework.markups.length }; });
+  eq(JSON.stringify(lay), JSON.stringify({ label: 'A3 Plan', layout: true, texts: 'A3 PLAN SHEET|MODEL ONLY', markups: 0 }), 'the layout: its sheet, the model through the viewport, its own markups');
+  assert(/Opened layouts\.dxf, layout A3 Plan/.test(await page.textContent('#toasts')), 'the open note names the layout');
+  await clearToasts(page);
+  await shot(page, 'layout-a3-dark-1440');
+  // read-only: the Edit tab and the edit keys say so and stay out
+  await page.click('#tab-edit');
+  await page.waitForSelector('#toasts [data-key="layout"]');
+  assert(/read-only/.test(await page.textContent('#toasts [data-key="layout"]')), 'a layout is read-only');
+  assert(!(await page.evaluate(() => /^e/.test(window.__linework.tool))), 'no editing tool on a layout: ' + (await page.evaluate(() => window.__linework.tool)));
+  await page.keyboard.press('e');
+  assert(!(await page.evaluate(() => /^e/.test(window.__linework.tool))), 'E does not start editing on a layout');
+  await clearToasts(page);
+  // measuring works on paper: the sheet's bottom edge is 420 units
+  await page.click('#tab-measure'); await page.click('[data-tool="distance"]');
+  await clickWorld(page, 0, 297, 3, 3); // (the top edge: the measure card sits over the bottom left)
+  await clickWorld(page, 420, 297, -3, 3);
+  eq((await mcValue(page)).trim(), '420.00 mm', 'paper units on a layout');
+  await page.click('[data-action="clear-measure"]');
+  await page.click('#tab-view');
+  await page.keyboard.press('PageDown');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 3 && !window.__linework.loading);
+  eq(await page.evaluate(() => window.__linework.scene.texts.map((t) => t.s).join('|')), 'DETAIL SHEET', 'the detail: the model text is outside its viewport');
+  await clearToasts(page);
+  await shot(page, 'layout-detail-dark-1440');
+  await page.keyboard.press('b');
+  await shot(page, 'layout-detail-paper-1440');
+  await page.keyboard.press('b');
+  await page.selectOption('#sel-page', '1');
+  await page.waitForFunction(() => window.__linework.scene.page.n === 1 && !window.__linework.loading);
+  eq(await page.evaluate(() => window.__linework.markups.length), 1, 'the Model markup is back');
+  await page.click('#tab-edit');
+  eq(await page.evaluate(() => window.__linework.tool), 'eselect', 'Model is editable');
+  await close(page);
+  // 390 px: the picker in the status bar, on screen
+  const phone = await newPage({ context: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true } });
+  await openFixture(phone, 'layouts.dxf');
+  await phone.waitForFunction(() => !!window.__linework.pages && document.querySelector('#doc-pages').style.display !== 'none');
+  await phone.selectOption('#sel-page', '2');
+  await phone.waitForFunction(() => window.__linework.scene.page.n === 2 && !window.__linework.loading);
+  await clearToasts(phone);
+  const pr = await phone.evaluate(() => { const b = document.querySelector('#doc-pages').getBoundingClientRect(); return [b.left, b.right, b.bottom, innerWidth, innerHeight]; });
+  assert(pr[0] >= 0 && pr[1] <= pr[3] && pr[2] <= pr[4], 'picker on screen at 390 px: ' + pr);
+  await shot(phone, 'layout-a3-dark-390');
+  await close(phone);
+});
+
 test('PDF pages: picker with the PDF\'s page labels, Page Down / Page Up / list / buttons; markups kept per page; a /Rotate page is landscape; app.pages; a non-PDF hides the picker; 390 px', async () => {
   const page = await newPage();
   await openFixture(page, 'pdf-multipage.pdf');

@@ -21,7 +21,8 @@ test('service worker precaches every app module and sample (or caches it on firs
   // only the DWG and PDF readers are loaded on demand; they are never part of the precached shell
   assert.deepEqual(ON_DEMAND, ['src/formats/dwg.js']);
   assert.deepEqual(READER, ['vendor/libredwg/libredwg-web.js', 'vendor/libredwg/libredwg-web.wasm']);
-  assert.deepEqual(PDF_ON_DEMAND, ['src/formats/pdf.js', 'src/app/pdf-ui.js']);
+  assert.deepEqual(PDF_ON_DEMAND, ['src/formats/pdf.js']);
+  assert.ok(SHELL.includes('src/app/pdf-ui.js'), 'the page picker works offline for DXF layouts before any PDF was opened');
   assert.deepEqual(PDF_READER, ['vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs', 'vendor/pdfjs/openjpeg.wasm', 'vendor/pdfjs/jbig2.wasm']);
   for (const p of [...READER, ...PDF_READER]) assert.ok(!SHELL.includes(p));
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));

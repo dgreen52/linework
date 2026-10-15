@@ -76,3 +76,22 @@ export function resizeMarkup(orig, id, x, y, opts = {}) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- UI (app.js calls these with the Select tool)
+const selected = (app) => app.markups.find((m) => m.id === app.selected);
+/** Draw the handles of markup m (toS: drawing -> screen), on the selection outline's stroke style. */
+export function drawHandles(ctx, m, toS, theme) {
+  ctx.setLineDash([]);
+  ctx.fillStyle = theme === 'paper' ? '#fff' : '#14181e';
+  for (const h of markupHandles(m)) { const [x, y] = toS(h.x, h.y); ctx.fillRect(x - 4, y - 4, 8, 8); ctx.strokeRect(x - 4, y - 4, 8, 8); }
+}
+/** A press at (x, y) (drawing units) on a handle of the selected markup: { orig, handle, moved } to drag, or null. */
+export function grab(app, x, y, pointer) {
+  const m = selected(app), h = m && handleAt(m, x, y, (pointer === 'touch' ? 16 : 8) / app.view.scale);
+  return h ? { orig: m, handle: h.id, moved: false } : null;
+}
+/** The cursor over (x, y): a resize cursor on a handle of the selected markup, else '' (the tool's own). */
+export function cursorAt(app, x, y) {
+  const m = selected(app), h = m && handleAt(m, x, y, 8 / app.view.scale);
+  return h ? h.cursor : '';
+}

@@ -28,6 +28,12 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   the drawing at their true scale (measure and mark up; no text recognition). PDFs are read with
   Mozilla pdf.js inside this tab; it (about 0.7 MB compressed) downloads from the same site the
   first time you open a PDF and works offline after that.
+* **Layouts** (DXF): a drawing with paper-space layouts opens on its **Model** page; the page
+  picker at the bottom (and Page Up / Page Down) lists each layout by name, in tab order. A layout
+  page shows the sheet and each viewport's window on model space at the viewport's scale, cut at its
+  frame, without the layers frozen in that viewport; measurements are in paper units and every page
+  keeps its own markups. Layout pages are for viewing, measuring and markups: edit and save on the
+  Model page.
 * **Views**: pan (drag, middle mouse, Space+drag, one finger), zoom at the cursor (wheel, pinch,
   `+`/`−`), **F** fits, box zoom, dark CAD background or white paper (white/black colour 7 swaps
   correctly), layer panel (toggle, isolate, colour swatches, filter), live coordinates in drawing
@@ -169,7 +175,7 @@ same for `vendor/pdfjs/` (`PDF_READER_REV` in `src/formats/pdf.js`; `.mjs` serve
 | Sheet sets | |
 |---|---|
 | `Ctrl+Shift+O` | open a folder as a sheet set (or choose / drop several drawings) |
-| `Page Up` / `Page Down` | previous / next sheet |
+| `Page Up` / `Page Down` | previous / next sheet (in one drawing: PDF page or layout) |
 | `Ctrl+F` | with a set open: find in all sheets (`Enter` goes from sheet to sheet) |
 | Click a sheet reference | open that sheet (Pan tool) |
 
@@ -522,7 +528,7 @@ vector PDF with sharp lines and real (searchable) text:
 | Colours | ACI 256-colour table, true colour (420) | Colour index; true colour (2004+) | Colour table element (type 5) or the default DGN palette |
 | Line types | LTYPE dash patterns (shown at screen scale) | LTYPE dash patterns | Line styles 0–7 |
 | Units | `$INSUNITS` | `INSUNITS` | Master/sub units and UORs from the TCB, global origin |
-| Other | OCS/extrusion (e.g. mirrored arcs), paper space shown if model space is empty, `$EXTMIN/$EXTMAX`, CRLF/LF, padded group codes, missing HEADER/TABLES sections, truncated files | OCS/extrusion, paper space as for DXF, damaged files (shows what LibreDWG could read), 120 MB size limit, 2-minute read limit | Deleted elements skipped, 2D and 3D files (Z of every vertex kept), truncated files, several colour tables (the last counts, as in GDAL), files without an end-of-design marker |
+| Other | OCS/extrusion (e.g. mirrored arcs), layouts as pages (viewports at their scale, clipped, per-viewport frozen layers), paper space shown if model space is empty, `$EXTMIN/$EXTMAX`, CRLF/LF, padded group codes, missing HEADER/TABLES sections, truncated files | OCS/extrusion, paper space as for DXF, damaged files (shows what LibreDWG could read), 120 MB size limit, 2-minute read limit | Deleted elements skipped, 2D and 3D files (Z of every vertex kept), truncated files, several colour tables (the last counts, as in GDAL), files without an end-of-design marker |
 | Skipped (reported as "not shown") | 3DSOLID, REGION, BODY, MESH, IMAGE, WIPEOUT, OLE, XREFs, proxy/custom entities | Same as DXF, plus MLINE, MULTILEADER, TOLERANCE, RAY/XLINE, SHAPE | Shared cells, B-splines (21/24–28, one item each), point strings, tag values, reference file attachments (with their file names), raster, dimensions (33) — all kept when the DGN is saved as DGN |
 | Not supported yet | Binary DXF | R12 and older DWG; writing DWG | DGN v8 |
 | **Save** | **DXF** R2000 (AC1015), pure ASCII; layers, line types, lineweights, text styles, blocks and attributes kept; DGN drawings saved as DXF get layers "Level N", cells as separate items | Saved as **DXF** (default) or **DGN v7** — Linework does not write DWG | **DGN v7**: a DGN you opened keeps every untouched element byte-for-byte (edits appended, originals flagged deleted); any other drawing becomes a new 2D DGN from GDAL's seed file (layers → levels 1–63, colour table, blocks flattened) |
@@ -772,6 +778,7 @@ vendor/libredwg/        LibreDWG WebAssembly + glue (GPL-3.0-or-later; provenanc
 vendor/pdfjs/           pdf.js legacy build + image decoders (Apache-2.0 etc.; provenance in its README)
 deploy/_headers         HTTP headers for the static host (CSP etc.)
 src/scene.js            blocks → flat primitives, colours, local origin, spatial grid
+src/layout.js           DXF layouts as pages, viewports (clipping); loaded by the worker when needed
 src/edit/               edit operations, edit document (changes, undo, selection), live scene,
                         find / replace, key-ins, transforms, attributes + element info, level names
 src/view/               viewport, Canvas2D renderer (WebGL-replaceable interface), batches, colours
@@ -785,7 +792,8 @@ src/app.js, src/app/    UI, input, tools, Edit mode (edit-ui.js), layers panel, 
                         tools-ui.js (editing tools: find, key-ins, More menu, info, level names),
                         trace-ui.js (the Trace tool and its panel)
                         sheets.js (sheet sets: navigator, background index, find in all sheets)
-                        pdf-ui.js (PDF page picker, app.pages; loaded with the first PDF)
+                        pdf-ui.js (page picker for PDF pages and layouts, app.pages),
+                        markup-list.js (the markup list)
 src/worker.js           parse worker
 samples/                synthetic sample drawings (+ generators in samples/gen/)
 tools/                  fixture generators (DXF, DGN, DWG, PDF; fonts/: DejaVu Sans for the printed
@@ -827,10 +835,11 @@ Trade-offs, for the owner to decide before the first public release:
 * **0.5.3 (this version)** — Trace › *Netlist (CSV)*: every net of a drawing as a from-to wire list
   (also `buildNetlist` / `netlistCsv` in `linework/core`); every net traced from one graph (the 53k-item
   stress drawing's 31,501 nets in under a second).
-* **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; measurement
-  export (CSV); editing the geometry inside blocks/cells and shared block-definition text; true
-  linetype scaling; hatch patterns; layouts / paper space tabs; markup resize handles and markup
-  list panel.
+* **Since 0.5.3** — measurements saved as CSV; markup resize handles and a markup list; DXF
+  layouts as pages (paper space with its viewports).
+* **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; editing the
+  geometry inside blocks/cells and shared block-definition text; true linetype scaling; hatch
+  patterns; DWG layouts with their viewports.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
   markup review (still file-based, no server).
 
@@ -853,6 +862,11 @@ and block attributes can be edited since 0.2.2).
   file or reopen recent files by themselves (they download / open the chooser instead).
 * Compare matches top-level items: a cell or block with one changed component shows as changed as
   a whole. Edited items compare by geometry, not bytes.
+* Layouts: DXF only so far; a DWG shows paper space as before (only when model space is empty),
+  without the viewports' contents. Viewports are rectangular (non-rectangular clipping boundaries and
+  per-viewport layer colour overrides are not applied); a rotated view (twist) is not covered by
+  the tests yet. R12 files have no layout objects: their paper space is one "Paper space" page,
+  with viewport frames only (R12 keeps a viewport's view in extended data).
 * DWG: R12 and older are refused; 3D solids, images, MLINE/MULTILEADER and proxy objects are
   reported as not shown; only R2000 files are covered by the synthetic tests so far (see DWG.md).
   Very large DWGs need several times their size in browser memory (limit 120 MB per file).

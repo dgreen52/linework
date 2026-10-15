@@ -22,7 +22,7 @@ const NAMES = { pen: 'Pen', line: 'Line', arrow: 'Arrow', rect: 'Box', ellipse: 
 /** The words a markup is found by (type, text, author, date), lower case. */
 export const markupWords = (m) => `${NAMES[m.type] || m.type} ${m.text || ''} ${m.author || ''} ${(m.modified || m.created || '').slice(0, 10)}`.toLowerCase();
 
-/** api: { select(id), remove(id), narrow() (a phone-sized screen), hideLayers() } (app.js). */
+/** api: { select(id), remove(id) } (app.js). */
 export function initMarkupList(app, api) {
   document.head.appendChild(Object.assign(document.createElement('style'), { textContent: CSS }));
   let stack = $('#stage .tools-stack');
@@ -63,7 +63,10 @@ export function initMarkupList(app, api) {
   });
   filter.addEventListener('input', render);
   filter.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') { if (filter.value) { filter.value = ''; render(); } else hide(); } });
-  function show() { if (api.narrow && api.narrow()) api.hideLayers(); card.hidden = false; render(); } // (on a phone the layer panel would cover it)
+  // on a phone one panel at a time: the list or the layer panel (it would cover the list)
+  const narrow = () => matchMedia('(max-width: 760px)').matches, layers = $('#layers-panel');
+  function show() { if (narrow() && layers && !layers.hidden) $('#btn-layers').click(); card.hidden = false; render(); }
+  if (layers) new MutationObserver(() => { if (!layers.hidden && !card.hidden && narrow()) hide(); }).observe(layers, { attributes: true, attributeFilter: ['hidden'] });
   function hide() { card.hidden = true; const b = $('#btn-markup-list'); if (b) b.setAttribute('aria-pressed', 'false'); }
   function toggle() { if (card.hidden) show(); else hide(); const b = $('#btn-markup-list'); if (b) b.setAttribute('aria-pressed', String(!card.hidden)); }
   app.hooks.history.push(render);

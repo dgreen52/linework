@@ -37,7 +37,14 @@ export function initPages(app) {
     if (filled !== key) {
       filled = key;
       sel.innerHTML = '';
-      for (let n = 1; n <= pg.count; n++) sel.add(new Option(`Page ${label(n)} / ${pg.count}`, String(n)));
+      for (let n = 1; n <= pg.count; n++) sel.add(new Option(pg.cad ? label(n) : `Page ${label(n)} / ${pg.count}`, String(n)));
+      // a drawing's layouts (Model first) or a PDF's pages
+      const what = pg.cad ? 'layout' : 'page';
+      box.setAttribute('aria-label', pg.cad ? 'Model and layouts' : 'PDF pages');
+      sel.setAttribute('aria-label', pg.cad ? 'Layout' : 'Page');
+      sel.title = pg.cad ? 'Model space or a paper-space layout (Page Up / Page Down)' : 'Page of this PDF (Page Up / Page Down)';
+      $('#btn-page-prev').title = `Previous ${what} (Page Up)`; $('#btn-page-prev').setAttribute('aria-label', `Previous ${what}`);
+      $('#btn-page-next').title = `Next ${what} (Page Down)`; $('#btn-page-next').setAttribute('aria-label', `Next ${what}`);
     }
     sel.value = String(pg.n);
     $('#btn-page-prev').disabled = pg.n <= 1;
@@ -50,7 +57,8 @@ export function initPages(app) {
     n = Math.round(n);
     if (!pg || !doc || app.loading || !(n >= 1 && n <= pg.count) || n === pg.n) { update(); return false; }
     if (!doc.blob) { toast('Open the PDF again to see its other pages.', { kind: 'warn' }); update(); return false; }
-    if (app.edit && app.edit.doc && app.edit.doc.dirty && !window.confirm(`Page ${label(pg.n)} has unsaved edits (they are kept in this browser). Show page ${label(n)} anyway?`)) { update(); return false; }
+    const P = pg.cad ? '' : 'Page ';
+    if (app.edit && app.edit.doc && app.edit.doc.dirty && !window.confirm(`${P}${label(pg.n)} has unsaved edits (they are kept in this browser). Show ${P}${label(n)} anyway?`)) { update(); return false; }
     let buf;
     try { buf = await doc.blob.arrayBuffer(); } catch {
       toast(`Could not read ${doc.name} again`, { kind: 'error', detail: 'It may have been moved or changed on disk. Open it again.' });

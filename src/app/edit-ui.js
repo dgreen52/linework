@@ -100,6 +100,7 @@ export function initEdit(app, api) {
   // ---------------------------------------------------------------- committing changes
   function commit(label, changes, selAfter) {
     if (!E.doc || !changes.length) return null;
+    if (app.ro()) return null;
     const t0 = performance.now();
     const selBefore = [...E.sel];
     const entry = E.doc.commit(label, changes, { selBefore, selAfter: selAfter || selBefore });
@@ -1444,7 +1445,7 @@ export function initEdit(app, api) {
     if (el) el.hidden = !d;
     document.title = (d ? '• ' : '') + document.title.replace(/^• /, '');
   }
-  const baseName = () => (app.doc ? app.doc.name.replace(/\.[^.]+$/, '') + (app.scene && app.scene.page && app.scene.page.count > 1 ? '-p' + app.scene.page.n : '') : 'drawing');
+  const baseName = () => (app.doc ? app.doc.name.replace(/\.[^.]+$/, '') + (app.scene && app.scene.page && app.scene.page.count > 1 && !app.scene.page.cad ? '-p' + app.scene.page.n : '') : 'drawing');
   const srcFormat = () => (app.scene && app.scene.format === 'DGN' ? 'DGN' : 'DXF');
   const defaultName = (f) => `${baseName()}-edited.${f.toLowerCase()}`;
   /** Items the reader could not load (they cannot be written), for a target format. */
@@ -1520,13 +1521,13 @@ export function initEdit(app, api) {
   }
   /** Save in the drawing's own format (over the original file when it allows that, see files.js); asks first when some original items would be lost. */
   function quickSave() {
-    if (!app.scene) return;
+    if (!app.scene || app.ro()) return;
     if (lostCount(srcFormat())) { openSaveAs(); return; }
     if (app.files && app.files.quickSave(srcFormat())) return;
     save(srcFormat());
   }
   function openSaveAs() {
-    if (!app.scene) return;
+    if (!app.scene || app.ro()) return;
     const dlg = $('#dlg-save'), form = $('#save-form');
     const f0 = srcFormat();
     for (const r of form.querySelectorAll('input[name="fmt"]')) r.checked = r.value === f0;

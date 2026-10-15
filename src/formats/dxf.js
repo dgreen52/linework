@@ -185,7 +185,7 @@ export function parseDxf(input, { onProgress } = {}) {
 
 /** Shared with dwg.js (R: any group-pair reader). */
 export function readDxf(R, model) {
-  const ctx = { model, R, styles: {}, dimasz: 0, dimscale: 1, dimtxt: 0 };
+  const ctx = { model, R, styles: {}, dimasz: 0, dimscale: 1, dimtxt: 0, raw: [] };
   ensureLayer(model, '0', FG);
   let sawSection = false;
 
@@ -200,6 +200,7 @@ export function readDxf(R, model) {
       else if (name === 'TABLES') readTables(ctx);
       else if (name === 'BLOCKS') readBlocks(ctx);
       else if (name === 'ENTITIES') readEntitySection(ctx, model.entities, true);
+      else if (name === 'OBJECTS') { if (readRecords(R, ['ENDSEC', 'EOF', 'SECTION'], (t, c, v) => { if (t === 'LAYOUT') ctx.raw.push([t, c, v]); }) === 'ENDSEC') R.next(); }
       else skipSection(R);
       continue;
     }
@@ -210,6 +211,7 @@ export function readDxf(R, model) {
   if (R.errors) warn(model, `Skipped ${R.errors} malformed line(s).`);
   if (R.code === -1) warn(model, 'The file ended early (no EOF marker); showing what was read.');
 
+  if (model.paperEntities.length || ctx.raw.some((r) => r[0] === 'LAYOUT')) model.layoutData = { raw: ctx.raw, paper: model.paperEntities };
   // paper space: show only when model space is empty
   if (model.paperEntities.length) {
     if (!model.entities.length) {
@@ -285,6 +287,7 @@ function readTables(ctx) {
         while (R.next() && R.code !== 0);
         readRecords(R, ['ENDTAB', 'ENDSEC', 'EOF', 'SECTION'], (type, codes, vals) => {
           const g = new Groups(type, codes, vals);
+          if (type === 'LAYER' || type === 'BLOCK_RECORD') ctx.raw.push([type, codes, vals]);
           if (table === 'LAYER' && type === 'LAYER') tableLayer(model, g);
           else if (table === 'LTYPE' && type === 'LTYPE') tableLtype(model, g);
           else if (table === 'STYLE' && type === 'STYLE') tableStyle(ctx, g);
@@ -549,7 +552,7 @@ function convertEntity(ctx, g, topLevel) {
       if (!e.block) { notShown(model, type); return null; }
       return e;
     }
-    case 'VIEWPORT':
+    case 'VIEWPORT': return g.i(69, 0) === 1 ? null : Object.assign(common(g, model), { type: 'viewport', raw: [g.codes, g.vals] });
     case 'SEQEND':
     case 'ENDBLK':
       return null;

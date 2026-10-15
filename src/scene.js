@@ -87,12 +87,14 @@ export class Builder {
     this.invalid = 0;
     this.curEnt = 0;
     this.curSub = ''; // path of the component being emitted inside a cell or insert ('c3.c1', 'a2'; '#…' = shared block content)
+    this.clip = null; // (src/layout.js)
   }
   base(k, flags, a) {
     this.kind.push(k); this.flags.push(flags); this.layer.push(a.layer); this.color.push(a.color);
     this.style.push(a.style); this.weight.push(a.weight); this.src.push(a.src); this.blk.push(a.blk); this.ent.push(this.curEnt);
   }
   poly(pts, flags, a) {
+    if (this.clip && this.clipper.poly(this, pts, flags, a)) return;
     for (let i = 0; i < pts.length; i += 2) {
       const x = pts[i], y = pts[i + 1];
       if (Math.abs(x) < 1e15 && Math.abs(y) < 1e15) continue;
@@ -108,6 +110,7 @@ export class Builder {
   }
   point(x, y, a) {
     if (!(Math.abs(x) < 1e15 && Math.abs(y) < 1e15)) { this.invalid++; return; }
+    if (this.clip && this.clipper.point(this, x, y)) return;
     this.base(KIND.POINT, 0, a);
     this.start.push(this.coords.length / 2);
     this.count.push(1);
@@ -116,6 +119,7 @@ export class Builder {
   conic(cx, cy, ux, uy, vx, vy, t0, t1, full, a, extra = 0) {
     const v = [cx, cy, ux, uy, vx, vy, t0, t1];
     for (const x of v) if (!(Math.abs(x) < 1e15)) { this.invalid++; return; }
+    if (this.clip && this.clipper.conic(this, v, full, a, extra)) return;
     this.base(KIND.CONIC, (full ? FLAG.FULL | FLAG.CLOSED : 0) | extra, a);
     this.start.push(this.conics.length / 8);
     this.count.push(1);
@@ -166,8 +170,9 @@ export function sceneTables(model, scene = null) {
  * Emitter: turns model entities into scene primitives/texts (absolute drawing coordinates) in
  * `emitter.B`. emit(entity, entityIndex) handles one top-level entity (blocks expanded).
  */
-export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}) {
+export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layout = null } = {}) {
   const B = new Builder();
+  if (layout) B.clipper = layout.clipper;
   let expanded = 0; // items walked inside blocks (the expansion budget)
   const { layers, ltypes, srcNames, blockNames, layerIdx, ltIdx, srcIdx, blkIdx, notShown } = tables;
   const addNS = (k, n = 1) => { notShown[k] = (notShown[k] || 0) + n; };
@@ -194,6 +199,7 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}
 
   // ctx: { M (affine|null), layer (idx, for entities on layer 0 inside blocks), color (BYBLOCK colour), ltype (BYBLOCK), lw (BYBLOCK), blk, depth, stack }
   const topCtx = { M: null, layer: -1, color: FG, ltype: 0, lw: -3, blk: 0, depth: 0, stack: [] };
+  const lapi = layout && { B, model, top: topCtx, walk, over: () => expanded >= maxExpanded, ns: addNS };
 
   function attrsFor(e, ctx) {
     let li;
@@ -407,6 +413,10 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}
       case 'mtext':
         emitText(e, M, a);
         break;
+      case 'viewport':
+        if (layout) layout.emitViewport(e, M, a, ctx.depth, lapi);
+        else addNS('VIEWPORT');
+        break;
       case 'cell': // DGN cell: components are stored already placed; the cell is one selectable item
         walkParts(e.children || [], 'c', { ...ctx, blk: ctx.blk || blkOf(e.name || 'cell') });
         break;
@@ -474,7 +484,7 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED } = {}
 }
 
 /**
- * Build the scene. opts: { onProgress(fraction), fileName }
+ * Build the scene. opts: { onProgress(fraction), fileName, layout (src/layout.js) }
  */
 export function buildScene(model, opts = {}) {
   const stats = model.stats;
@@ -482,7 +492,7 @@ export function buildScene(model, opts = {}) {
   const { layers, ltypes, srcNames, blockNames, notShown } = tables;
   // layer "0" always exists
   if (!tables.layerIdx.has('0')) { tables.layerIdx.set('0', layers.length); layers.push({ name: '0', color: FG, visible: true, frozen: false, ltype: 'CONTINUOUS', count: 0 }); }
-  const em = createEmitter(model, tables);
+  const em = createEmitter(model, tables, { layout: opts.layout });
   const B = em.B;
   const warnings = [...stats.warnings];
 
@@ -590,7 +600,7 @@ function finalize(B, meta, entityTotal) {
     if (b[0] < ext[0]) ext[0] = b[0]; if (b[1] < ext[1]) ext[1] = b[1];
     if (b[2] > ext[2]) ext[2] = b[2]; if (b[3] > ext[3]) ext[3] = b[3];
   }
-  if (meta.page) { const b = meta.page.box; ext[0] = Math.min(ext[0], b[0]); ext[1] = Math.min(ext[1], b[1]); ext[2] = Math.max(ext[2], b[2]); ext[3] = Math.max(ext[3], b[3]); }
+  if (meta.page && meta.page.box) { const b = meta.page.box; ext[0] = Math.min(ext[0], b[0]); ext[1] = Math.min(ext[1], b[1]); ext[2] = Math.max(ext[2], b[2]); ext[3] = Math.max(ext[3], b[3]); }
   const empty = !(ext[0] <= ext[2]);
   if (empty) { ext[0] = ext[1] = 0; ext[2] = ext[3] = 1; }
   // local origin = centre of the extents: keeps float32 GPU paths precise far from 0,0
@@ -601,7 +611,7 @@ function finalize(B, meta, entityTotal) {
   for (const t of texts) { t.x -= ox; t.y -= oy; t.bbox[0] -= ox; t.bbox[1] -= oy; t.bbox[2] -= ox; t.bbox[3] -= oy; }
   const extents = [ext[0] - ox, ext[1] - oy, ext[2] - ox, ext[3] - oy];
   const local = (b) => [b[0] - ox, b[1] - oy, b[2] - ox, b[3] - oy];
-  if (meta.page) meta.page = { ...meta.page, box: local(meta.page.box) };
+  if (meta.page && meta.page.box) meta.page = { ...meta.page, box: local(meta.page.box) };
   if (meta.underlay) meta.underlay = { ...meta.underlay, box: local(meta.underlay.box) };
 
   // layer item counts

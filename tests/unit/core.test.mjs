@@ -16,7 +16,7 @@ test('core: the package export resolves to lib/core.js and names the version and
   assert.ok(core.DWG_WASM_URL instanceof URL && statSync(core.DWG_WASM_URL).size > 1e6, 'DWG reader wasm is where DWG_WASM_URL points');
   for (const name of ['detectFormat', 'parseDrawing', 'parseDrawingAsync', 'buildScene', 'findTexts', 'describeScene', 'diffScenes',
     'writeDxf', 'writeDgn', 'buildSvg', 'printLayout', 'cssColor', 'entityItems', 'entityInfo', 'typeName', 'queryRect', 'primPoints',
-    'measure', 'measurementsCsv', 'csvRows', 'bulgePolylineLength', 'hashBytes', 'flatEntities', 'FormatError',
+    'measure', 'measurementsCsv', 'csvRows', 'applyLayouts', 'layoutsOf', 'clipPolyline', 'clipRing', 'bulgePolylineLength', 'hashBytes', 'flatEntities', 'FormatError',
     'buildNetGraph', 'buildNetGraphAsync', 'pickWire', 'traceNet', 'traceAll', 'endText', 'netText', 'textQuad',
     'buildNetlist', 'netlistCsv', 'netEnd', 'isTrivial', 'isSheetRef', 'csvCell',
     'isSheetName', 'stemOf', 'naturalCmp', 'indexSheet', 'searchIndex', 'searchSheets', 'compilePatterns', 'xrefContext', 'resolveRef',

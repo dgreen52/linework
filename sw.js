@@ -18,6 +18,7 @@ const SHELL = [
   'src/app/files.js',
   'src/app/layers-panel.js',
   'src/app/markup-list.js',
+  'src/app/pdf-ui.js',
   'src/app/print-svg.js',
   'src/app/print.js',
   'src/app/sheets.js',
@@ -42,6 +43,7 @@ const SHELL = [
   'src/formats/dxf-write.js',
   'src/formats/dxf.js',
   'src/geom.js',
+  'src/layout.js',
   'src/markup/handles.js',
   'src/markup/history.js',
   'src/markup/model.js',
@@ -81,9 +83,10 @@ const ON_DEMAND = ['src/formats/dwg.js'];
 const READER_CACHE = 'linework-reader-libredwg-0.7.16-2';
 const READER = ['vendor/libredwg/libredwg-web.js', 'vendor/libredwg/libredwg-web.wasm'];
 // The PDF reader works the same way: pdf.js (Mozilla, Apache-2.0, ~2.2 MB, ~0.66 MB compressed) is
-// loaded when the first PDF is opened and kept in its own cache; the app modules that only PDFs use
-// are cached on demand like the DWG reader's. Change PDF_READER_CACHE whenever vendor/pdfjs changes.
-const PDF_ON_DEMAND = ['src/formats/pdf.js', 'src/app/pdf-ui.js'];
+// loaded when the first PDF is opened and kept in its own cache; the PDF reader module is cached on
+// demand like the DWG reader's (the page picker, pdf-ui.js, is in SHELL: DXF layouts use it too).
+// Change PDF_READER_CACHE whenever vendor/pdfjs changes.
+const PDF_ON_DEMAND = ['src/formats/pdf.js'];
 const PDF_READER_CACHE = 'linework-reader-pdfjs-6.3.289';
 const PDF_READER = ['vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs', 'vendor/pdfjs/openjpeg.wasm', 'vendor/pdfjs/jbig2.wasm'];
 

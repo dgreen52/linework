@@ -24,13 +24,15 @@ export class DxfWriter {
     this.handle = 0x100;
     this.dimCount = 0;
     this.headerVars = [];
+    this.extraTables = []; // [{ name, records: [[type, groups]] }] (written after STYLE)
+    this.objects = []; // [[type, groups]]: an OBJECTS section when not empty
   }
   get r12() { return this.o.version === 'AC1009'; }
   nextHandle() { return (this.handle++).toString(16).toUpperCase(); }
 
   // ---------------------------------------------------------------- tables
-  layer(name, color = 7, ltype = 'CONTINUOUS', { off = false, frozen = false, rgb = null, lw = null } = {}) {
-    this.layers.push({ name, color: off ? -Math.abs(color) : color, ltype, frozen, rgb, lw });
+  layer(name, color = 7, ltype = 'CONTINUOUS', { off = false, frozen = false, rgb = null, lw = null, handle = null } = {}) {
+    this.layers.push({ name, color: off ? -Math.abs(color) : color, ltype, frozen, rgb, lw, handle });
     return this;
   }
   ltype(name, desc, pattern) { this.ltypes.push({ name, desc, pattern }); return this; }
@@ -272,7 +274,7 @@ export class DxfWriter {
       P(0, 'ENDTAB');
       P(0, 'TABLE'); P(2, 'LAYER'); P(70, this.layers.length);
       for (const l of this.layers) {
-        P(0, 'LAYER'); if (!r12) { P(100, 'AcDbSymbolTableRecord'); P(100, 'AcDbLayerTableRecord'); }
+        P(0, 'LAYER'); if (l.handle && !r12) P(5, l.handle); if (!r12) { P(100, 'AcDbSymbolTableRecord'); P(100, 'AcDbLayerTableRecord'); }
         P(2, l.name); P(70, l.frozen ? 1 : 0); P(62, l.color); P(6, l.ltype);
         if (l.rgb != null && !r12) P(420, l.rgb);
         if (l.lw != null && !r12) P(370, l.lw);
@@ -282,6 +284,11 @@ export class DxfWriter {
       P(0, 'STYLE'); P(2, 'STANDARD'); P(70, 0); P(40, 0); P(41, 1); P(50, 0); P(71, 0); P(42, 2.5); P(3, 'txt'); P(4, '');
       for (const s of this.styles) { P(0, 'STYLE'); P(2, s.name); P(70, 0); P(40, s.height); P(41, s.width); P(50, s.oblique); P(71, 0); P(42, 2.5); P(3, s.font); P(4, ''); }
       P(0, 'ENDTAB');
+      for (const t of this.extraTables) {
+        P(0, 'TABLE'); P(2, t.name); P(70, t.records.length);
+        for (const [type, groups] of t.records) { P(0, type); for (const [c, v] of groups) P(c, v); }
+        P(0, 'ENDTAB');
+      }
       P(0, 'ENDSEC');
     }
     P(0, 'SECTION'); P(2, 'BLOCKS');
@@ -296,6 +303,11 @@ export class DxfWriter {
     P(0, 'SECTION'); P(2, 'ENTITIES');
     for (const e of this.entities) ent(e);
     P(0, 'ENDSEC');
+    if (this.objects.length) {
+      P(0, 'SECTION'); P(2, 'OBJECTS');
+      for (const [type, groups] of this.objects) { P(0, type); for (const [c, v] of groups) P(c, v); }
+      P(0, 'ENDSEC');
+    }
     P(0, 'EOF');
     return out.join(eol) + eol;
   }

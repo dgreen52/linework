@@ -1,6 +1,7 @@
 // The measurement list as CSV (loaded when it is saved, to keep the start-up code small): pure, DOM-free.
 import { measure } from './measure.js';
 import { csvRows } from './csv.js';
+import { download, toast } from '../app/ui.js';
 /**
  * The measurements (as the Measure tools keep them: [{ mode: 'distance' | 'length' | 'area', pts: flat [x, y, ...]
  * in drawing coordinates }]) as a CSV list, one row each: n, type, value, unit, dx, dy, angle (degrees),
@@ -23,4 +24,13 @@ export function measurementsCsv(measures, opts = {}) {
       l ? res.segments : '', a ? r(res.perimeter) : '', a ? res.vertices : '', pts.join('; ')]);
   }
   return csvRows(rows, opts.eol ?? '\r\n');
+}
+
+/** Save the app's finished measurements as <drawing>-measurements.csv (false when there are none). */
+export function saveMeasures(app) {
+  if (!app.scene || !app.measures.length) return false;
+  const csv = measurementsCsv(app.measures, { dec: app.precision, abbr: app.scene.units.abbr }), n = app.measures.length;
+  download(new Blob([csv], { type: 'text/csv' }), String((app.doc && app.doc.name) || 'drawing').replace(/\.[^.]+$/, '') + '-measurements.csv');
+  toast(`Saved ${n} measurement${n === 1 ? '' : 's'} as CSV`, { timeout: 2000 });
+  return true;
 }

@@ -28,7 +28,9 @@ export async function loadInWorkerScope(msg, post) {
   };
   const onPhase = (phase, fraction, watch) => post({ id, type: 'progress', phase, fraction, watch });
   const model = await parseDrawingAsync(bytes, name, { onProgress: progress('Reading', 0, 0.7), onPhase, page: msg.page });
-  const scene = buildScene(model, { fileName: name, onProgress: progress('Preparing', 0.7, 0.3) });
+  let layout = null;
+  if (model.layoutData) { layout = await import('./layout.js'); layout.applyLayouts(model, msg.page); }
+  const scene = buildScene(model, { fileName: name, onProgress: progress('Preparing', 0.7, 0.3), layout });
   scene.fileSize = bytes.length;
   scene.hash = hashBytes(bytes) + (model.page && model.page.n > 1 ? '-p' + model.page.n : ''); // PDF: per page
   return { scene, model, bytes: model.format === 'DGN' ? bytes : null };

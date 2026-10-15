@@ -201,6 +201,55 @@ out(FIX, 'edge-garbage.dxf', 'this is not a drawing\njust some text\n\u0000\u000
   w.line([297, 0], [297, 210], { layer: 'SHEET', paper: true });
   out(FIX, 'edge-paperspace.dxf', w.toString());
 }
+// 13b) layouts: model space + three paper-space layouts with viewports (LAYOUT objects, BLOCK_RECORDs)
+{
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.layer('WALLS', 7, 'CONTINUOUS', { handle: 'A1' });
+  w.layer('FURN', 3, 'CONTINUOUS', { handle: 'A2' });
+  w.layer('SHEET', 7, 'CONTINUOUS', { handle: 'A3' });
+  w.layer('VPORTS', 8, 'CONTINUOUS', { handle: 'A4' });
+  // model space: a 12 x 8 m outline, a table (FURN) and a label
+  w.lwpolyline([[0, 0], [12000, 0], [12000, 8000], [0, 8000]], true, { layer: 'WALLS' });
+  w.circle([3000, 3000], 600, { layer: 'FURN' });
+  w.text('MODEL ONLY', [6000, 4000], { h: 250 }, { layer: 'WALLS' });
+  const sheet = (name, paper) => {
+    const p = { layer: 'SHEET', paper };
+    w.lwpolyline([[0, 0], [420, 0], [420, 297], [0, 297]], true, p);
+    w.text(name, [300, 15], { h: 5 }, p);
+  };
+  const vp = (id, c, wd, ht, viewCtr, viewH, frozen = [], paper = true, status = 1) => w.raw('VIEWPORT', [
+    [8, 'VPORTS'], ...(paper ? [[67, 1]] : []), [100, 'AcDbViewport'],
+    [10, c[0]], [20, c[1]], [30, 0], [40, wd], [41, ht], [68, status], [69, id],
+    [12, viewCtr[0]], [22, viewCtr[1]], [13, 0], [23, 0], [14, 10], [24, 10], [15, 10], [25, 10],
+    [16, 0], [26, 0], [36, 1], [17, 0], [27, 0], [37, 0], [42, 50], [43, 0], [44, 0], [45, viewH], [50, 0], [51, 0], [72, 1000],
+    ...frozen.map((h) => [331, h]), [90, 32864],
+  ]);
+  // the active layout ("A3 Plan", tab 1): its sheet and viewports in ENTITIES, with 67 = 1
+  sheet('A3 PLAN SHEET', true);
+  vp(1, [210, 148.5], 446, 320, [210, 148.5], 320); // the paper-space viewport itself (id 1): not drawn
+  vp(2, [210, 160], 300, 200, [6000, 4000], 10000); // the whole plan at 1:50
+  // "Detail" (tab 2): *Paper_Space0; a 1:10 window on the plan's bottom-left corner (it crosses the walls), FURN frozen
+  w.block('*Paper_Space0', [0, 0], () => {
+    sheet('DETAIL SHEET', false);
+    vp(1, [210, 148.5], 446, 320, [210, 148.5], 320, [], false);
+    vp(2, [100, 120], 120, 80, [500, 500], 800, ['A2'], false);
+  });
+  // "Empty" (tab 3): *Paper_Space1, nothing on it
+  w.block('*Paper_Space1', [0, 0], () => {});
+  w.block('*Model_Space', [0, 0], () => {});
+  w.block('*Paper_Space', [0, 0], () => {});
+  w.extraTables.push({ name: 'BLOCK_RECORD', records: [
+    ['BLOCK_RECORD', [[5, '1F'], [100, 'AcDbSymbolTableRecord'], [100, 'AcDbBlockTableRecord'], [2, '*Model_Space'], [340, '22']]],
+    ['BLOCK_RECORD', [[5, '1B'], [100, 'AcDbSymbolTableRecord'], [100, 'AcDbBlockTableRecord'], [2, '*Paper_Space'], [340, '1E']]],
+    ['BLOCK_RECORD', [[5, 'B0'], [100, 'AcDbSymbolTableRecord'], [100, 'AcDbBlockTableRecord'], [2, '*Paper_Space0'], [340, 'C0']]],
+    ['BLOCK_RECORD', [[5, 'B1'], [100, 'AcDbSymbolTableRecord'], [100, 'AcDbBlockTableRecord'], [2, '*Paper_Space1'], [340, 'C1']]],
+  ] });
+  const layout = (h, name, order, br) => ['LAYOUT', [[5, h], [330, '1A'], [100, 'AcDbPlotSettings'], [1, ''], [2, 'none_device'], [4, 'ISO_A3_(420.00_x_297.00_MM)'], [40, 0], [41, 0], [42, 0], [43, 0],
+    [44, 420], [45, 297], [70, 0], [72, 1], [100, 'AcDbLayout'], [1, name], [70, 1], [71, order], [10, 0], [20, 0], [11, 420], [21, 297], [330, br]]];
+  // in file order (not tab order): the reader sorts by 71
+  w.objects.push(layout('C1', 'Empty', 3, 'B1'), layout('22', 'Model', 0, '1F'), layout('C0', 'Detail', 2, 'B0'), layout('1E', 'A3 Plan', 1, '1B'));
+  out(FIX, 'layouts.dxf', w.toString());
+}
 // 14) entity and table variants for the DWG reader (converted to DWG by make_dwg_fixtures.mjs):
 //     hidden layers, line types, OCS, 3D polylines, meshes, text alignments, MINSERT, constant
 //     attributes, hatch edges and patterns, weighted and fit-point splines, more dimension types,

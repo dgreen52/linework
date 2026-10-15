@@ -154,7 +154,7 @@
     <span class="sep" aria-hidden="true"></span>
     <button type="button" class="tool" data-action="save-markup" id="btn-save-markup" title="Save markups to a .markup.json file next to the drawing (Ctrl+S)"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg><span>Save</span></button>
     <button type="button" class="tool" data-action="load-markup" title="Load markups from a .markup.json file"><svg class="ic" aria-hidden="true"><use href="#i-load"/></svg><span>Load</span></button>
-    <button type="button" class="tool" data-action="markup-list" id="btn-markup-list" aria-pressed="false" title="List every markup: filter, zoom to one, delete"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg><span>List</span></button>
+    <button type="button" class="tool" data-action="markup-list" id="btn-markup-list" aria-pressed="false" title="Every markup in a list"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg><span>List</span></button>
     <label class="field author" title="Your name is stored with each markup"><span>Your name</span><input type="text" id="inp-author" autocomplete="name" placeholder="Name" maxlength="60"></label>
   </div>
   <div class="tools" role="tabpanel" id="panel-edit" aria-labelledby="tab-edit" data-panel="edit" hidden>
@@ -223,7 +223,7 @@
 
     <div class="card measure-card" id="measure-card" hidden aria-live="polite">
       <div class="mc-head"><span id="mc-title">Distance</span>
-        <span class="mc-acts"><button type="button" class="btn sm" id="btn-csv-measure" title="Save every measurement as a CSV list" hidden>CSV</button><button type="button" class="btn icon sm" id="btn-copy-measure" title="Copy value" aria-label="Copy measurement"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg></button></span>
+        <span class="mc-acts"><button type="button" class="btn sm" id="btn-csv-measure" title="Save the measurements (CSV)" hidden>CSV</button><button type="button" class="btn icon sm" id="btn-copy-measure" title="Copy value" aria-label="Copy measurement"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg></button></span>
       </div>
       <div class="mc-value" id="mc-value">—</div>
       <div class="mc-detail" id="mc-detail"></div>

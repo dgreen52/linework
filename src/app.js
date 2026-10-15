@@ -246,10 +246,7 @@ function drawAnnotations(ctx, view, opts = {}) {
       ctx.lineWidth = 1;
       ctx.setLineDash([5, 4]);
       ctx.strokeRect(b[0] - 3, b[1] - 3, b[2] - b[0] + 6, b[3] - b[1] + 6);
-      if (app.mh && app.tool === 'select') { // resize handles
-        ctx.setLineDash([]); ctx.fillStyle = opts.theme === 'paper' ? '#fff' : '#14181e';
-        for (const h of app.mh.markupHandles(sel)) { const [hx, hy] = toS(h.x, h.y); ctx.fillRect(hx - 4, hy - 4, 8, 8); ctx.strokeRect(hx - 4, hy - 4, 8, 8); }
-      }
+      if (app.mh && app.tool === 'select') app.mh.drawHandles(ctx, sel, toS, opts.theme);
       ctx.restore();
     }
     const d = draftMarkup();
@@ -577,7 +574,7 @@ function setDocument(scene, name, size, ms, src = {}) {
   app.markups = keep ? keep.markups : [];
   edit.reset();
   if (app.tools) app.tools.docChanged();
-  if (EDIT_TOOLS.has(app.tool)) setTool(app.tool);
+  if (EDIT_TOOLS.has(app.tool)) setTool(scene.page?.layout ? 'pan' : app.tool);
   $('#empty').hidden = true;
   $('#docinfo').hidden = false;
   $('#doc-name').textContent = name;
@@ -600,7 +597,7 @@ function setDocument(scene, name, size, ms, src = {}) {
   const notes = [...scene.warnings];
   for (const k of ['open', 'skipped']) for (const el of document.querySelectorAll(`#toasts [data-key="${k}"]`)) el.remove();
   const pg = scene.page;
-  if (!src.sheet) toast(`Opened ${name}${pg && pg.count > 1 ? `, page ${pg.label || pg.n} of ${pg.count}` : ''}`, { key: 'open', detail: `${plural(items, 'item')} · ${plural(nLayers, scene.format === 'DGN' ? 'level' : 'layer')} · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
+  if (!src.sheet) toast(`Opened ${name}${pg && pg.count > 1 ? (pg.cad ? (pg.n > 1 ? `, layout ${pg.label}` : '') : `, page ${pg.label || pg.n} of ${pg.count}`) : ''}`, { key: 'open', detail: `${plural(items, 'item')} · ${plural(nLayers, scene.format === 'DGN' ? 'level' : 'layer')} · ${scene.units.abbr || 'no units'} · ${Math.round(ms)} ms`, timeout: 3500 });
   if (nsCount) {
     toast(`${fmtNum(nsCount, 0)} item${nsCount === 1 ? '' : 's'} not shown`, {
       key: 'skipped', kind: 'warn', detail: 'Everything else loaded normally.', listTitle: 'What was skipped',
@@ -773,8 +770,11 @@ function draftMarkup() {
 }
 
 // ------------------------------------------------------------------ tools
+// a layout page is read-only: true (and a note) there
+app.ro = () => !!app.scene?.page?.layout && !!toast('A layout is read-only: edit on the Model page', { key: 'layout' });
 function setTool(t) {
   if (!TOOL_GROUP[t]) return;
+  if (TOOL_GROUP[t] === 'edit' && app.ro()) return;
   cancelDrafts();
   if (t !== 'zoombox') app.prevTool = t;
   app.tool = t;
@@ -970,9 +970,8 @@ function toolDown(sx, sy, e) {
     return;
   }
   if (t === 'select') {
-    const cur = app.mh && app.markups.find((x) => x.id === app.selected);
-    const h = cur && app.mh.handleAt(cur, wx, wy, (e.pointerType === 'touch' ? 16 : 8) / app.view.scale);
-    if (h) { app.drag = { sx, sy, orig: cur, handle: h.id, moved: false }; return; }
+    const g = app.mh && app.mh.grab(app, wx, wy, e.pointerType);
+    if (g) { app.drag = { sx, sy, ...g }; return; }
     const m = hitMarkup(sx, sy, e.pointerType === 'touch' ? 14 : 7);
     app.selected = m ? m.id : null;
     app.drag = m ? { sx, sy, w0: [wx, wy], orig: m, moved: false } : null;
@@ -1007,7 +1006,7 @@ function toolMove(sx, sy, e, pressed) {
   if (MEASURE_TOOLS.has(t)) { if (app.mdraft && app.mdraft.pts.length) updateMeasureCard(); invalidate(); return; }
   if (!pressed) {
     if (hovers(t)) updateHover(sx, sy);
-    if (t === 'select' && app.mh) { const cur = app.markups.find((x) => x.id === app.selected), [hx, hy] = screenToWorld(sx, sy), h = cur && app.mh.handleAt(cur, hx, hy, 8 / app.view.scale); cvOverlay.style.cursor = h ? h.cursor : ''; }
+    if (t === 'select' && app.mh) cvOverlay.style.cursor = app.mh.cursorAt(app, ...screenToWorld(sx, sy));
     if (app.draft && app.draft.type === 'cloud-poly') invalidate();
     invalidate();
     return;
@@ -1359,7 +1358,6 @@ function toggleSnap() {
   toast(app.snapOn ? 'Snap on' : 'Snap off', { timeout: 1200 });
 }
 function setLayersOpen(open) {
-  if (open && app.markupList && app.markupList.open && matchMedia('(max-width: 760px)').matches) app.markupList.hide(); // (one panel at a time on a phone)
   $('#layers-panel').hidden = !open;
   $('#btn-layers').setAttribute('aria-pressed', String(open));
 }
@@ -1392,8 +1390,6 @@ const actions = {
       app.markupList = app.markupList || initMarkupList(app, {
         select: (id) => { if (app.tool !== 'select') setTool('select'); app.selected = id; updateSelectionStatus(); invalidate(); },
         remove: (id) => { app.selected = id; deleteSelected(); },
-        narrow: () => matchMedia('(max-width: 760px)').matches,
-        hideLayers: () => { if (!$('#layers-panel').hidden) toggleLayers(); },
       });
     }
     app.markupList.toggle();
@@ -1440,16 +1436,7 @@ $('#btn-erotate').addEventListener('click', (e) => edit.rotateSel(e.shiftKey ? -
 $('#btn-finish').addEventListener('click', () => { if (edit.draftActive) edit.finishDraft(); else finishDraft(); });
 $('#btn-undo-point').addEventListener('click', () => { if (!edit.undoDraftPoint()) undoPoint(); });
 $('#btn-cancel-draft').addEventListener('click', () => { edit.cancelDraft(); if (app.mdraft) app.mdraft.pts = []; app.draft = null; updateFinishBar(); updateMeasureCard(); invalidate(); });
-/** Save every finished measurement as a CSV list (<drawing>-measurements.csv); false when there are none. */
-async function exportMeasures() {
-  if (!app.scene || !app.measures.length) return false;
-  const { measurementsCsv } = await import('./tools/measure-csv.js');
-  const csv = measurementsCsv(app.measures, { dec: app.precision, abbr: app.scene.units.abbr });
-  download(new Blob([csv], { type: 'text/csv' }), String((app.doc && app.doc.name) || 'drawing').replace(/\.[^.]+$/, '') + '-measurements.csv');
-  toast(`Saved ${app.measures.length} measurement${app.measures.length === 1 ? '' : 's'} as CSV`, { timeout: 2000 });
-  return true;
-}
-$('#btn-csv-measure').addEventListener('click', () => exportMeasures());
+$('#btn-csv-measure').addEventListener('click', () => import('./tools/measure-csv.js').then((m) => m.saveMeasures(app)));
 $('#btn-copy-measure').addEventListener('click', async () => {
   const v = $('#mc-value').textContent;
   try { await navigator.clipboard.writeText(v); toast(`Copied ${v}`, { timeout: 1500 }); } catch { toast('Copy is not available here.', { kind: 'warn' }); }

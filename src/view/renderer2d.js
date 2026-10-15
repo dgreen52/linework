@@ -117,7 +117,7 @@ export class Canvas2DRenderer {
     // PDF: the page's pictures (scans inverted on dark) and the sheet's edge
     const u = scene.underlay, pg = scene.page;
     if (u) { const b = u.box; ctx.save(); ctx.transform((b[2] - b[0]) / u.w, 0, 0, (b[1] - b[3]) / u.h, b[0], b[3]); ctx.drawImage((theme === 'dark' && u.dark) || u.image, 0, 0); ctx.restore(); }
-    if (pg) { const b = pg.box; ctx.strokeStyle = theme === 'dark' ? '#3b4350' : '#c3c8cf'; ctx.lineWidth = 1 / s; ctx.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]); }
+    if (pg && pg.box) { const b = pg.box; ctx.strokeStyle = theme === 'dark' ? '#3b4350' : '#c3c8cf'; ctx.lineWidth = 1 / s; ctx.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]); }
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 

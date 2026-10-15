@@ -542,8 +542,8 @@ vector PDF with sharp lines and real (searchable) text:
 | Not supported yet | Binary DXF | R12 and older DWG; writing DWG | DGN v8 |
 | **Save** | **DXF** R2000 (AC1015), pure ASCII; layers, line types, lineweights, text styles, blocks and attributes kept; DGN drawings saved as DXF get layers "Level N", cells as separate items | Saved as **DXF** (default) or **DGN v7** — Linework does not write DWG | **DGN v7**: a DGN you opened keeps every untouched element byte-for-byte (edits appended, originals flagged deleted); any other drawing becomes a new 2D DGN from GDAL's seed file (layers → levels 1–63, colour table, blocks flattened) |
 
-DWG versions: the tests use synthetic R2000 (AC1015) files; LibreDWG also reads R13/R14 and
-R2004–R2018, which are not covered by synthetic fixtures yet ([DWG.md](DWG.md)).
+DWG versions: the tests use synthetic R2000 (AC1015) and R2004 (AC1018) files; LibreDWG also
+reads R13/R14 and R2007–R2018, which are not covered by synthetic fixtures yet ([DWG.md](DWG.md)).
 
 **PDF** (pdf.js, one page at a time, [details](PDF.md)): paths → lines, polylines, circles and arcs
 (from their Béziers), splines, fills (solid; pattern fills as pattern hatches); text with its
@@ -867,8 +867,9 @@ Trade-offs, for the owner to decide before the first public release:
   stress drawing's 31,501 nets in under a second).
 * **Since 0.5.3** — measurements saved as CSV; markup resize handles and a markup list; DXF
   layouts as pages (paper space with its viewports); line types at their true size; hatch
-  patterns drawn as their lines; the block editor (editing inside blocks and cells).
-* **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; DWG layouts
+  patterns drawn as their lines; the block editor (editing inside blocks and cells); DWG R2004 test
+  drawings (true colours, the paged and compressed file layout).
+* **Next** — DWG R2007+ test fixtures (R2000 and R2004 are covered); DWG layouts
   with their viewports.
 * **Later** — binary DXF, DGN v8 (if a permissively licensed reader becomes viable), shared
   markup review (still file-based, no server).
@@ -901,7 +902,8 @@ and block attributes can be edited since 0.2.2).
   the tests yet. R12 files have no layout objects: their paper space is one "Paper space" page,
   with viewport frames only (R12 keeps a viewport's view in extended data).
 * DWG: R12 and older are refused; 3D solids, images, MLINE/MULTILEADER and proxy objects are
-  reported as not shown; only R2000 files are covered by the synthetic tests so far (see DWG.md).
+  reported as not shown; R2000 and R2004 files are covered by the synthetic tests, R13/R14 and
+  R2007-R2018 not yet (see DWG.md).
   Very large DWGs need several times their size in browser memory (limit 120 MB per file).
 * PDF: no text recognition (scans are pictures); measurements are in paper units (no scale
   calibration yet); password-protected PDFs need an unprotected copy; clipping is not applied to

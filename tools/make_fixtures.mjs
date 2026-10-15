@@ -285,6 +285,25 @@ out(FIX, 'edge-garbage.dxf', 'this is not a drawing\njust some text\n\u0000\u000
   ]);
   out(FIX, 'linetypes.dxf', w.toString());
 }
+// 13d) true colours (420) on layers, items, a block's insert (its ByBlock parts follow) and a solid fill: for DWG R2004,
+//      which stores them (R2000 keeps the colour index only)
+{
+  const w = new DxfWriter({ version: 'AC1018', insunits: 4 });
+  w.layer('TC', 1, 'CONTINUOUS', { rgb: 0x3366cc });
+  w.layer('PLAIN', 3);
+  w.line([0, 0], [100, 0], { layer: 'TC' }); // the layer's true colour
+  w.line([0, 10], [100, 10], { layer: 'PLAIN', color: 5, rgb: 0xff8000 }); // its own (index 5 as the fallback)
+  w.circle([50, 50], 20, { layer: 'PLAIN', rgb: 0x10a040 }); // its own, no index
+  w.text('TRUE COLOUR', [0, 90], { h: 5 }, { layer: 'PLAIN', rgb: 0x804020 });
+  w.hatch([[[120, 0], [160, 0], [160, 40], [120, 40]]], { solid: true }, { layer: 'PLAIN', rgb: 0xc0c0ff });
+  w.block('TCB', [0, 0], (b) => {
+    b.line([0, 0], [10, 10], { layer: '0', color: 0 }); // ByBlock: the insert's true colour
+    b.line([0, 10], [10, 0], { layer: '0', rgb: 0x00ffff });
+  });
+  w.insert('TCB', [200, 0], { sx: 2, sy: 2 }, { layer: 'PLAIN', rgb: 0xaa00aa });
+  w.insert('TCB', [240, 0], {}, { layer: 'TC' }); // ByLayer: the layer's true colour
+  out(FIX, 'edge-truecolor.dxf', w.toString());
+}
 // 14) entity and table variants for the DWG reader (converted to DWG by make_dwg_fixtures.mjs):
 //     hidden layers, line types, OCS, 3D polylines, meshes, text alignments, MINSERT, constant
 //     attributes, hatch edges and patterns, weighted and fit-point splines, more dimension types,

@@ -850,6 +850,7 @@ function updateMeasureCard() {
   $('#mc-detail').textContent = r ? details(r, app.precision, abbr) : '';
   $('#mc-hint').textContent = !abbr ? 'This drawing has no units set; values are in drawing units.' : '';
   $('#btn-copy-measure').disabled = !r;
+  $('#btn-csv-measure').hidden = !app.measures.length;
 }
 
 function finishMeasure() {
@@ -1415,6 +1416,16 @@ $('#btn-erotate').addEventListener('click', (e) => edit.rotateSel(e.shiftKey ? -
 $('#btn-finish').addEventListener('click', () => { if (edit.draftActive) edit.finishDraft(); else finishDraft(); });
 $('#btn-undo-point').addEventListener('click', () => { if (!edit.undoDraftPoint()) undoPoint(); });
 $('#btn-cancel-draft').addEventListener('click', () => { edit.cancelDraft(); if (app.mdraft) app.mdraft.pts = []; app.draft = null; updateFinishBar(); updateMeasureCard(); invalidate(); });
+/** Save every finished measurement as a CSV list (<drawing>-measurements.csv); false when there are none. */
+async function exportMeasures() {
+  if (!app.scene || !app.measures.length) return false;
+  const { measurementsCsv } = await import('./tools/measure-csv.js');
+  const csv = measurementsCsv(app.measures, { dec: app.precision, abbr: app.scene.units.abbr });
+  download(new Blob([csv], { type: 'text/csv' }), String((app.doc && app.doc.name) || 'drawing').replace(/\.[^.]+$/, '') + '-measurements.csv');
+  toast(`Saved ${app.measures.length} measurement${app.measures.length === 1 ? '' : 's'} as CSV`, { timeout: 2000 });
+  return true;
+}
+$('#btn-csv-measure').addEventListener('click', () => exportMeasures());
 $('#btn-copy-measure').addEventListener('click', async () => {
   const v = $('#mc-value').textContent;
   try { await navigator.clipboard.writeText(v); toast(`Copied ${v}`, { timeout: 1500 }); } catch { toast('Copy is not available here.', { kind: 'warn' }); }

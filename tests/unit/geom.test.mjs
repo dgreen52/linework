@@ -5,6 +5,8 @@ import { buildScene, conicBBox } from '../../src/scene.js';
 import { createModel, ensureLayer } from '../../src/model.js';
 import { findSnap, pickItem } from '../../src/tools/snap.js';
 import { measure, fmtNum, describe, details } from '../../src/tools/measure.js';
+import { measurementsCsv } from '../../src/tools/measure-csv.js';
+import { csvCell, csvRows } from '../../src/tools/csv.js';
 
 const near = (a, b, tol = 1e-9) => Math.abs(a - b) <= tol;
 
@@ -184,4 +186,28 @@ test('scene text packing for the worker hand-off round-trips exactly', async () 
   unpackTexts(clone);
   const after = JSON.stringify(clone.texts.map((t) => [t.s, t.x, t.y, t.m, t.fit || 0, t.bbox, t.layer, t.color, t.blk, t.align, t.ent]));
   assert.equal(after, before);
+});
+
+test('measurement CSV: one row per finished measurement, numbers as numbers (negatives too), units, points', () => {
+  const ms = [
+    { mode: 'distance', pts: [100, 200, 103, 196] },
+    { mode: 'length', pts: [0, 0, 10, 0, 10, 5] },
+    { mode: 'area', pts: [0, 0, 4, 0, 4, 3, 0, 3] },
+    { mode: 'distance', pts: [1, 1] }, // unfinished: skipped
+  ];
+  const rows = measurementsCsv(ms, { dec: 2, abbr: 'm' }).split('\r\n');
+  assert.equal(rows[0], 'n,type,value,unit,dx,dy,angle_deg,segments,perimeter,corners,points');
+  assert.equal(rows[1], '1,distance,5,m,3,-4,306.87,,,,100 200; 103 196', 'a negative dy is a number, not text');
+  assert.equal(rows[2], '2,length,15,m,,,,2,,,0 0; 10 0; 10 5');
+  assert.equal(rows[3], '3,area,12,m²,,,,,14,4,0 0; 4 0; 4 3; 0 3');
+  assert.equal(rows[4], '', 'ends with a line break; the unfinished one is left out');
+  assert.equal(rows.length, 5);
+  // no units, decimals, an empty list
+  assert.equal(measurementsCsv([{ mode: 'area', pts: [0, 0, 1, 0, 1, 1] }], { dec: 3 }).split('\r\n')[1], '1,area,0.5,sq. units,,,,,3.414,3,0 0; 1 0; 1 1');
+  assert.equal(measurementsCsv([{ mode: 'distance', pts: [0, 0, 1 / 3, 0] }], { dec: 4, abbr: 'ft' }).split('\r\n')[1].split(',')[2], '0.3333');
+  assert.equal(measurementsCsv([]), 'n,type,value,unit,dx,dy,angle_deg,segments,perimeter,corners,points\r\n');
+  // the CSV helpers: text that looks like a formula is defused, numbers are not
+  assert.equal(csvCell('-4'), "'-4");
+  assert.equal(csvRows([[-4, '=SUM(A1)', 'a,b', 'x"y']]), "-4,'=SUM(A1),\"a,b\",\"x\"\"y\"\r\n");
+  assert.equal(csvRows([[NaN, Infinity, null]]), 'NaN,Infinity,\r\n', 'non-finite numbers are written as text (no formula risk)');
 });

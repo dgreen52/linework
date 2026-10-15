@@ -255,6 +255,18 @@ test('measure: distance, length and area with snaps (DXF and DGN)', async () => 
   await clickWorld(page, 6000, 0, 5, -2);
   await clickWorld(page, 6000, 8000, -4, -3);
   eq((await mcValue(page)).trim(), '8,000.00 mm', 'midpoint to midpoint');
+  // CSV: every finished measurement in a list (numbers in drawing units, the unit, the points), downloaded
+  assert(!(await page.isHidden('#btn-csv-measure')), 'the CSV button shows once there is a measurement');
+  const [mdl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-csv-measure')]);
+  eq(mdl.suggestedFilename(), 'house-plan-measurements.csv', 'measurement CSV file name');
+  const mPath = join(OUT, 'measurements.csv');
+  await mdl.saveAs(mPath);
+  const mRows = readFileSync(mPath, 'utf8').split('\r\n');
+  eq(mRows[0], 'n,type,value,unit,dx,dy,angle_deg,segments,perimeter,corners,points', 'measurement CSV header');
+  eq(mRows.slice(1, 5).map((r) => r.split(',').slice(1, 4).join(' ')).join(' | '),
+    'distance 12000 mm | length 20000 mm | area 96000000 mm² | distance 8000 mm', 'one row per measurement, in order');
+  eq(mRows[1].split(',').slice(4, 7).join(' '), '12000 0 0', 'dx, dy, angle of the first distance');
+  eq(mRows[3].split(',')[10], '0 0; 12000 0; 12000 8000; 0 8000', 'the area\'s corners, snapped');
   await shot(page, 'measure-house-dark-1440');
   // DGN: property boundary corners (0,0) -> (80,0) in metres
   await openFixture(page, 'site-plan.dgn');

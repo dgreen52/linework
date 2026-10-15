@@ -4,6 +4,7 @@
 // end — and the from-to wire list as CSV. Exported by the library entry, for the hosts built on it.
 import { buildNetGraph, traceAll } from './trace.js';
 import { compilePatterns, XREF_DEFAULT } from './sheets.js';
+import { csvCell } from './csv.js';
 
 const norm = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
 const XREFS = compilePatterns(XREF_DEFAULT).res;
@@ -63,12 +64,7 @@ export function buildNetlist(scene, G = null, opts = {}) {
   return out;
 }
 
-/** One CSV cell: RFC 4180 quoting, and a leading apostrophe on text a spreadsheet would run as a formula (= + - @, tab, CR). */
-export function csvCell(v) {
-  let s = String(v ?? '');
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
+export { csvCell }; // (from ./csv.js, shared with the measurement list)
 
 /**
  * The netlist as a from-to wire list (CSV, RFC 4180): a header, then one row from the first end of each

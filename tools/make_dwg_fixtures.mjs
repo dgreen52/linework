@@ -97,9 +97,11 @@ export const DWG_FIXTURES = [
 // The same drawings as DWG R2004 (paged, compressed sections), plus true colours (R2004+ only): [source, output, version].
 export const DWG_FIXTURES_R2004 = [...DWG_FIXTURES, ['tests/fixtures/edge-truecolor.dxf', 'tests/fixtures/dwg-truecolor.dwg']]
   .map(([src, out]) => [src, out.replace(/\/dwg-/, '/dwg2004-'), 'R2004']);
+// And as DWG R2010 (the same layout; R2007+ objects: UTF-16 text in string streams, separate handle streams).
+export const DWG_FIXTURES_R2010 = DWG_FIXTURES_R2004.map(([src, out]) => [src, out.replace('/dwg2004-', '/dwg2010-'), 'R2010']);
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  for (const [src, out, version] of [...DWG_FIXTURES, ...DWG_FIXTURES_R2004]) {
+  for (const [src, out, version] of [...DWG_FIXTURES, ...DWG_FIXTURES_R2004, ...DWG_FIXTURES_R2010]) {
     const { bytes, notes } = dxfToDwg(readFileSync(join(ROOT, src)), { version });
     writeFileSync(join(ROOT, out), bytes);
     console.log(`${out}: ${bytes.length} bytes${notes.length ? ' — ' + notes.join(' ') : ''}`);

@@ -1,5 +1,5 @@
 // DWG reader (LibreDWG WebAssembly, vendor/libredwg). Every DWG fixture is a synthetic DXF fixture
-// converted to DWG R2000 and R2004 by tools/make_dwg_fixtures.mjs; the oracle is the same drawing opened as DXF.
+// converted to DWG R2000, R2004 and R2010 by tools/make_dwg_fixtures.mjs; the oracle is the same drawing opened as DXF.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -11,7 +11,7 @@ import { parseDwg, dwgVersion, dwgColorGroups, UNREADABLE, WASM_SIZE, MAX_DWG_BY
 import { parseDxf } from '../../src/formats/dxf.js';
 import { writeDxf } from '../../src/formats/dxf-write.js';
 import { buildScene, KIND } from '../../src/scene.js';
-import { DWG_FIXTURES, DWG_FIXTURES_R2004, dxfToDwg } from '../../tools/make_dwg_fixtures.mjs';
+import { DWG_FIXTURES, DWG_FIXTURES_R2004, DWG_FIXTURES_R2010, dxfToDwg } from '../../tools/make_dwg_fixtures.mjs';
 import { crc32, pageChecksum } from '../../tools/dwg-r2000.mjs';
 import { dynamicCodeSites, wasmMemory, libredwgVersion } from '../../tools/vendor_libredwg.mjs';
 
@@ -24,8 +24,8 @@ const worldExt = (s) => [s.extents[0] + s.origin[0], s.extents[1] + s.origin[1],
 const relTol = (s) => (x) => 1e-6 * Math.max(1, ...worldExt(s).map(Math.abs), ...(x.bbox || []).map(Math.abs));
 const layerRows = (m) => m.layers.map((l) => [l.name, l.color, l.visible, l.frozen, l.ltype]);
 /** Every DWG fixture: [source DXF, DWG, version] (R2000 and R2004). */
-const ALL = [...DWG_FIXTURES.map(([src, out]) => [src, out, 'R2000']), ...DWG_FIXTURES_R2004];
-const AC = { R2000: 'AC1015', R2004: 'AC1018' };
+const ALL = [...DWG_FIXTURES.map(([src, out]) => [src, out, 'R2000']), ...DWG_FIXTURES_R2004, ...DWG_FIXTURES_R2010];
+const AC = { R2000: 'AC1015', R2004: 'AC1018', R2010: 'AC1024' };
 
 // ------------------------------------------------------------------ detection
 test('detection: every DWG version magic (R13 to 2018) is a DWG; the version is named', () => {
@@ -77,8 +77,8 @@ for (const [src, out, version] of ALL) {
     worldExt(sa).forEach((v, i) => assert.ok(Math.abs(v - worldExt(sb)[i]) < 1e-6 * Math.max(1, Math.abs(v)), 'extents'));
     assert.deepEqual(compareItems(liveItems(sa), liveItems(sb), relTol(sa)), [], 'same items');
     assert.deepEqual(sb.texts.map((t) => t.s).sort(), sa.texts.map((t) => t.s).sort(), 'same texts');
-    // R2004 stores true colours: every item keeps its colour index and true colour, inside blocks too
-    if (version === 'R2004') {
+    // R2004+ stores true colours: every item keeps its colour index and true colour, inside blocks too
+    if (version !== 'R2000') {
       const cols = (mm, list) => list.map((e) => `${e.type}:${e.color}/${e.rgb ?? '-'}`);
       assert.deepEqual(cols(m, m.entities), cols(d, d.entities), 'colours of the items');
       for (const [k, b] of Object.entries(d.blocks)) assert.deepEqual(cols(m, m.blocks[k].entities), cols(d, b.entities), `colours in block ${k}`);
@@ -86,10 +86,10 @@ for (const [src, out, version] of ALL) {
   });
 }
 
-test('DWG R2004 fixtures: the paged layout (encrypted header data with its CRC-32, masked page headers, page checksums)', () => {
-  for (const [, out] of DWG_FIXTURES_R2004) {
+test('DWG R2004 and R2010 fixtures: the paged layout (encrypted header data with its CRC-32, masked page headers, page checksums)', () => {
+  for (const [, out, version] of [...DWG_FIXTURES_R2004, ...DWG_FIXTURES_R2010]) {
     const b = file(out), dv = new DataView(b.buffer, b.byteOffset);
-    assert.equal(String.fromCharCode(...b.subarray(0, 6)), 'AC1018', out);
+    assert.equal(String.fromCharCode(...b.subarray(0, 6)), AC[version], out);
     // the header data at 0x80, XOR the pseudo-random sequence (seed 1, x 0x343FD + 0x269EC3)
     const hd = new Uint8Array(0x6c);
     let seed = 1;
@@ -150,7 +150,7 @@ test('friendly errors: the stub, wrong versions and oversize files never reach t
 });
 
 test('damaged DWG files (truncated, corrupted bytes): a partial drawing or a friendly error, never a crash', async () => {
-  for (const name of ['dwg-house-plan.dwg', 'dwg2004-house-plan.dwg']) await damaged(file(`tests/fixtures/${name}`));
+  for (const name of ['dwg-house-plan.dwg', 'dwg2004-house-plan.dwg', 'dwg2010-house-plan.dwg']) await damaged(file(`tests/fixtures/${name}`));
 });
 async function damaged(good) {
   const cases = [];
@@ -189,7 +189,7 @@ test('variants real files have: text stored with its terminating NUL; model spac
   for (const [src] of [DWG_FIXTURES[1], DWG_FIXTURES[5], DWG_FIXTURES[7]]) {
     const d = parseDxf(file(src));
     const sa = buildScene(d);
-    for (const variant of [{ nulTerminated: true }, { unlinkModelSpace: true }, { nulTerminated: true, version: 'R2004' }]) {
+    for (const variant of [{ nulTerminated: true }, { unlinkModelSpace: true }, { nulTerminated: true, version: 'R2004' }, { nulTerminated: true, version: 'R2010' }]) {
       const m = await open(dxfToDwg(file(src), variant).bytes, { mode: 'direct' });
       const sb = buildScene(m);
       assert.deepEqual(compareItems(liveItems(sa), liveItems(sb), relTol(sa)), [], `${src} ${JSON.stringify(variant)}`);

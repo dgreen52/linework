@@ -1403,6 +1403,14 @@ test('DWG: the reader loads only when a DWG is opened; open + measure under the 
   assert(['3366cc', 'ff8000', '10a040', 'c0c0ff', 'aa00aa', 'ffff'].every((c) => tc.colors.split(',').includes(c)), 'its true colours are drawn: ' + tc.colors);
   await clearToasts(page);
   await shot(page, 'dwg2004-truecolor-dark-1440');
+  // R2010 (text as UTF-16): the accented text reads as in the DXF
+  const texts = () => page.evaluate(() => window.__linework.scene.texts.map((t) => t.s).sort().join('|'));
+  await openFixture(page, 'edge-crlf-cp1252.dxf');
+  const want = await texts();
+  await openFixture(page, 'dwg2010-cp1252.dwg');
+  eq(await page.evaluate(() => window.__linework.scene.version), 'AC1024', 'an R2010 file');
+  assert(/[^ -]/.test(want), 'the drawing has non-ASCII text: ' + want);
+  eq(await texts(), want, 'R2010: the same text');
   await close(page); // no console errors: a CSP violation would show here
 });
 

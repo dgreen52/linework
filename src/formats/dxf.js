@@ -256,6 +256,7 @@ function readHeader(ctx) {
   ctx.dimscale = num(H.$DIMSCALE, 40, 1) || 1;
   ctx.dimtxt = num(H.$DIMTXT, 40, 0);
   model.header.ltscale = num(H.$LTSCALE, 40, 1) || 1;
+  model.header.psltscale = num(H.$PSLTSCALE, 70, 1);
 }
 
 // ------------------------------------------------------------------ records
@@ -412,6 +413,8 @@ function common(g, model) {
     src: g.type,
   };
   if (g.has(370)) e.lw = g.i(370); // lineweight (1/100 mm; -1 ByLayer, -2 ByBlock, -3 default); absent = ByLayer
+  const lts = g.f(48, 1);
+  if (lts !== 1 && lts > 0) e.lts = lts;
   if (g.i(67, 0) === 1) e.paper = true;
   if (g.i(60, 0) === 1) e.invisible = true;
   return e;
@@ -749,6 +752,7 @@ function hatchEntity(model, g) {
   }
   setOcs(e, g);
   if (!e.loops.length) { notShown(model, 'HATCH (unreadable boundary)'); return null; }
+  if (!e.solid && e.tail && e.tail.some((c) => c[0] === 53)) model.patterns = true; // (the worker loads src/hatch.js)
   return e;
 }
 

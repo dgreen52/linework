@@ -33,17 +33,20 @@ export function batchStyle(scene, i) {
   const kind = scene.kind[i];
   const bk = kind === KIND.POINT ? BK.POINT : (f & FLAG.FILL) ? BK.FILL : (f & FLAG.PATTERN) ? BK.PATTERN : BK.STROKE;
   const layer = scene.layer[i], color = scene.color[i];
-  // fills: the style slot carries the even-odd flag instead (so holes are never filled by a shared batch)
-  const style = bk === BK.STROKE ? scene.style[i] : (f & FLAG.EVENODD ? 1 : 0), weight = bk === BK.STROKE ? scene.weight[i] : 0;
+  // fills: the style slot carries the even-odd flag instead (so holes are never filled by a shared batch); 2: a hatch drawn by its lines
+  const style = bk === BK.STROKE ? scene.style[i] : (f & FLAG.HL ? 2 : f & FLAG.EVENODD ? 1 : 0), weight = bk === BK.STROKE ? scene.weight[i] : 0;
   // numeric key (string keys for 50k+ items are slow): bk 2 bits, style 8, weight 5, layer 16; colour in a sub-map
   const nk = ((bk * 256 + style) * 32 + weight) * 65536 + layer;
   return { nk, bk, style, weight, layer, color, evenodd: !!(f & FLAG.EVENODD) };
 }
 
-export const newBatch = (scene, st, order) => ({
-  key: st.nk + ':' + st.color, bk: st.bk, layer: st.layer, color: st.color, weight: st.weight,
-  dash: st.bk === BK.STROKE && scene.ltypes[st.style] ? scene.ltypes[st.style].dash : null, evenodd: st.evenodd, ids: [], path: null, order,
-});
+export const newBatch = (scene, st, order) => {
+  const lt = st.bk === BK.STROKE ? scene.ltypes[st.style] : null; // dash: screen pixels; wd, per: drawing units (scene.js worldDash)
+  return {
+    key: st.nk + ':' + st.color, bk: st.bk, layer: st.layer, color: st.color, weight: st.weight,
+    dash: lt ? lt.dash : null, wd: lt && lt.wd, per: lt && lt.per, bare: st.bk === BK.PATTERN && st.style === 2, evenodd: st.evenodd, ids: [], path: null, order,
+  };
+};
 export const orderBase = (bk) => (bk === BK.FILL ? 0 : bk === BK.PATTERN ? 1e6 : 2e6);
 
 export function buildChunks(scene) {

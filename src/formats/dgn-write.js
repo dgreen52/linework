@@ -389,6 +389,7 @@ class Writer {
       out.push(...this.chain(e, this.sym(prims.find((p) => !(p.flags & FLAG.FILL)) || prims[0], e), comp));
     } else {
       for (const p of prims) {
+        if ((p.flags & (FLAG.HL | FLAG.PATTERN)) === FLAG.HL) continue; // a hatch's pattern lines: its shapes are written
         const s = this.sym(p, e);
         if (p.kind === KIND.POINT) out.push(E.line(s, p.pts[0], p.pts[1], p.pts[0], p.pts[1], comp));
         else if (p.kind === KIND.CONIC) { if (!(dgnFill && p.flags & FLAG.FILL)) out.push(E.conic(s, p.c, comp)); }

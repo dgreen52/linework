@@ -7,8 +7,7 @@ import {
   moveEntity, rotateEntity, gripsOf, moveGrip, insertVertex, deleteVertex, segmentsOf, nearestOnSegment,
   setText, restyle, canReshape, isText, colorInfo, weightLabel, partAt, withPart,
 } from '../edit/ops.js';
-import { makePayload, preparePaste, clipText, parseClip, CLIP_HEADER, CLIP_MAX } from '../edit/clipboard.js';
-import { createEmitter, sceneTables, KIND, CHAR_W, DXF_LW, weightPx } from '../scene.js';
+import { createEmitter, sceneTables, KIND, CHAR_W, DXF_LW, weightPx, plug } from '../scene.js';
 import { addConic, addPoly, CAP_HEIGHT } from '../view/renderer2d.js';
 import { findSnap, pickItem } from '../tools/snap.js';
 import { fmtNum } from '../tools/measure.js';
@@ -83,6 +82,8 @@ export function initEdit(app, api) {
     if (!app.scene) return;
     E.doc = new EditDoc(m, app.scene, { bytes });
     E.ready = true;
+    loadClip().catch(() => {});
+    if (!plug.hatch) import('../hatch.js').then((h) => { plug.hatch = h; }, () => {}); // (an edited pattern hatch keeps its lines)
     E.palette = m.header && m.header.palette ? m.header.palette : null;
     if (isDgn()) E.curColor = { ci: 0, rgb: (E.palette || DGN_DEFAULT)[0] ?? 0xffffff };
     fillLayers();
@@ -632,7 +633,7 @@ export function initEdit(app, api) {
     if (E.drag) {
       const d = E.drag;
       E.drag = null;
-      if (d.moving && d.copy) { hint(''); pasteNow(dupPrep(), [d.dx, d.dy], 'Copy'); }
+      if (d.moving && d.copy) { hint(''); if (CB) pasteNow(dupPrep(), [d.dx, d.dy], 'Copy'); }
       else if (d.moving && (d.dx || d.dy)) {
         const ids = [...E.sel];
         commit(ids.length > 1 ? `Move ${ids.length} items` : 'Move', ids.map((i) => ({ i, before: entity(i), after: moveEntity(entity(i), d.dx, d.dy) })), ids);
@@ -834,12 +835,16 @@ export function initEdit(app, api) {
   /** Ctrl (Alt on macOS) while dragging: drop a copy, keep the originals. */
   const copyKey = (ev) => !!(isMac ? ev.altKey : ev.ctrlKey);
   const plural = (n) => `${n} item${n === 1 ? '' : 's'}`;
+  // src/edit/clipboard.js, fetched when a drawing is ready for editing (a copy is made synchronously)
+  let CB = null;
+  const loadClip = () => import('../edit/clipboard.js').then((m) => (CB = m));
   /**
    * Copy the selection: kept in this tab (survives opening another drawing) and returned as
    * clipboard text (a stub when too large for the system clipboard; null: nothing to copy).
    */
   function copySel() {
-    if (!E.ready || !inEdit() || !E.sel.size || E.text || E.draft) return null;
+    if (!E.ready || !CB || !inEdit() || !E.sel.size || E.text || E.draft) return null;
+    const { makePayload, clipText, CLIP_MAX, CLIP_HEADER } = CB;
     const ids = [...E.sel];
     E.clip = makePayload(model(), ids, { ext: extOf(ids) });
     const t = clipText(E.clip), big = t.length > CLIP_MAX;
@@ -848,8 +853,8 @@ export function initEdit(app, api) {
     return big ? CLIP_HEADER + '\n{"v":1,"ents":[],"big":1}' : t;
   }
   function copyButton() { const t = copySel(); if (t && navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {}); }
-  const prep = (P) => preparePaste(P, model(), { layer: E.curLayer });
-  const dupPrep = () => { const ids = [...E.sel]; return preparePaste(makePayload(model(), ids, { ext: extOf(ids) }), model(), { layer: E.curLayer }); };
+  const prep = (P) => CB.preparePaste(P, model(), { layer: E.curLayer });
+  const dupPrep = () => { const ids = [...E.sel]; return prep(CB.makePayload(model(), ids, { ext: extOf(ids) })); };
   /** Paste P (null: this tab's last copy) so that it follows the cursor, or in place (same coordinates). */
   async function paste(P, inPlace) {
     if (P && P.big && E.clip) P = null; // our own oversized copy: the full one is here
@@ -860,6 +865,7 @@ export function initEdit(app, api) {
       return;
     }
     if (!(await whenReady())) return;
+    await loadClip();
     if (app.tool !== 'eselect') api.setTool('eselect');
     let r;
     try { r = prep(P); } catch (err) { toast('Could not paste these items', { kind: 'error', detail: String(err && err.message ? err.message : err) }); return; }
@@ -868,7 +874,7 @@ export function initEdit(app, api) {
     if (!r.ents.length) { toast('Nothing could be pasted', { key: 'paste', kind: 'warn', list: r.notes }); return; }
     if (inPlace) pasteNow(r, null, 'Paste'); else startPlace(r, 'Paste');
   }
-  function duplicateSel() { if (E.ready && E.sel.size && !E.place) startPlace(dupPrep(), 'Duplicate'); }
+  function duplicateSel() { if (E.ready && CB && E.sel.size && !E.place) startPlace(dupPrep(), 'Duplicate'); }
   /** The items follow the cursor (snaps on); a click or tap places them, Esc cancels. */
   function startPlace(r, label) {
     if (!r.ents.length) return;
@@ -1603,7 +1609,7 @@ export function initEdit(app, api) {
     const inPlace = !!(pk && pk.inPlace);
     pk = null;
     // not a Linework copy (or nothing usable): this tab's last copy, else "Nothing to paste"
-    paste(parseClip(t), inPlace);
+    loadClip().then(() => paste(CB.parseClip(t), inPlace));
   }
 
   return {

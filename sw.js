@@ -43,6 +43,7 @@ const SHELL = [
   'src/formats/dxf-write.js',
   'src/formats/dxf.js',
   'src/geom.js',
+  'src/hatch.js',
   'src/layout.js',
   'src/markup/handles.js',
   'src/markup/history.js',

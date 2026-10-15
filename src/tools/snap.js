@@ -47,6 +47,7 @@ export function findSnap(scene, x, y, tol, opts = {}) {
   queryRect(scene, x - tol, y - tol, x + tol, y + tol, (id) => {
     if (id >= TEXT_ID) return; // text: no snaps
     if (!vis(scene.layer[id]) || (skip && skip(id))) return;
+    if ((scene.flags[id] & (FLAG.HL | FLAG.PATTERN)) === FLAG.HL) return; // hatch pattern lines: no snaps (as CAD programs)
     const k = scene.kind[id];
     if (k === KIND.POINT) {
       const s = scene.start[id] * 2;

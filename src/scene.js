@@ -12,7 +12,10 @@ import { ACI } from './palettes.js';
 import { bulgeToArc, insertMatrix, mul, apply, applyVec, TAU } from './geom.js';
 
 export const KIND = { POLY: 1, CONIC: 2, POINT: 3 };
-export const FLAG = { CLOSED: 1, FILL: 2, CURVEPTS: 4, EVENODD: 8, FULL: 16, PATTERN: 32 };
+// HL: a hatch's pattern lines (segments between NaN pairs); with PATTERN: a hatch drawn by its lines, not a tone
+export const FLAG = { CLOSED: 1, FILL: 2, CURVEPTS: 4, EVENODD: 8, FULL: 16, PATTERN: 32, HL: 64 };
+/** Code loaded only when needed: plug.hatch (src/hatch.js), set by the worker and the Edit mode. */
+export const plug = { hatch: null };
 /** Spatial-index ids: primitives are 0..n-1, texts are TEXT_ID + text index. */
 export const TEXT_ID = 0x80000000;
 
@@ -45,6 +48,21 @@ export function bulgeRing(pts, bulges) {
     }
   }
   return out;
+}
+
+/**
+ * A DXF LTYPE pattern (dash > 0, gap < 0, dot 0) at scale k as a canvas dash array in drawing units (dash, gap,
+ * ...; a dot is a dash of 0, drawn by the round caps): { wd, per (its length) }, or null (solid).
+ */
+export function worldDash(pattern, k) {
+  const out = [];
+  for (const v of pattern || []) {
+    const on = out.length % 2 === 0, len = Math.abs(v) * k;
+    if ((v >= 0) === on) out.push(len); else if (out.length) out[out.length - 1] += len; else out.push(0, len);
+  }
+  if (out.length % 2) { if (out.length > 1) { out[0] += out.pop(); } else out.push(0); } // ends on a dash: it joins the first
+  const per = out.reduce((s, v) => s + v, 0);
+  return out.length && per > 0 && out.some((v, i) => i % 2 && v > 0) && out.every(Number.isFinite) ? { wd: out, per } : null;
 }
 
 /** Convert a DXF LTYPE pattern (drawing units) to a screen-pixel dash array. */
@@ -98,7 +116,7 @@ export class Builder {
     for (let i = 0; i < pts.length; i += 2) {
       const x = pts[i], y = pts[i + 1];
       if (Math.abs(x) < 1e15 && Math.abs(y) < 1e15) continue;
-      if ((flags & (FLAG.FILL | FLAG.PATTERN)) && Number.isNaN(x) && Number.isNaN(y)) continue; // ring separator
+      if ((flags & (FLAG.FILL | FLAG.PATTERN | FLAG.HL)) && Number.isNaN(x) && Number.isNaN(y)) continue; // ring separator
       this.invalid++;
       return;
     }
@@ -156,7 +174,7 @@ export function sceneTables(model, scene = null) {
   const t = {
     layers, ltypes, srcNames, blockNames,
     layerIdx: new Map(layers.map((l, i) => [l.name.toUpperCase(), i])),
-    ltIdx: new Map(ltypes.map((l, i) => [l.name, i])),
+    ltIdx: new Map(ltypes.map((l, i) => [l.key || l.name, i])),
     srcIdx: new Map(srcNames.map((s, i) => [s, i])),
     blkIdx: new Map(blockNames.map((s, i) => [s, i])),
     notShown: scene ? {} : { ...model.stats.notShown },
@@ -170,8 +188,9 @@ export function sceneTables(model, scene = null) {
  * Emitter: turns model entities into scene primitives/texts (absolute drawing coordinates) in
  * `emitter.B`. emit(entity, entityIndex) handles one top-level entity (blocks expanded).
  */
-export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layout = null } = {}) {
+export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layout = null, hatch = plug.hatch } = {}) {
   const B = new Builder();
+  const hb = { left: hatch ? hatch.HATCH_BUDGET : 0 }; // pattern hatch segments this emitter may still draw
   if (layout) B.clipper = layout.clipper;
   let expanded = 0; // items walked inside blocks (the expansion budget)
   const { layers, ltypes, srcNames, blockNames, layerIdx, ltIdx, srcIdx, blkIdx, notShown } = tables;
@@ -182,14 +201,19 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layou
     if (i === undefined) { i = layers.length; layers.push({ name: String(name), color: FG, visible: true, frozen: false, ltype: 'CONTINUOUS', count: 0 }); layerIdx.set(key, i); }
     return i;
   };
-  const getLtype = (name) => {
+  const lts = (model.header && model.header.ltscale) || 1;
+  /** Line type `name` at scale k ($LTSCALE x the item's scale x its block's): one entry per name and scale (255 at most). */
+  const getLtype = (name, k = 1) => {
     name = String(name || 'CONTINUOUS').toUpperCase();
-    if (ltIdx.has(name)) return ltIdx.get(name);
+    k = +(k * lts).toPrecision(6);
+    const key = k === 1 ? name : name + '@' + k;
+    if (ltIdx.has(key)) return ltIdx.get(key);
     const def = model.ltypes[name];
     const dash = def ? (def.px || dashFromPattern(def.pattern)) : null;
     let i = 0;
-    if (dash) { i = ltypes.length; ltypes.push({ name, dash }); }
-    ltIdx.set(name, i);
+    if (dash && ltypes.length < 256) { i = ltypes.length; ltypes.push({ name, key, dash, ...(!def.px && k > 0 && worldDash(def.pattern, k)) }); }
+    else if (dash) i = Math.max(0, ltypes.findIndex((l) => l.name === name));
+    ltIdx.set(key, i);
     return i;
   };
   const srcOf = (s) => { s = s || '?'; let i = srcIdx.get(s); if (i === undefined) { i = srcNames.length; srcNames.push(s); srcIdx.set(s, i); } return i; };
@@ -197,7 +221,8 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layou
   const blocks = model.blocks;
   const dxfLw = model.format !== 'DGN'; // DXF lineweights (lw, 1/100 mm; -1 ByLayer, -2 ByBlock, -3 default) vs DGN weights 0..31
 
-  // ctx: { M (affine|null), layer (idx, for entities on layer 0 inside blocks), color (BYBLOCK colour), ltype (BYBLOCK), lw (BYBLOCK), blk, depth, stack }
+  // ctx: { M (affine|null), layer (idx, for entities on layer 0 inside blocks), color (BYBLOCK colour), ltype (BYBLOCK), lw (BYBLOCK), blk, depth, stack,
+  //   lk (line type scale factor; a layout viewport's) }
   const topCtx = { M: null, layer: -1, color: FG, ltype: 0, lw: -3, blk: 0, depth: 0, stack: [] };
   const lapi = layout && { B, model, top: topCtx, walk, over: () => expanded >= maxExpanded, ns: addNS };
 
@@ -216,9 +241,10 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layou
     }
     let style;
     const lt = e.ltype || (ctx.depth ? 'BYBLOCK' : 'BYLAYER');
-    if (lt === 'BYLAYER') style = getLtype(L.ltype);
+    const M = ctx.M, k = (e.lts || 1) * (ctx.lk || 1) * (M ? Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2])) : 1);
+    if (lt === 'BYLAYER') style = getLtype(L.ltype, k);
     else if (lt === 'BYBLOCK') style = ctx.ltype;
-    else style = getLtype(lt);
+    else style = getLtype(lt, k);
     let lw = e.lw ?? -1;
     if (lw === -1) lw = L.lw ?? -3; else if (lw === -2) lw = ctx.lw;
     return { layer: li, color, style, weight: dxfLw ? lwClass(lw) : e.weight | 0, lw, src: srcOf(e.src || e.type), blk: ctx.blk };
@@ -403,10 +429,12 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layou
       }
       case 'hatch': {
         const rings = e.loops.map((L) => bulgeRing(L.pts, L.bulges)).filter((r) => r.length >= 6);
-        // solid: filled; pattern: filled with a screen-space line pattern (v0.1 approximation)
+        // solid: filled; pattern: its lines (src/hatch.js), else a screen-space tone
         const all = [];
         rings.forEach((r, i) => { if (i) all.push(NaN, NaN); for (const v of xform(M, r)) all.push(v); });
-        if (all.length >= 6) B.poly(all, (e.solid ? FLAG.FILL : FLAG.PATTERN) | FLAG.CLOSED | FLAG.EVENODD | FLAG.CURVEPTS, a);
+        const hl = !e.solid && hatch && all.length >= 6 ? hatch.patternLines(e, rings, hb) : null;
+        if (all.length >= 6) B.poly(all, (e.solid ? FLAG.FILL : FLAG.PATTERN | (hl ? FLAG.HL : 0)) | FLAG.CLOSED | FLAG.EVENODD | FLAG.CURVEPTS, a);
+        if (hl) B.poly(xform(M, hl), FLAG.HL, { ...a, style: 0 });
         break;
       }
       case 'text':
@@ -432,6 +460,7 @@ export function createEmitter(model, tables, { maxExpanded = MAX_EXPANDED, layou
           blk: ctx.blk || (e.type === 'insert' ? blkOf(e.block) : ctx.blk),
           depth: ctx.depth + 1,
           stack: ctx.stack,
+          lk: ctx.lk,
         };
         if (e.type === 'dimension' && (!blk || !blk.entities.length)) {
           if (e.fallback && e.fallback.length) walk(e.fallback, { ...childCtxBase, M });

@@ -250,6 +250,41 @@ out(FIX, 'edge-garbage.dxf', 'this is not a drawing\njust some text\n\u0000\u000
   w.objects.push(layout('C1', 'Empty', 3, 'B1'), layout('22', 'Model', 0, '1F'), layout('C0', 'Detail', 2, 'B0'), layout('1E', 'A3 Plan', 1, '1B'));
   out(FIX, 'layouts.dxf', w.toString());
 }
+// 13c) line types at their true size ($LTSCALE 10, item scales, a scaled block, a viewport) and hatch patterns as lines
+{
+  const w = new DxfWriter({ version: 'AC1015', insunits: 4 });
+  w.headerVar('$LTSCALE', 40, 10);
+  w.ltype('DASHED', 'Dashed __ __', [0.5, -0.25]);
+  w.ltype('DASHDOT', 'Dash dot __ . __', [0.5, -0.25, 0, -0.25]);
+  w.layer('LINES', 7);
+  w.layer('CENTER', 1, 'DASHDOT');
+  w.layer('HATCH', 4);
+  w.layer('VPORTS', 8);
+  // dashes 5, gaps 2.5 ($LTSCALE 10); twice that (its own scale 2); dash-dot by layer; a block inserted at 3x: 15 / 7.5
+  w.line([0, 0], [100, 0], { layer: 'LINES', ltype: 'DASHED' });
+  w.line([0, 10], [100, 10], { layer: 'LINES', ltype: 'DASHED', lts: 2 });
+  w.line([0, 20], [100, 20], { layer: 'CENTER' });
+  w.block('BOLT', [0, 0], (b) => b.line([0, 0], [10, 0], { layer: 'LINES', ltype: 'DASHED' }));
+  w.insert('BOLT', [0, 30], { sx: 3, sy: 3 }, { layer: 'LINES' });
+  const sq = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  // horizontal lines 5 apart (8 of them); dashed lines 10 apart (5 on, 5 off); vertical lines around a hole
+  w.hatch([sq(0, 40, 40, 80)], { pattern: 'LINES5', defs: [[0, 0, 2.5, 0, 5, []]] }, { layer: 'HATCH' });
+  w.hatch([sq(50, 40, 90, 80)], { pattern: 'DASH10', defs: [[0, 50, 42.5, 0, 10, [5, -5]]] }, { layer: 'HATCH' });
+  w.hatch([sq(0, 90, 40, 130), sq(10, 100, 30, 120)], { pattern: 'VERT10', defs: [[90, 5, 0, -10, 0, []]] }, { layer: 'HATCH' });
+  // ANSI31 at scale 1 (45 degrees, 3.175 apart) in a block inserted at 2x
+  w.block('HB', [0, 0], (b) => b.hatch([sq(0, 0, 20, 10)], { pattern: 'ANSI31', defs: [[45, 0, 0, -2.245064, 2.245064, []]] }, { layer: 'HATCH' }));
+  w.insert('HB', [50, 90], { sx: 2, sy: 2 }, { layer: 'HATCH' });
+  // far too dense for lines (25,000 of them): a tone
+  w.hatch([sq(100, 40, 200, 140)], { pattern: 'DENSE', defs: [[0, 0, 0, 0, 0.004, []]] }, { layer: 'HATCH' });
+  // paper space: one viewport showing the dashed lines at 1:10 ($PSLTSCALE 1: dashes as long on paper)
+  w.lwpolyline([[0, 0], [297, 0], [297, 210], [0, 210]], true, { layer: 'VPORTS', paper: true });
+  w.raw('VIEWPORT', [
+    [8, 'VPORTS'], [67, 1], [100, 'AcDbViewport'], [10, 100], [20, 100], [30, 0], [40, 100], [41, 80], [68, 1], [69, 2],
+    [12, 50], [22, 40], [13, 0], [23, 0], [14, 10], [24, 10], [15, 10], [25, 10], [16, 0], [26, 0], [36, 1], [17, 0], [27, 0], [37, 0],
+    [42, 50], [43, 0], [44, 0], [45, 800], [50, 0], [51, 0], [72, 1000], [90, 32864],
+  ]);
+  out(FIX, 'linetypes.dxf', w.toString());
+}
 // 14) entity and table variants for the DWG reader (converted to DWG by make_dwg_fixtures.mjs):
 //     hidden layers, line types, OCS, 3D polylines, meshes, text alignments, MINSERT, constant
 //     attributes, hatch edges and patterns, weighted and fit-point splines, more dimension types,

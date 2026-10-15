@@ -58,6 +58,7 @@ export class DxfWriter {
     if (p.color != null) g.push([62, p.color]);
     if (p.rgb != null) g.push([420, p.rgb]);
     if (p.lw != null) g.push([370, p.lw]); // lineweight, 1/100 mm
+    if (p.lts != null) g.push([48, p.lts]); // the item's line type scale
     if (p.invisible) g.push([60, 1]);
     if (p.paper) g.push([67, 1]);
     return g;
@@ -162,8 +163,8 @@ export class DxfWriter {
     const q = pts.length === 3 ? [...pts, pts[2]] : pts;
     return this.raw('SOLID', [...this.props(p), [10, q[0][0]], [20, q[0][1]], [30, 0], [11, q[1][0]], [21, q[1][1]], [31, 0], [12, q[2][0]], [22, q[2][1]], [32, 0], [13, q[3][0]], [23, q[3][1]], [33, 0]], 'AcDbTrace');
   }
-  /** Polyline-boundary hatch. loops: [[[x,y,bulge?],...], ...] */
-  hatch(loops, { solid = false, pattern = 'ANSI31' } = {}, p = {}) {
+  /** Polyline-boundary hatch. loops: [[[x,y,bulge?],...], ...]; defs: pattern lines [[angle, baseX, baseY, offsetX, offsetY, [dashes]]] */
+  hatch(loops, { solid = false, pattern = 'ANSI31', defs = [[45, 0, 0, -0.088388, 0.088388, []]] } = {}, p = {}) {
     const g = [...this.props(p), [10, 0], [20, 0], [30, 0], [210, 0], [220, 0], [230, 1], [2, solid ? 'SOLID' : pattern], [70, solid ? 1 : 0], [71, 0], [91, loops.length]];
     for (const L of loops) {
       const hasB = L.some((v) => v[2]);
@@ -172,7 +173,10 @@ export class DxfWriter {
       g.push([97, 0]);
     }
     g.push([75, 1], [76, 1]);
-    if (!solid) g.push([52, 0], [41, 1], [77, 0], [78, 1], [53, 45], [43, 0], [44, 0], [45, -0.088388], [46, 0.088388], [79, 0]);
+    if (!solid) {
+      g.push([52, 0], [41, 1], [77, 0], [78, defs.length]);
+      for (const [a, bx, by, ox, oy, d] of defs) g.push([53, a], [43, bx], [44, by], [45, ox], [46, oy], [79, d.length], ...d.map((x) => [49, x]));
+    }
     g.push([98, 0]);
     return this.raw('HATCH', g, 'AcDbHatch');
   }

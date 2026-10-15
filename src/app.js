@@ -246,6 +246,10 @@ function drawAnnotations(ctx, view, opts = {}) {
       ctx.lineWidth = 1;
       ctx.setLineDash([5, 4]);
       ctx.strokeRect(b[0] - 3, b[1] - 3, b[2] - b[0] + 6, b[3] - b[1] + 6);
+      if (app.mh && app.tool === 'select') { // resize handles
+        ctx.setLineDash([]); ctx.fillStyle = opts.theme === 'paper' ? '#fff' : '#14181e';
+        for (const h of app.mh.markupHandles(sel)) { const [hx, hy] = toS(h.x, h.y); ctx.fillRect(hx - 4, hy - 4, 8, 8); ctx.strokeRect(hx - 4, hy - 4, 8, 8); }
+      }
       ctx.restore();
     }
     const d = draftMarkup();
@@ -781,6 +785,8 @@ function setTool(t) {
   restoreHint();
   edit.toolChanged(t);
   if (t === 'trace') trace('tool'); // (loads the tool and finds the wires before the first click)
+  cvOverlay.style.cursor = '';
+  if (t === 'select' && !app.mh) import('./markup/handles.js').then((m) => { app.mh = m; invalidate(); }); // resize handles
   if (app.tools) app.tools.toolChanged();
   updateMeasureCard();
   updateFinishBar();
@@ -920,6 +926,7 @@ function updateHover(sx, sy) {
 }
 
 function updateSelectionStatus() {
+  if (app.markupList) app.markupList.refresh();
   const m = app.markups.find((x) => x.id === app.selected);
   if (!m) { if (app.tool === 'select') $('#st-info').textContent = ''; return; }
   const when = new Date(m.modified || m.created).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -963,6 +970,9 @@ function toolDown(sx, sy, e) {
     return;
   }
   if (t === 'select') {
+    const cur = app.mh && app.markups.find((x) => x.id === app.selected);
+    const h = cur && app.mh.handleAt(cur, wx, wy, (e.pointerType === 'touch' ? 16 : 8) / app.view.scale);
+    if (h) { app.drag = { sx, sy, orig: cur, handle: h.id, moved: false }; return; }
     const m = hitMarkup(sx, sy, e.pointerType === 'touch' ? 14 : 7);
     app.selected = m ? m.id : null;
     app.drag = m ? { sx, sy, w0: [wx, wy], orig: m, moved: false } : null;
@@ -997,6 +1007,7 @@ function toolMove(sx, sy, e, pressed) {
   if (MEASURE_TOOLS.has(t)) { if (app.mdraft && app.mdraft.pts.length) updateMeasureCard(); invalidate(); return; }
   if (!pressed) {
     if (hovers(t)) updateHover(sx, sy);
+    if (t === 'select' && app.mh) { const cur = app.markups.find((x) => x.id === app.selected), [hx, hy] = screenToWorld(sx, sy), h = cur && app.mh.handleAt(cur, hx, hy, 8 / app.view.scale); cvOverlay.style.cursor = h ? h.cursor : ''; }
     if (app.draft && app.draft.type === 'cloud-poly') invalidate();
     invalidate();
     return;
@@ -1007,7 +1018,7 @@ function toolMove(sx, sy, e, pressed) {
     const g = app.drag;
     if (!g.moved && Math.hypot(sx - g.sx, sy - g.sy) < 3) return;
     if (!g.moved) { app.history.record(app.markups); g.moved = true; }
-    const moved = moveMarkup(g.orig, wx - g.w0[0], wy - g.w0[1]);
+    const moved = g.handle ? app.mh.resizeMarkup(g.orig, g.handle, wx, wy, { keepRatio: e.shiftKey, min: 4 / app.view.scale }) : moveMarkup(g.orig, wx - g.w0[0], wy - g.w0[1]);
     app.markups = app.markups.map((m) => (m.id === g.orig.id ? moved : m));
     invalidate();
     return;
@@ -1348,6 +1359,7 @@ function toggleSnap() {
   toast(app.snapOn ? 'Snap on' : 'Snap off', { timeout: 1200 });
 }
 function setLayersOpen(open) {
+  if (open && app.markupList && app.markupList.open && matchMedia('(max-width: 760px)').matches) app.markupList.hide(); // (one panel at a time on a phone)
   $('#layers-panel').hidden = !open;
   $('#btn-layers').setAttribute('aria-pressed', String(open));
 }
@@ -1374,6 +1386,18 @@ const actions = {
   'clear-measure': () => { app.measures = []; if (app.mdraft) app.mdraft.pts = []; updateMeasureCard(); updateFinishBar(); invalidate(); },
   undo, redo,
   'save-markup': () => { if (app.doc) saveMarkups(); else toast('Open a drawing first.', { kind: 'warn' }); },
+  'markup-list': async () => {
+    if (!app.markupList) {
+      const { initMarkupList } = await import('./app/markup-list.js');
+      app.markupList = app.markupList || initMarkupList(app, {
+        select: (id) => { if (app.tool !== 'select') setTool('select'); app.selected = id; updateSelectionStatus(); invalidate(); },
+        remove: (id) => { app.selected = id; deleteSelected(); },
+        narrow: () => matchMedia('(max-width: 760px)').matches,
+        hideLayers: () => { if (!$('#layers-panel').hidden) toggleLayers(); },
+      });
+    }
+    app.markupList.toggle();
+  },
   'load-markup': () => { if (app.doc) $('#markup-input').click(); else toast('Open the drawing first, then load its markups.', { kind: 'warn' }); },
   export: () => doExport(),
   print: () => openPrintDialog(),

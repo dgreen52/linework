@@ -6,7 +6,8 @@ import { buildNetGraphAsync, traceNet, pickWire, endText, netText, textQuad } fr
 import { addConic, addPoly } from '../view/renderer2d.js';
 import { KIND } from '../scene.js';
 import { fmtNum } from '../tools/measure.js';
-import { $, toast, esc } from './ui.js';
+import { buildNetlist, netlistCsv } from '../tools/nets.js';
+import { $, toast, esc, download } from './ui.js';
 
 const COL = { dark: '#ff4fd8', paper: '#c4007a' };
 const CSS = `.tools-stack { position: absolute; top: calc(var(--hint-bottom, 0px) + 8px); right: 8px; z-index: 7; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: calc(100% - 16px); max-height: calc(100% - var(--hint-bottom, 0px) - 16px); pointer-events: none; }
@@ -106,6 +107,20 @@ export function initTrace(app, api) {
       if (w < 0) { clear(); toast('The traced wire is gone', { key: 'trace', timeout: 3000 }); } else run(G, w);
     }, 250);
   }
+  /** Every net of the drawing on screen (with the panel's options and the visible layers): { nets, csv }; save: download it. */
+  async function netlist(save) {
+    const s = app.scene, G = s && (await graph());
+    if (!G || app.scene !== s) return null;
+    const nets = buildNetlist(s, G, { ...T.opt, isVisible: vis }), csv = netlistCsv(nets, { dec: app.precision });
+    if (save) {
+      if (!nets.length) toast('No nets to list', { key: 'trace', timeout: 3000, detail: 'Only stray single lines here: no labels, pins or junctions.' });
+      else {
+        download(new Blob([csv], { type: 'text/csv' }), String((app.doc && app.doc.name) || 'drawing').replace(/\.[^.]+$/, '') + '-netlist.csv');
+        toast(`Netlist: ${nets.length} net${nets.length === 1 ? '' : 's'}`, { key: 'trace', timeout: 3000 });
+      }
+    }
+    return { nets, csv };
+  }
   function clear() {
     Object.assign(T, { net: null, seed: null, paths: null, cur: -1 });
     clearTimeout(T.timer);
@@ -155,7 +170,7 @@ export function initTrace(app, api) {
   card.innerHTML = `<div class="mc-head"><span><i></i><span id="tr-title">Net</span></span>${btn('tr-close', '<svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>', 'Clear the trace (Esc)', 1)}</div>
     <div class="tr-sum" id="tr-sum" aria-live="polite"></div><div class="tr-chips" id="tr-labels"></div>
     <div class="tr-h"><span id="tr-nends"></span>${btn('tr-prev', '‹', 'Previous end', 1)}${btn('tr-next', '›', 'Next end', 1)}</div><ol class="tr-ends" id="tr-ends"></ol>
-    <div class="tr-acts">${btn('tr-zoom', 'Zoom to net', 'Zoom to the whole net')}${btn('tr-copy', 'Copy', 'Copy the net as text: length, labels, ends')}${btn('tr-sheets', 'Find on other sheets', 'Look for its label on the other sheets of the set')}</div>
+    <div class="tr-acts">${btn('tr-zoom', 'Zoom to net', 'Zoom to the whole net')}${btn('tr-copy', 'Copy', 'Copy the net as text: length, labels, ends')}${btn('tr-sheets', 'Find on other sheets', 'Look for its label on the other sheets of the set')}${btn('tr-list', 'Netlist (CSV)', 'Every net of this drawing as a from-to wire list, with the options below')}</div>
     <details><summary>Options</summary>
       <label title="Wires that cross without a junction dot are not connected in a schematic"><input type="checkbox" data-o="crossings"> Crossings connect</label>
       <label title="Go on through connectors and terminals: wires on the same pin text of a cell join"><input type="checkbox" data-o="throughPins"> Through pins</label>
@@ -199,7 +214,8 @@ export function initTrace(app, api) {
     else if (id === 'tr-copy') {
       navigator.clipboard.writeText(netText(net, { name: app.doc && app.doc.name, origin: app.scene.origin, dec: app.precision, abbr: app.scene.units.abbr, fmt: fmtNum }))
         .then(() => toast('Copied the net', { key: 'trace', timeout: 2000 }), () => toast('Copy is not available here.', { kind: 'warn' }));
-    } else if (id === 'tr-sheets') app.loadTools('find', { q: net.labels[0].s, wholeWord: true, all: true }); // Find in all sheets: the matches listed by sheet
+    } else if (id === 'tr-list') netlist(true);
+    else if (id === 'tr-sheets') app.loadTools('find', { q: net.labels[0].s, wholeWord: true, all: true }); // Find in all sheets: the matches listed by sheet
     else if (b.dataset.k) goEnd(+b.dataset.k);
     else if (b.dataset.l) { // a label: show (each copy in turn)
       const k = +b.dataset.l, l = net.labels[k];
@@ -223,8 +239,8 @@ export function initTrace(app, api) {
   app.hooks.history.push(() => { if ((T.G || T.building) && T.doc !== docSig()) again(); }); // (not for markups)
   return {
     // 'at' (sx, sy, pointer): the wire at a screen point; 'label' (k): the wire scene text k labels (-> the net or null);
-    // 'tool': the graph of the drawing (made once); 'clear'
-    run: (cmd, ...a) => (cmd === 'at' ? at(...a) : cmd === 'label' ? label(...a) : cmd === 'tool' ? app.scene && graph() : cmd === 'clear' && clear()),
+    // 'tool': the graph of the drawing (made once); 'netlist' (save): every net (-> { nets, csv }, downloaded when save); 'clear'
+    run: (cmd, ...a) => (cmd === 'at' ? at(...a) : cmd === 'label' ? label(...a) : cmd === 'tool' ? app.scene && graph() : cmd === 'netlist' ? netlist(...a) : cmd === 'clear' && clear()),
     clear,
     get net() { return T.net; },
     get cur() { return T.cur; },

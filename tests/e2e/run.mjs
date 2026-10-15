@@ -3257,6 +3257,16 @@ test('trace (View › Trace, J): a click lights up the net (pixel probes), panel
   await page.click('#tr-copy');
   const txt = (await clipText(page)).replace(/\r\n/g, '\n'); // (the system clipboard may use CRLF)
   assert(txt.startsWith('Net W9434 · dgn-trace.dgn\nLength 282.00 m · 5 wires · 26 segments\nEnds (2):\n  1. J4 · 1 (CONN) at X 34.00 Y 160.00'), txt);
+  // Netlist (CSV): every net of the sheet as a from-to wire list, downloaded; a host gets the same list from app.trace.run('netlist')
+  const [nl] = await Promise.all([page.waitForEvent('download'), page.click('#tr-list')]);
+  eq(nl.suggestedFilename(), 'dgn-trace-netlist.csv', 'netlist file name');
+  const nlPath = join(OUT, 'trace-netlist.csv');
+  await nl.saveAs(nlPath);
+  const nlCsv = readFileSync(nlPath, 'utf8'), nlRows = nlCsv.split('\r\n');
+  eq(nlRows[0], 'net,labels,from,to,length,wires,junctions', 'netlist header');
+  eq(nlRows[1], 'N1,W4100,TB2-1,TO SH 2,130,1,0', 'netlist: the first net (reading order)');
+  assert(nlRows.includes('N3,W9434,J4-1,P1-A,282,5,0'), 'netlist: the traced net is listed: ' + nlRows.join(' / '));
+  eq(await page.evaluate(async () => (await window.__linework.trace.run('netlist')).csv), nlCsv, 'a host gets the same netlist');
   // Esc clears (the net, the panel and the status line)
   eq(await page.textContent('#st-info'), 'Net W9434 · 282.00 m · 2 ends', 'the net in the status line');
   await page.keyboard.press('Escape');

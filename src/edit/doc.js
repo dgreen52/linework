@@ -1,7 +1,8 @@
 // Edit document: the model being edited, the change list behind undo/redo, dirty tracking, and
 // selection maths. A change is { i, before, after } (entity slot i; null = absent),
 // { layer: name, before, after } (layer record; null = absent) or { table: 'blocks' | 'ltypes' |
-// 'styles', key, before, after } (a definition added by a paste). Undo applies `before`, redo
+// 'styles', key, before, after } (a definition added by a paste, or a block edited in the block
+// editor: every item that draws it is drawn again). Undo applies `before`, redo
 // `after`, so the model is always a pure function of the history and undoing back to the start
 // restores the original objects (the DGN writer then keeps those elements byte for byte).
 import { replaceEntities, entityItems, entityBBox, makeLive } from './live-scene.js';
@@ -43,15 +44,21 @@ export class EditDoc {
 
   apply(entry, side) {
     const list = side === 'before' ? entry.changes.slice().reverse() : entry.changes;
-    const touched = new Set();
+    const touched = new Set(), redrawn = new Set();
     let layersChanged = false;
     for (const c of list) {
       const v = c[side];
       if (c.layer != null) { this.setLayer(c.layer, v); layersChanged = true; continue; }
-      if (c.table) { const t = this.model[c.table] || (this.model[c.table] = {}); if (v) t[c.key] = v; else delete t[c.key]; continue; }
+      if (c.table) {
+        const t = this.model[c.table] || (this.model[c.table] = {});
+        if (v) t[c.key] = v; else delete t[c.key];
+        if (c.table === 'blocks' && c.before && c.after) redrawn.add(String(c.key).toUpperCase());
+        continue;
+      }
       this.model.entities[c.i] = v;
       touched.add(c.i);
     }
+    if (redrawn.size) for (const i of usersOf(this.model, redrawn)) touched.add(i);
     // trailing empty slots can go (keeps "new entity" indices stable across undo/redo)
     const r = replaceEntities(this.scene, this.model, [...touched]);
     r.layersChanged = layersChanged || r.layersAdded;
@@ -85,6 +92,19 @@ export class EditDoc {
 
   items(i) { return entityItems(this.scene, i); }
   bbox(i) { return entityBBox(this.scene, i); }
+}
+
+/** Top-level items that draw any of the blocks `keys` (upper case), directly or inside other blocks. */
+export function usersOf(model, keys) {
+  const all = new Set(keys), by = new Map(); // block -> the blocks that insert it
+  for (const [K, b] of Object.entries(model.blocks || {})) {
+    for (const e of (b && b.entities) || []) if (e && e.block) { const R = String(e.block).toUpperCase(); if (!by.has(R)) by.set(R, []); by.get(R).push(K); }
+  }
+  const todo = [...all];
+  while (todo.length) for (const K of by.get(todo.pop()) || []) if (!all.has(K)) { all.add(K); todo.push(K); }
+  const out = [];
+  model.entities.forEach((e, i) => { if (e && e.block && all.has(String(e.block).toUpperCase())) out.push(i); });
+  return out;
 }
 
 // ------------------------------------------------------------------ selection maths

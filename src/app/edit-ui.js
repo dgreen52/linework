@@ -36,8 +36,6 @@ export const TOUCH_HINTS = {
   ecircle: 'Tap the centre, then a point on the circle',
   etext: 'Tap where the text goes, then type · tap elsewhere to finish',
 };
-const BLOCK_HINT = 'Blocks and cells move, rotate and delete as a whole · double-click a text inside one to edit it';
-const SHARED_HINT = 'This text is part of a block definition shared by every copy, so it can’t be edited here yet · attributes can';
 const DIM_HINT = 'Dimensions move, rotate and delete as a whole';
 const DXF_COLORS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 40, 140, 200, 250, 254];
 const COLOR_NAMES = { 1: 'Red', 2: 'Yellow', 3: 'Green', 4: 'Cyan', 5: 'Blue', 6: 'Magenta', 7: 'White/black', 8: 'Dark grey', 9: 'Light grey', 30: 'Orange' };
@@ -77,10 +75,10 @@ export function initEdit(app, api) {
     closeText(false); closeMenus(); hideLen();
     updateRibbon(); updateDirty();
   }
-  /** The model arrived from the worker: editing can start. */
-  function setModel(m, bytes) {
+  /** The model arrived from the worker: editing can start (doc: an edit document to go back to, src/app/block-edit.js). */
+  function setModel(m, bytes, doc) {
     if (!app.scene) return;
-    E.doc = new EditDoc(m, app.scene, { bytes });
+    E.doc = doc || new EditDoc(m, app.scene, { bytes });
     E.ready = true;
     loadClip().catch(() => {});
     if (!plug.hatch) import('../hatch.js').then((h) => { plug.hatch = h; }, () => {}); // (an edited pattern hatch keeps its lines)
@@ -89,8 +87,15 @@ export function initEdit(app, api) {
     fillLayers();
     updateRibbon();
     if (app.tools) app.tools.selChanged();
+    updateDirty();
     for (const w of E.waiters.splice(0)) w(true);
   }
+  /** Open the block editor (src/app/block-edit.js) on insert or cell i. */
+  function openBlock(i) { if (!app.ro()) import('./block-edit.js').then((m) => m.openBlock(app, self.x, i), () => {}); }
+  /** Unsaved edits: the drawing's, and the block's in the block editor. */
+  const anyDirty = () => !!(E.doc && E.doc.dirty) || !!(app.blockEdit && app.blockEdit.doc.dirty);
+  /** In the block editor: true (and a note) for what needs the drawing itself (saving). */
+  const inBlock = () => !!app.blockEdit && !!toast('Close the block editor first', { key: 'block', detail: 'Done keeps the changes to the block, Cancel drops them.' });
   function whenReady() {
     if (E.ready) return Promise.resolve(true);
     if (!app.scene) return Promise.resolve(false);
@@ -681,7 +686,8 @@ export function initEdit(app, api) {
       // which text inside: given (a path from the scene), or the one under the cursor
       const part = sub ? (sub[0] === '#' ? { shared: true } : { sub }) : sx != null ? partTextAt(i, sx, sy) : null;
       if (part && part.sub) { openText({ ent: i, sub: part.sub }); return; }
-      hint(part && part.shared ? SHARED_HINT : BLOCK_HINT, 4500);
+      openBlock(i); // the geometry, or a text of the block's definition: the block editor
+      return;
     } else if (canReshape(e) && e.type !== 'point') { E.vedit = i; hint(coarse() ? VEDIT_HINT_TOUCH : VEDIT_HINT); }
     else if (e.type === 'dimension') hint(DIM_HINT, 4000);
     else hint('This item can be moved, rotated, restyled or deleted, but not reshaped', 4000);
@@ -759,8 +765,10 @@ export function initEdit(app, api) {
     const pastes = E.clip ? [{ label: 'Paste here', act: () => { const c = pointAt(sx, sy); pasteNow(prep(E.clip), null, 'Paste', [c.x, c.y]); } }, { label: 'Paste in place', act: () => paste(null, true) }] : [];
     if (hit < 0) { if (pastes.length) openMenu(sx, sy, pastes); return !!pastes.length; }
     if (!E.sel.has(hit)) { E.sel = new Set([hit]); E.selPath = null; updateRibbon(); status(); }
+    const blk = ['insert', 'cell'].includes((entity(hit) || {}).type);
     openMenu(sx, sy, [
       { label: 'Edit…', act: () => editEntity(hit, sx, sy) },
+      ...(blk ? [{ label: 'Edit block…', act: () => openBlock(hit) }] : []),
       { label: 'Copy', act: copyButton },
       { label: 'Duplicate', act: duplicateSel },
       { label: 'Rotate 90°', act: () => rotateSel(Math.PI / 2) },
@@ -1446,7 +1454,7 @@ export function initEdit(app, api) {
 
   // ---------------------------------------------------------------- dirty state + saving
   function updateDirty() {
-    const d = !!(E.doc && E.doc.dirty);
+    const d = anyDirty();
     const el = $('#doc-dirty');
     if (el) el.hidden = !d;
     document.title = (d ? '• ' : '') + document.title.replace(/^• /, '');
@@ -1493,7 +1501,7 @@ export function initEdit(app, api) {
    * resolves true when it did; it reports its own result.
    */
   async function save(f, name, target) {
-    if (!(await whenReady())) return false;
+    if (inBlock() || !(await whenReady())) return false;
     f = f || srcFormat();
     name = name || defaultName(f);
     let blob, notes;
@@ -1527,13 +1535,13 @@ export function initEdit(app, api) {
   }
   /** Save in the drawing's own format (over the original file when it allows that, see files.js); asks first when some original items would be lost. */
   function quickSave() {
-    if (!app.scene || app.ro()) return;
+    if (!app.scene || app.ro() || inBlock()) return;
     if (lostCount(srcFormat())) { openSaveAs(); return; }
     if (app.files && app.files.quickSave(srcFormat())) return;
     save(srcFormat());
   }
   function openSaveAs() {
-    if (!app.scene || app.ro()) return;
+    if (!app.scene || app.ro() || inBlock()) return;
     const dlg = $('#dlg-save'), form = $('#save-form');
     const f0 = srcFormat();
     for (const r of form.querySelectorAll('input[name="fmt"]')) r.checked = r.value === f0;
@@ -1594,7 +1602,7 @@ export function initEdit(app, api) {
     if (e.button === 2 && e.target.id === 'cv-overlay') return;
     if (!e.target.closest('#color-pop, #btn-ecolor, #btn-eweight, #ctx-menu')) closeMenus();
   });
-  window.addEventListener('beforeunload', (e) => { if (E.doc && E.doc.dirty) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', (e) => { if (anyDirty()) { e.preventDefault(); e.returnValue = ''; } });
 
   // clipboard events (app.js): Ctrl+C -> copy event; Ctrl+V / Ctrl+Shift+V -> keydown, then the paste event
   let pk = null;
@@ -1612,14 +1620,14 @@ export function initEdit(app, api) {
     loadClip().then(() => paste(CB.parseClip(t), inPlace));
   }
 
-  return {
-    reset, setModel, revert, reapply, drawOverlay, down, move, up, dbl, context, key, toolChanged, cancelGesture, visibilityChanged,
+  const self = {
+    reset, setModel, revert, reapply, drawOverlay, openBlock, down, move, up, dbl, context, key, toolChanged, cancelGesture, visibilityChanged,
     finishDraft, undoDraftPoint, cancelDraft, deleteSel, rotateSel, selectAll, quickSave, openSaveAs, save, editEntity,
     commit: (label, changes) => commit(label, changes, []), // one undo step (restoring unsaved edits)
     copy: copySel, copyButton, paste, pasteKey, pasteText, duplicate: duplicateSel,
     get placing() { return !!E.place; },
     get draftActive() { return !!(E.place || (E.draft && (E.draft.tool === 'epoly' || E.draft.tool === 'eline') && E.draft.pts.length)); },
-    get dirty() { return !!(E.doc && E.doc.dirty); },
+    get dirty() { return anyDirty(); },
     get ready() { return E.ready; },
     status,
     refreshLayers: () => { if (E.ready) { fillLayers(); updateRibbon(); } status(); },
@@ -1628,6 +1636,8 @@ export function initEdit(app, api) {
     x: {
       entity, commit, pointAt, pickEnt, extOf, selCentre, dupPrep, pasteNow, newIdx, fmt, isDgn, hint, keyPoint, lastPoint,
       startPick, endPick, setSel, visibleEnts, openMenu, model, placeLen, selPath: () => (E.sel.size ? selPath() : []),
+      doc: () => E.doc, reset, setModel, updateDirty, api, status, layer: (n) => { E.curLayer = n; fillLayers(); updateRibbon(); },
     },
   };
+  return self;
 }

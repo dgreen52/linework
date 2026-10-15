@@ -855,7 +855,7 @@ test('edit: double-click text to type over it (TEXT and MTEXT); hint outside Edi
   await close(page);
 });
 
-test('edit: reshape with handles — drag, add (double-click a side), delete (right-click); circle radius; block hint', async () => {
+test('edit: reshape with handles — drag, add (double-click a side), delete (right-click); circle radius; a block opens the block editor', async () => {
   const page = await newPage();
   await openForEdit(page, 'house-plan.dxf');
   await page.evaluate(() => { document.querySelector('#layers-panel').hidden = true; });
@@ -908,12 +908,16 @@ test('edit: reshape with handles — drag, add (double-click a side), delete (ri
   await dragWorld(page, [2700, 1700], [2900, 1800]);
   const C2 = await ED.ent(page, 34);
   assert(nearPt(C2.c, [2900, 1800], 2 / s) && Math.abs(C2.r - C1.r) < 1e-9, 'centre handle moves the circle');
-  // blocks: a part that is not text gets the hint
+  // blocks: a part that is not text opens the block editor (and Cancel without changes leaves at once)
   await page.keyboard.press('Escape');
   await page.keyboard.press('f');
   const door = await page.evaluate(() => { const a = window.__linework, s = a.scene, it = a.edit.doc.items(16); const p = it.prims[0], o = s.start[p] * 2; return [s.coords[o] + s.origin[0], s.coords[o + 1] + s.origin[1]]; });
   await page.mouse.dblclick(...(await client(page, ...door)));
-  await page.waitForFunction(() => /double-click a text inside one to edit it/.test(document.querySelector('#tool-hint').textContent));
+  await page.waitForFunction(() => !!window.__linework.blockEdit);
+  eq(await page.evaluate(() => window.__linework.blockEdit.name), 'DOOR', 'the block of the door');
+  await page.click('#block-bar [data-act="cancel"]');
+  await page.waitForFunction(() => !window.__linework.blockEdit);
+  eq((await ED.ent(page, 16)).block, 'DOOR', 'back on the drawing, nothing changed');
   await close(page);
 });
 
@@ -1237,8 +1241,12 @@ test('edit: DGN drawing — cells move as one, colours come from the file colour
   assert(c3.children.every((k) => k.ci === 3), 'components recoloured with table entry 3');
   const on = await page.evaluate((k) => { const a = window.__linework, s = a.scene, it = a.edit.doc.items(k); const p = it.prims[0], o = s.start[p] * 2; return [s.coords[o] + s.origin[0], s.coords[o + 1] + s.origin[1]]; }, cell.i);
   await page.mouse.dblclick(...(await client(page, ...on)));
-  await page.waitForFunction(() => /double-click a text inside one to edit it/.test(document.querySelector('#tool-hint').textContent));
+  await page.waitForFunction(() => !!window.__linework.blockEdit);
+  eq(JSON.stringify(await page.evaluate(() => { const B = window.__linework.blockEdit; return [B.cell, B.name, window.__linework.edit.doc.model.entities.length === B.before.children.length]; })), '[true,"NORTH",true]', 'a component opens the cell editor on its parts');
+  await clearToasts(page);
   await shot(page, 'edit-dgn-cell-dark-1440');
+  await page.click('#block-bar [data-act="cancel"]');
+  await page.waitForFunction(() => !window.__linework.blockEdit);
   await close(page);
 });
 
@@ -1273,9 +1281,12 @@ test('edit: double-click a text inside a cell (DGN title block) or a block attri
   eq((await ED.ent(page, ci)).children[3].text, 'SHEET 2 OF 2', 'undo keeps the earlier edit');
   await page.keyboard.press('Control+y');
   eq((await ED.ent(page, ci)).children[5].children[1].text, 'APPROVED', 'redo');
-  // the frame is not text: the cell still moves as a whole
+  // the frame is not text: it opens the cell editor (Cancel: nothing changed)
   await page.mouse.dblclick(...(await client(page, 60, 2)));
-  await page.waitForFunction(() => /double-click a text inside one to edit it/.test(document.querySelector('#tool-hint').textContent));
+  await page.waitForFunction(() => window.__linework.blockEdit && window.__linework.blockEdit.name === 'TITLE');
+  await page.click('#block-bar [data-act="cancel"]');
+  await page.waitForFunction(() => !window.__linework.blockEdit);
+  eq((await ED.ent(page, ci)).children[5].children[1].text, 'APPROVED', 'the cell as it was');
   // Save (same format) and reopen
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-esave')]);
   const out = join(OUT, 'titleblock-edited.dgn');
@@ -1296,7 +1307,7 @@ test('edit: double-click a text inside a cell (DGN title block) or a block attri
   await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ta-edit');
   eq(await page.inputValue('#ta-edit'), 'DRAWING TITLE', 'View-mode hint opens that field');
   await page.keyboard.press('Escape');
-  // DXF: an attribute of one insert is editable; text from the block definition is shared, so it explains
+  // DXF: an attribute of one insert is retyped in place; text of the block definition (shared) in the block editor
   await openForEdit(page, 'bracket.dxf');
   const at = await page.evaluate(() => {
     const a = window.__linework, s = a.scene, [ox, oy] = s.origin;
@@ -1304,7 +1315,7 @@ test('edit: double-click a text inside a cell (DGN title block) or a block attri
     const attr = s.texts.find((t) => !t.dead && /^a\d+$/.test(t.sub || '') && t.s.trim());
     const ents = a.edit.doc.model.entities;
     const shared = s.texts.find((t) => !t.dead && (t.sub || '')[0] === '#' && t.s.trim() && ents[t.ent] && ents[t.ent].type === 'insert');
-    return { attr: attr && { s: attr.s, ent: attr.ent, k: Number(attr.sub.slice(1)), at: c(attr) }, shared: shared && { at: c(shared), b: shared.bbox } };
+    return { attr: attr && { s: attr.s, ent: attr.ent, k: Number(attr.sub.slice(1)), at: c(attr) }, shared: shared && { s: shared.s, at: c(shared), b: shared.bbox } };
   });
   assert(at.attr && at.shared, 'bracket has an attribute and block text');
   await zoomTo(page, at.attr.at[0] - 400, at.attr.at[1] - 250, at.attr.at[0] + 400, at.attr.at[1] + 250);
@@ -1314,7 +1325,12 @@ test('edit: double-click a text inside a cell (DGN title block) or a block attri
   const sw = at.shared.b[2] - at.shared.b[0];
   await zoomTo(page, at.shared.at[0] - sw * 3, at.shared.at[1] - sw * 2, at.shared.at[0] + sw * 3, at.shared.at[1] + sw * 2);
   await page.mouse.dblclick(...(await client(page, ...at.shared.at)));
-  await page.waitForFunction(() => /shared by every copy/.test(document.querySelector('#tool-hint').textContent));
+  await page.waitForFunction(() => !!window.__linework.blockEdit);
+  await typeOver(at.shared.s, 'SHARED TEXT EDITED');
+  await page.click('#block-bar [data-act="done"]');
+  await page.waitForFunction(() => !window.__linework.blockEdit);
+  assert(await page.evaluate(() => window.__linework.scene.texts.some((t) => !t.dead && t.s === 'SHARED TEXT EDITED')), 'the block text changed in the drawing');
+  eq((await ED.ent(page, at.attr.ent)).attribs[at.attr.k].text, 'EDITED ATTRIBUTE', 'the attribute edit is kept');
   await close(page);
 });
 
@@ -3634,6 +3650,91 @@ test('PDF under a CSP without wasm-unsafe-eval: the parse worker\'s refused WebA
   assert(info.layers.includes('Lines (red)'), 'the spot colour line is still red');
   await page.ctx.close();
   page.srv.close();
+});
+
+test('block editor: double-click a block, edit its definition on its own, Done: every copy changes in one undo step; Cancel; guards; 390 px', async () => {
+  const page = await newPage();
+  await openForEdit(page, 'house-plan.dxf');
+  await setSnap(page, false);
+  const doors = () => page.evaluate(() => { const a = window.__linework, s = a.scene, m = a.edit.doc.model, out = []; m.entities.forEach((e, i) => { if (e && e.type === 'insert' && e.block === 'DOOR') { let n = 0; const ov = s.override && s.override.get(i); if (ov) n = ov.prims.filter((p) => !s.dead[p]).length; else for (let k = s.entPrim[i]; k < s.entPrim[i + 1]; k++) n++; out.push(n); } }); return out.join(','); });
+  eq(await doors(), '2,2,2,2,2,2,2', 'seven doors: a leaf and a swing each');
+  // the first door's swing (the insert at 3900,4100, not turned): double-click it
+  await zoomTo(page, 3600, 3800, 5400, 5300);
+  await page.mouse.dblclick(...(await client(page, 3900 + 900 * Math.SQRT1_2, 4100 + 900 * Math.SQRT1_2)));
+  await page.waitForFunction(() => !!window.__linework.blockEdit && !!document.querySelector('#block-bar'));
+  eq(await page.textContent('#block-bar b'), 'DOOR', 'the bar names the block');
+  eq(await page.$$eval('#block-bar button', (b) => b.map((x) => x.textContent).join(',')), 'Done,Cancel');
+  eq(await page.evaluate(() => window.__linework.scene.n), 2, 'the door on its own');
+  assert(/Editing block DOOR/.test(await page.textContent('#toasts')), 'a note says what is being edited');
+  const ext = await page.evaluate(() => { const s = window.__linework.scene, [ox, oy] = s.origin; return s.extents.map((v, k) => Math.round(v + (k % 2 ? oy : ox))).join(','); });
+  eq(ext, '0,0,900,900', 'in its own coordinates');
+  await clearToasts(page);
+  await shot(page, 'block-editor-dark-1440');
+  // a line across the door (block coordinates), undo / redo inside the editor
+  await page.click('[data-tool="eline"]');
+  await clickWorld(page, 0, 450);
+  await clickWorld(page, 900, 450);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.__linework.edit.doc.model.entities.filter(Boolean).length === 3);
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => window.__linework.edit.doc.model.entities.filter(Boolean).length === 2);
+  await page.keyboard.press('Control+y');
+  await page.waitForFunction(() => window.__linework.edit.doc.model.entities.filter(Boolean).length === 3);
+  assert(await page.isVisible('#doc-dirty'), 'unsaved changes are shown');
+  // guards: saving, opening another drawing, markups wait for Done or Cancel
+  await page.keyboard.press('Control+s');
+  await page.waitForSelector('#toasts [data-key="block"]');
+  assert(/Close the block editor first/.test(await page.textContent('#toasts [data-key="block"]')), 'Save waits');
+  await clearToasts(page);
+  await page.evaluate(() => window.__linework.openSample('samples/bracket.dxf'));
+  await settle(page);
+  assert(await page.evaluate(() => !!window.__linework.blockEdit && window.__linework.doc.name === 'house-plan.dxf'), 'another drawing does not replace the block editor');
+  await page.click('#tab-markup'); await page.click('[data-tool="rect"]');
+  assert(await page.evaluate(() => window.__linework.tool !== 'rect'), 'no markups on a block');
+  await page.click('#tab-edit');
+  await clearToasts(page);
+  // Done: one undo step of the drawing; every door has the line
+  await page.click('#block-bar [data-act="done"]');
+  await page.waitForFunction(() => !window.__linework.blockEdit && !document.querySelector('#block-bar'));
+  eq(await doors(), '3,3,3,3,3,3,3', 'every door has the line');
+  eq(await page.evaluate(() => window.__linework.edit.doc.model.blocks.DOOR.entities.length), 3);
+  eq(await page.evaluate(() => window.__linework.history.undoStack.map((e) => e.label).join('|')), 'Edit block DOOR', 'the editor\'s steps are one step of the drawing');
+  eq(await page.evaluate(() => [...window.__linework.edit.sel].length), 1, 'the door stays selected');
+  await zoomTo(page, 3600, 3800, 5400, 5300);
+  await clearToasts(page);
+  await shot(page, 'block-edited-dark-1440');
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => window.__linework.edit.doc.model.blocks.DOOR.entities.length === 2);
+  eq(await doors(), '2,2,2,2,2,2,2', 'undo: the doors as they were');
+  await page.keyboard.press('Control+y');
+  await page.waitForFunction(() => window.__linework.edit.doc.model.blocks.DOOR.entities.length === 3);
+  // Cancel (right-click › Edit block…): asks, then leaves the drawing as it was
+  const [cx, cy] = await client(page, 3900 + 900 * Math.SQRT1_2, 4100 + 900 * Math.SQRT1_2);
+  await page.mouse.click(cx, cy, { button: 'right' });
+  await page.click('#ctx-menu >> text=Edit block…');
+  await page.waitForFunction(() => !!window.__linework.blockEdit);
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(() => window.__linework.edit.doc.model.entities.filter(Boolean).length === 0);
+  const asked = [];
+  page.once('dialog', (d) => { asked.push(d.message()); d.accept(); });
+  await page.click('#block-bar [data-act="cancel"]');
+  await page.waitForFunction(() => !window.__linework.blockEdit);
+  assert(/Drop the changes to block DOOR/.test(asked[0] || ''), 'Cancel asks first: ' + asked);
+  eq(await doors(), '3,3,3,3,3,3,3', 'Cancel: nothing changed');
+  eq(await page.evaluate(() => window.__linework.history.undoStack.length), 1, 'and nothing added to the history');
+  await close(page);
+  // 390 px: the bar fits
+  const phone = await newPage({ context: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true } });
+  await openForEdit(phone, 'house-plan.dxf');
+  await zoomTo(phone, 3600, 3800, 5400, 5300);
+  await phone.mouse.dblclick(...(await client(phone, 3900 + 900 * Math.SQRT1_2, 4100 + 900 * Math.SQRT1_2)));
+  await phone.waitForFunction(() => !!document.querySelector('#block-bar'));
+  await clearToasts(phone);
+  const bb = await phone.evaluate(() => { const b = document.querySelector('#block-bar').getBoundingClientRect(); return [b.left, b.right, b.top, innerWidth]; });
+  assert(bb[0] >= 0 && bb[1] <= bb[3], 'the bar fits at 390 px: ' + bb);
+  await shot(phone, 'block-editor-dark-390');
+  await close(phone);
 });
 
 test('line types at their true size and hatch patterns as lines: dashes in drawing units, solid when too small to see, pattern lines that move with their hatch', async () => {

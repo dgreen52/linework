@@ -6,7 +6,8 @@ import { buildNetGraphAsync, traceNet, pickWire, endText, netText, textQuad } fr
 import { addConic, addPoly } from '../view/renderer2d.js';
 import { KIND } from '../scene.js';
 import { fmtNum } from '../tools/measure.js';
-import { $, toast, esc } from './ui.js';
+import { buildNetlist, netlistCsv } from '../tools/nets.js';
+import { $, toast, esc, download } from './ui.js';
 
 const COL = { dark: '#ff4fd8', paper: '#c4007a' };
 const CSS = `.tools-stack { position: absolute; top: calc(var(--hint-bottom, 0px) + 8px); right: 8px; z-index: 7; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: calc(100% - 16px); max-height: calc(100% - var(--hint-bottom, 0px) - 16px); pointer-events: none; }
@@ -40,7 +41,7 @@ export function initTrace(app, api) {
   const visSig = () => (app.layerVisible ? app.layerVisible.join('') : '');
   const docSig = () => (app.edit && app.edit.doc ? app.edit.doc.cur : 0); // changes with every edit, undo and redo
   // G: the graph of `scene` (made for edit state `doc`); net: the traced net; seed: the clicked point (drawing coordinates)
-  const T = { G: null, scene: null, doc: 0, building: null, gen: 0, net: null, seed: null, cur: -1, vis: '', opt: { crossings: false, throughPins: false, dim: true }, tol: 0, paths: null, timer: 0 };
+  const T = { G: null, scene: null, doc: 0, building: null, gen: 0, net: null, seed: null, cur: -1, vis: '', opt: { crossings: false, throughPins: false, dim: true }, tol: 0, paths: null, timer: 0, info: '' };
   const st = (app.traceStats = { buildMs: 0, traceMs: 0 });
 
   /** The graph of the drawing on screen (null when the drawing changed while it was being made). */
@@ -75,6 +76,26 @@ export function initTrace(app, api) {
     st.traceMs = net.ms;
     render(); dim(); api.invalidate();
   }
+  /** Trace the wire that scene text k labels (its nearest wire, as the net's labels are found): the net, or null when no wire is next to it. */
+  async function label(k) {
+    const s = app.scene, t = s && s.texts[k];
+    if (!t || t.dead) return null;
+    const G = await graph(), w = G && app.scene === s ? G.textWire[k] : -1;
+    if (w < 0 || !vis(s.layer[w])) return null;
+    // the seed: the point of that wire nearest the text (an edit traces again from there)
+    const cx = (t.bbox[0] + t.bbox[2]) / 2, cy = (t.bbox[1] + t.bbox[3]) / 2, S = G.seg, [ox, oy] = s.origin;
+    let px = cx, py = cy, bd = Infinity;
+    for (let j = 0; j < G.caps; j++) {
+      if (G.capPrim[j] !== w) continue;
+      const ax = S[4 * j], ay = S[4 * j + 1], dx = S[4 * j + 2] - ax, dy = S[4 * j + 3] - ay, L2 = dx * dx + dy * dy;
+      const u = L2 ? Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / L2)) : 0, x = ax + u * dx, y = ay + u * dy, d = Math.hypot(x - cx, y - cy);
+      if (d < bd) { bd = d; px = x; py = y; }
+    }
+    T.seed = { x: px + ox, y: py + oy, w };
+    T.cur = -1;
+    run(G, w);
+    return T.net;
+  }
   /** The drawing changed (or the gap): build again, then trace from the same point if a wire is still there. */
   function again() {
     T.G = null; T.building = null; T.gen++;
@@ -86,10 +107,26 @@ export function initTrace(app, api) {
       if (w < 0) { clear(); toast('The traced wire is gone', { key: 'trace', timeout: 3000 }); } else run(G, w);
     }, 250);
   }
+  /** Every net of the drawing on screen (with the panel's options and the visible layers): { nets, csv }; save: download it. */
+  async function netlist(save) {
+    const s = app.scene, G = s && (await graph());
+    if (!G || app.scene !== s) return null;
+    const nets = buildNetlist(s, G, { ...T.opt, isVisible: vis }), csv = netlistCsv(nets, { dec: app.precision });
+    if (save) {
+      if (!nets.length) toast('No nets to list', { key: 'trace', timeout: 3000, detail: 'Only stray single lines here: no labels, pins or junctions.' });
+      else {
+        download(new Blob([csv], { type: 'text/csv' }), String((app.doc && app.doc.name) || 'drawing').replace(/\.[^.]+$/, '') + '-netlist.csv');
+        toast(`Netlist: ${nets.length} net${nets.length === 1 ? '' : 's'}`, { key: 'trace', timeout: 3000 });
+      }
+    }
+    return { nets, csv };
+  }
   function clear() {
     Object.assign(T, { net: null, seed: null, paths: null, cur: -1 });
     clearTimeout(T.timer);
     card.hidden = true;
+    if (T.info && $('#st-info').textContent === T.info) $('#st-info').textContent = ''; // (only the trace's own line)
+    T.info = '';
     dim(); api.invalidate();
   }
   function dim() { if (!app.compare) $('#cv-drawing').style.opacity = T.net && T.opt.dim ? '0.35' : ''; } // (compare dims it itself)
@@ -133,7 +170,7 @@ export function initTrace(app, api) {
   card.innerHTML = `<div class="mc-head"><span><i></i><span id="tr-title">Net</span></span>${btn('tr-close', '<svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>', 'Clear the trace (Esc)', 1)}</div>
     <div class="tr-sum" id="tr-sum" aria-live="polite"></div><div class="tr-chips" id="tr-labels"></div>
     <div class="tr-h"><span id="tr-nends"></span>${btn('tr-prev', '‹', 'Previous end', 1)}${btn('tr-next', '›', 'Next end', 1)}</div><ol class="tr-ends" id="tr-ends"></ol>
-    <div class="tr-acts">${btn('tr-zoom', 'Zoom to net', 'Zoom to the whole net')}${btn('tr-copy', 'Copy', 'Copy the net as text: length, labels, ends')}${btn('tr-sheets', 'Find on other sheets', 'Look for its label on the other sheets of the set')}</div>
+    <div class="tr-acts">${btn('tr-zoom', 'Zoom to net', 'Zoom to the whole net')}${btn('tr-copy', 'Copy', 'Copy the net as text: length, labels, ends')}${btn('tr-sheets', 'Find on other sheets', 'Look for its label on the other sheets of the set')}${btn('tr-list', 'Netlist (CSV)', 'Every net of this drawing as a from-to wire list, with the options below')}</div>
     <details><summary>Options</summary>
       <label title="Wires that cross without a junction dot are not connected in a schematic"><input type="checkbox" data-o="crossings"> Crossings connect</label>
       <label title="Go on through connectors and terminals: wires on the same pin text of a cell join"><input type="checkbox" data-o="throughPins"> Through pins</label>
@@ -153,7 +190,7 @@ export function initTrace(app, api) {
     q('#tr-sheets').hidden = !(app.sheets && app.sheets.active && net.labels.length); // (a sheet set is open)
     if (document.activeElement !== q('#tr-tol')) q('#tr-tol').value = fmtNum(T.G ? T.G.tol : T.tol, 6).replace(/\.?0+$/, '');
     q('#tr-unit').textContent = s.units.abbr || '';
-    $('#st-info').textContent = `Net${net.labels.length ? ' ' + net.labels[0].s : ''} · ${fmtNum(net.length, app.precision)}${u} · ${pl(net.ends.length, 'end')}`;
+    $('#st-info').textContent = T.info = `Net${net.labels.length ? ' ' + net.labels[0].s : ''} · ${fmtNum(net.length, app.precision)}${u} · ${pl(net.ends.length, 'end')}`;
   }
   const zoomBox = (b, p) => { const [ox, oy] = app.scene.origin; app.zoomToWorld(b[0] - p + ox, b[1] - p + oy, b[2] + p + ox, b[3] + p + oy); };
   function goEnd(k) {
@@ -177,7 +214,8 @@ export function initTrace(app, api) {
     else if (id === 'tr-copy') {
       navigator.clipboard.writeText(netText(net, { name: app.doc && app.doc.name, origin: app.scene.origin, dec: app.precision, abbr: app.scene.units.abbr, fmt: fmtNum }))
         .then(() => toast('Copied the net', { key: 'trace', timeout: 2000 }), () => toast('Copy is not available here.', { kind: 'warn' }));
-    } else if (id === 'tr-sheets') app.loadTools('find', { q: net.labels[0].s, wholeWord: true, all: true }); // Find in all sheets: the matches listed by sheet
+    } else if (id === 'tr-list') netlist(true);
+    else if (id === 'tr-sheets') app.loadTools('find', { q: net.labels[0].s, wholeWord: true, all: true }); // Find in all sheets: the matches listed by sheet
     else if (b.dataset.k) goEnd(+b.dataset.k);
     else if (b.dataset.l) { // a label: show (each copy in turn)
       const k = +b.dataset.l, l = net.labels[k];
@@ -200,7 +238,9 @@ export function initTrace(app, api) {
   app.hooks.open.push(() => { clear(); T.G = null; T.building = null; T.gen++; T.tol = 0; });
   app.hooks.history.push(() => { if ((T.G || T.building) && T.doc !== docSig()) again(); }); // (not for markups)
   return {
-    run: (cmd, ...a) => (cmd === 'at' ? at(...a) : cmd === 'tool' ? app.scene && graph() : cmd === 'clear' && clear()),
+    // 'at' (sx, sy, pointer): the wire at a screen point; 'label' (k): the wire scene text k labels (-> the net or null);
+    // 'tool': the graph of the drawing (made once); 'netlist' (save): every net (-> { nets, csv }, downloaded when save); 'clear'
+    run: (cmd, ...a) => (cmd === 'at' ? at(...a) : cmd === 'label' ? label(...a) : cmd === 'tool' ? app.scene && graph() : cmd === 'netlist' ? netlist(...a) : cmd === 'clear' && clear()),
     clear,
     get net() { return T.net; },
     get cur() { return T.cur; },

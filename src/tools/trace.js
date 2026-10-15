@@ -4,7 +4,7 @@
 // plain crossing does not (the schematic convention; `crossings` joins them). A wire end on a cell
 // (connector, terminal strip) ends the net there, reported with the cell's nearest text (the pin); texts
 // next to the net's wires are its labels. Scene-local coordinates throughout.
-import { KIND, FLAG, CHAR_W, TEXT_ID, queryRect } from '../scene.js';
+import { KIND, FLAG, CHAR_W } from '../scene.js';
 import { entityItems } from '../edit/live-scene.js';
 import { pickItem } from './snap.js';
 
@@ -348,17 +348,37 @@ function pinOf(G, r) {
   R.pin.set(r, v);
   return v;
 }
-/** The text nearest to (x, y) within `within` that is not a label of the net (`seen`), or ''. */
-function textNear(G, x, y, within, seen) {
-  const S = G.scene;
-  let best = '', bd = within;
-  queryRect(S, x - within, y - within, x + within, y + within, (id) => {
-    const t = S.texts[id - TEXT_ID], w = G.textWire[id - TEXT_ID];
-    if (id < TEXT_ID || t.dead || !t.s.trim() || (w >= 0 && seen[w])) return;
+/** A hash of the drawing's texts (their boxes), made once per graph: for the texts by open ends and symbols. */
+function textHash(G) {
+  if (G.textHash) return G.textHash;
+  const T = G.scene.texts, live = [], b = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let t = 0; t < T.length; t++) {
+    if (T[t].dead || !T[t].s.trim()) continue;
+    const q = T[t].bbox;
+    live.push(t);
+    b[0] = Math.min(b[0], q[0]); b[1] = Math.min(b[1], q[1]); b[2] = Math.max(b[2], q[2]); b[3] = Math.max(b[3], q[3]);
+  }
+  if (!live.length) b.splice(0, 4, 0, 0, 1, 1);
+  const cs = Math.max(G.H || G.tol, Math.sqrt(((b[2] - b[0]) * (b[3] - b[1])) / Math.min(1 << 18, Math.max(16, 2 * live.length))), 1e-12);
+  const h = new Hash(b, cs);
+  for (let pass = 0; pass < 2; pass++) {
+    if (pass) h.fill();
+    for (const t of live) { const q = T[t].bbox; h.add(t, q[0], q[1], q[2], q[3]); }
+  }
+  h.done(T.length);
+  return (G.textHash = h);
+}
+/** The text nearest to (x, y) within `within` (the first one on a tie) that is not a label of the net (its wires: G.mark === id), or ''. */
+function textNear(G, x, y, within, id) {
+  const T = G.scene.texts, th = textHash(G), x0 = x - within, y0 = y - within, x1 = x + within, y1 = y + within, nh = th.near(x0, y0, x1, y1);
+  let best = -1, bd = within;
+  for (let h = 0; h < nh; h++) {
+    const k = th.hits[h], t = T[k], b = t.bbox, w = G.textWire[k];
+    if (b[0] > x1 || b[2] < x0 || b[1] > y1 || b[3] < y0 || (w >= 0 && G.mark[w] === id)) continue;
     const d = quadDist(textQuad(t), x, y, x, y);
-    if (d <= bd) { bd = d; best = t.s.trim(); }
-  });
-  return best;
+    if (d < bd || (d === bd && k < best)) { bd = d; best = k; }
+  }
+  return best >= 0 ? T[best].s.trim() : '';
 }
 function arcLength(K, k) {
   const ru = Math.hypot(K[k + 2], K[k + 3]), rv = Math.hypot(K[k + 4], K[k + 5]), t0 = K[k + 6], t1 = K[k + 7];
@@ -368,16 +388,26 @@ function arcLength(K, k) {
   return L;
 }
 
-/**
- * The net through wire (or dot) `seed`. opts: { crossings, throughPins (wires on the same pin text of the
- * same cell join), isVisible(layer) }. Returns { wires, dots, parts (prim ids), count (wires as drawn),
- * junctions, length, segments, labels: [{ s, texts }], ends: [{ kind: 'cell'|'shape'|'open', x, y, name,
- * pin, ref, label, ent, part }], bbox, ms }.
- */
-export function traceNet(G, seed, opts = {}) {
-  const t0 = performance.now(), S = G.scene, vis = opts.isVisible || (() => true), R = G.rec, at = (x, y) => Math.round(x / G.tol) + ',' + Math.round(y / G.tol);
-  const seen = new Uint8Array(G.n), q = [], wires = [], dots = [], recs = [], cross = opts.crossings ? crossAdj(G) : null, pins = new Set();
-  const visit = (v) => { if (v >= 0 && !seen[v] && G.role[v] && vis(S.layer[v])) { seen[v] = 1; q.push(v); } };
+/** Marks of the walks on a graph: G.mark[p] === id for the primitives of walk `id` (one array per graph, none per trace). */
+function marks(G, walks = 1) {
+  if (!G.mark || G.markId > 0x7ffffff0 - walks) { G.mark = new Int32Array(G.n); G.markId = 0; }
+  return G.mark;
+}
+/** The texts next to each wire (from G.textWire, made once per graph): wire p's are list[start[p]] .. list[start[p + 1] - 1], in text order. */
+function wireTexts(G) {
+  if (G.wireTexts) return G.wireTexts;
+  const tw = G.textWire, start = new Uint32Array(G.n + 1);
+  for (let t = 0; t < tw.length; t++) if (tw[t] >= 0) start[tw[t] + 1]++;
+  for (let i = 1; i <= G.n; i++) start[i] += start[i - 1];
+  const f = start.slice(0, G.n), list = new Int32Array(start[G.n]);
+  for (let t = 0; t < tw.length; t++) if (tw[t] >= 0) list[f[tw[t]]++] = t;
+  return (G.wireTexts = { start, list });
+}
+/** Walk the net through `seed`, marking its primitives with `id`: { wires, dots, recs (its wire end records) }. */
+function walk(G, seed, opts, id) {
+  const S = G.scene, vis = opts.isVisible || (() => true), R = G.rec, mark = G.mark;
+  const q = [], wires = [], dots = [], recs = [], cross = opts.crossings ? crossAdj(G) : null, pins = new Set();
+  const visit = (v) => { if (v >= 0 && mark[v] !== id && G.role[v] && vis(S.layer[v])) { mark[v] = id; q.push(v); } };
   visit(seed);
   while (q.length) {
     const u = q.pop();
@@ -392,6 +422,39 @@ export function traceNet(G, seed, opts = {}) {
       for (const r2 of G.cellRecs.get(R.ent[r])) if (pinOf(G, r2).s === p) visit(R.wire[r2]);
     }
   }
+  return { wires, dots, recs };
+}
+
+/**
+ * The net through wire (or dot) `seed`. opts: { crossings, throughPins (wires on the same pin text of the
+ * same cell join), isVisible(layer) }. Returns { wires, dots, parts (prim ids), count (wires as drawn),
+ * junctions, length, segments, labels: [{ s, texts }], ends: [{ kind: 'cell'|'shape'|'open', x, y, name,
+ * pin, ref, label, ent, part }], bbox, ms }.
+ */
+export function traceNet(G, seed, opts = {}) {
+  const t0 = performance.now();
+  marks(G);
+  const id = ++G.markId;
+  return summary(G, seed, walk(G, seed, opts, id), id, opts, t0);
+}
+
+/**
+ * Every net of the drawing (each wire in exactly one; wires on hidden layers left out), as traceNet gives
+ * them, in reading order (top left first). One graph, one walk per net. opts as traceNet.
+ */
+export function traceAll(G, opts = {}) {
+  const S = G.scene, vis = opts.isVisible || (() => true), mark = marks(G, G.n), first = G.markId + 1, nets = [];
+  for (let p = 0; p < G.n; p++) {
+    if (G.role[p] !== ROLE.WIRE || mark[p] >= first || !vis(S.layer[p])) continue;
+    const t0 = performance.now(), id = ++G.markId, net = summary(G, p, walk(G, p, opts, id), id, opts, t0);
+    if (net.wires.length) nets.push(net);
+  }
+  return nets.sort((a, b) => b.bbox[3] - a.bbox[3] || a.bbox[0] - b.bbox[0] || a.seed - b.seed);
+}
+
+/** The net of a walk: length, ends, labels (see traceNet). */
+function summary(G, seed, { wires, dots, recs }, id, opts, t0) {
+  const S = G.scene, vis = opts.isVisible || (() => true), R = G.rec, at = (x, y) => Math.round(x / G.tol) + ',' + Math.round(y / G.tol);
   const C = S.coords, bbox = [Infinity, Infinity, -Infinity, -Infinity];
   let length = 0, segments = 0;
   for (const p of [...wires, ...dots]) {
@@ -406,26 +469,28 @@ export function traceNet(G, seed, opts = {}) {
   // ends: one per cell pin, shape or open end
   const ends = [], keys = new Set(), parts = new Set(), endCells = new Set(), H = G.H || G.tol * 20;
   for (const r of recs) {
-    const kind = R.kind[r], x = R.x[r], y = R.y[r], part = R.part[r], id = R.ent[r], o = 4 * part;
+    const kind = R.kind[r], x = R.x[r], y = R.y[r], part = R.part[r], ent = R.ent[r], o = 4 * part;
     let e;
     if (part >= 0) parts.add(part);
     if (kind === 1) {
       const p = pinOf(G, r);
-      endCells.add(id);
-      e = { kind: 'cell', name: S.blockNames[S.blk[part >= 0 ? part : entityItems(S, id).prims[0]]] || 'Cell', pin: p.s, ref: p.ref, key: `c${id}:${p.s || at(x, y)}` };
+      endCells.add(ent);
+      e = { kind: 'cell', name: S.blockNames[S.blk[part >= 0 ? part : entityItems(S, ent).prims[0]]] || 'Cell', pin: p.s, ref: p.ref, key: `c${ent}:${p.s || at(x, y)}` };
     } else if (kind === 2) {
       e = { kind: 'shape', name: S.kind[part] === KIND.CONIC ? 'Circle' : 'Shape', key: `s${part}:${at(x, y)}`, // the text in / by the symbol
-        label: textNear(G, (S.bbox[o] + S.bbox[o + 2]) / 2, (S.bbox[o + 1] + S.bbox[o + 3]) / 2, Math.max(S.bbox[o + 2] - S.bbox[o], S.bbox[o + 3] - S.bbox[o + 1]) / 2 + H, seen) };
-    } else e = { kind: 'open', name: 'Open end', key: 'o' + at(x, y), label: textNear(G, x, y, 2 * H, seen) };
-    if (!keys.has(e.key)) { keys.add(e.key); ends.push(Object.assign(e, { x, y, ent: id, part })); }
+        label: textNear(G, (S.bbox[o] + S.bbox[o + 2]) / 2, (S.bbox[o + 1] + S.bbox[o + 3]) / 2, Math.max(S.bbox[o + 2] - S.bbox[o], S.bbox[o + 3] - S.bbox[o + 1]) / 2 + H, id) };
+    } else e = { kind: 'open', name: 'Open end', key: 'o' + at(x, y), label: textNear(G, x, y, 2 * H, id) };
+    if (!keys.has(e.key)) { keys.add(e.key); ends.push(Object.assign(e, { x, y, ent, part })); }
   }
   const order = { cell: 0, shape: 1, open: 2 };
   ends.sort((a, b) => order[a.kind] - order[b.kind] || b.y - a.y || a.x - b.x);
-  // labels: texts whose nearest wire is in the net (not the pin texts of the cells it ends in)
-  const byS = new Map(), T = S.texts;
-  for (let t = 0; t < T.length; t++) {
-    const w = G.textWire[t];
-    if (w < 0 || !seen[w] || T[t].dead || !vis(T[t].layer) || endCells.has(T[t].ent)) continue; // (cheap checks first: this runs per net)
+  // labels: texts whose nearest wire is in the net (not the pin texts of the cells it ends in); only the
+  // texts next to its own wires are looked at (each one trimmed once), in text order
+  const byS = new Map(), T = S.texts, WT = wireTexts(G), near = [];
+  for (const p of wires) for (let k = WT.start[p]; k < WT.start[p + 1]; k++) near.push(WT.list[k]);
+  if (wires.length > 1) near.sort((a, b) => a - b);
+  for (const t of near) {
+    if (T[t].dead || !vis(T[t].layer) || endCells.has(T[t].ent)) continue;
     const s = T[t].s.trim();
     if (!byS.has(s)) byS.set(s, { s, texts: [] });
     byS.get(s).texts.push(t);

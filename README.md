@@ -414,6 +414,12 @@ same way). View › **Trace** (`J`) — in any mode, and it never changes the dr
   **labels** — texts right next to its wires, such as wire numbers and signal names (click one to show
   it); its **ends** — click one, or step with ‹ ›, to zoom to it with its pin readable. **Zoom to net**,
   **Copy** (the net as text), `Esc` or × clears. On a phone the panel sits at the bottom of the drawing.
+* **Netlist (CSV)** writes every net of the drawing as a from-to wire list (net, labels, from, to,
+  length, wires, junction dots): one row from the first end of each net to each of its other ends, ends
+  named as in the panel (`J4-1`, `TB2-3`, `TO SH 2`, `open`), with the panel's options and only the
+  visible levels / layers. Stray single lines with nothing at their ends are left out. The file is
+  saved on your device (a download), named after the drawing (`sheet-netlist.csv`); cells that a
+  spreadsheet would run as a formula get a leading apostrophe.
 * **Gap** (*Options*): ends closer than this touch — by default 5 % of the drawing's usual text height
   (so a sloppy end still connects); type a larger value for drawings with bigger gaps.
 * Hidden levels / layers are not traced through. After an edit the net is traced again from the same
@@ -603,6 +609,11 @@ console.log(findTexts(scene, 'PUMP').map((m) => m.s));
 
 Install it from a tag, e.g. `npm install github:dgreen52/linework#v0.5.2`. `buildSvg` takes
 `theme: 'dark'` (colours for a dark background) and `frame: false`; `findTexts` also takes a RegExp.
+
+Since 0.5.3 it also has the **netlist**: `buildNetlist(scene, G, opts)` lists every net (numbered
+in reading order, ends classified as pin, part, symbol, off-sheet reference or open end, in drawing
+coordinates) and `netlistCsv(nets)` writes the from-to wire list, as the Trace panel's
+*Netlist (CSV)* does.
 
 Since 0.5.2 the entry also has **wire tracing** (`buildNetGraph` / `buildNetGraphAsync` once per
 drawing, then `pickWire` and `traceNet` with `{ crossings, throughPins }`; `endText`, `netText`, `ROLE`)
@@ -809,8 +820,11 @@ Trade-offs, for the owner to decide before the first public release:
 * **v0.5** — wire tracing (View › Trace), sheet sets (navigator, find in all sheets, sheet links),
   PDF pages as drawings via pdf.js, lazy-loaded ([details](PDF.md)): vector import with layers, text,
   pages, scanned pages as pictures, saved as DXF / DGN.
-* **0.5.2 (this version)** — tracing and the sheet-set helpers in the `linework/core` library entry;
+* **0.5.2** — tracing and the sheet-set helpers in the `linework/core` library entry;
   Trace › *Find on other sheets* opens *Find in all sheets* with the net's label.
+* **0.5.3 (this version)** — Trace › *Netlist (CSV)*: every net of a drawing as a from-to wire list
+  (also `buildNetlist` / `netlistCsv` in `linework/core`); every net traced from one graph (the 53k-item
+  stress drawing's 31,501 nets in under a second).
 * **Next** — DWG reader rebuilt from pinned sources and R2004+ DWG test fixtures; measurement
   export (CSV); editing the geometry inside blocks/cells and shared block-definition text; true
   linetype scaling; hatch patterns; layouts / paper space tabs; markup resize handles and markup

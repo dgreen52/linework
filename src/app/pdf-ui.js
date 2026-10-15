@@ -58,6 +58,7 @@ export function initPages(app) {
     if (!pg || !doc || app.loading || !(n >= 1 && n <= pg.count) || n === pg.n) { update(); return false; }
     if (!doc.blob) { toast('Open the PDF again to see its other pages.', { kind: 'warn' }); update(); return false; }
     const P = pg.cad ? '' : 'Page ';
+    if (app.blockEdit) { toast('Close the block editor first', { key: 'block' }); update(); return false; }
     if (app.edit && app.edit.doc && app.edit.doc.dirty && !window.confirm(`${P}${label(pg.n)} has unsaved edits (they are kept in this browser). Show ${P}${label(n)} anyway?`)) { update(); return false; }
     let buf;
     try { buf = await doc.blob.arrayBuffer(); } catch {

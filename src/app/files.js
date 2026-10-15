@@ -139,7 +139,7 @@ export function initFiles(app, api) {
     const j = F.journal;
     F.chain = F.chain.then(async () => {
       const d = app.edit && app.edit.doc;
-      if (!j || j !== F.journal || F.paused || !d || d.scene !== app.scene) return;
+      if (!j || j !== F.journal || F.paused || !d || d.scene !== app.scene || app.blockEdit) return; // (the block editor: its document is not the drawing's)
       const r = await j.sync(d).catch((e) => { app.journalError = String(e && e.message || e); return 'error'; });
       app.journalState = r;
       if (r === 'too-big' && !F.warned) {

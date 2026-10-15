@@ -488,6 +488,7 @@ const hideProgress = () => { $('#progress').hidden = true; };
 
 /** Opening another drawing drops unsaved edits: ask first. */
 function okToReplace() {
+  if (app.blockEdit) return !toast('Close the block editor first', { key: 'block', detail: 'Done keeps the changes to the block, Cancel drops them.' });
   return !(edit && edit.dirty) || window.confirm('The drawing has unsaved edits. Open another drawing anyway?');
 }
 
@@ -609,6 +610,19 @@ function setDocument(scene, name, size, ms, src = {}) {
   if (scene.fitBox.outliers) toast('A few items lie far away from the rest; Fit shows the main drawing.', { timeout: 6000 });
 }
 
+/** Show another scene of this drawing (the block editor): renderer, layers (vis: their visibility), view (fit when none). */
+app.swapScene = (s, view, vis) => {
+  app.scene = s;
+  app.renderer.setScene(s);
+  layersPanel.setLayers(s.layers, s.format === 'DGN');
+  if (vis) { layersPanel.visible.set(vis.subarray(0, layersPanel.visible.length)); layersPanel.render(); }
+  app.layerVisible = Uint8Array.from(layersPanel.visible);
+  app.view.setLimits(s.extents);
+  if (view) app.view.restore(view); else app.view.fit(s.fitBox);
+  app.hover = null; app.hoverPath = null; app.selected = null; app.mdraft = null; app.draft = null;
+  invalidate(true);
+};
+
 // ------------------------------------------------------------------ markups: storage
 // Markups are kept in this browser per drawing: name + size + a hash of the file's content (two
 // revisions of a drawing often have the same name and size).
@@ -617,7 +631,7 @@ const autosaveKey = () => app.doc && `${AUTOSAVE}${app.doc.name}:${app.doc.size}
 let persistAsked = false, autosaveWarned = false;
 function autosave() {
   const k = autosaveKey();
-  if (!k) return;
+  if (!k || app.blockEdit) return; // (the block editor: the drawing's markups are put aside)
   if (!app.markups.length) { storage.del(k); return; }
   if (storage.set(k, serializeMarkups(docMeta(), app.markups))) {
     // ask once (never blocks) that the browser keeps this storage when space runs low
@@ -775,6 +789,7 @@ app.ro = () => !!app.scene?.page?.layout && !!toast('A layout is read-only: edit
 function setTool(t) {
   if (!TOOL_GROUP[t]) return;
   if (TOOL_GROUP[t] === 'edit' && app.ro()) return;
+  if (TOOL_GROUP[t] === 'markup' && app.blockEdit) { toast('Markups go on the drawing: close the block editor first', { key: 'block' }); return; }
   cancelDrafts();
   if (t !== 'zoombox') app.prevTool = t;
   app.tool = t;
@@ -1397,7 +1412,7 @@ const actions = {
   'load-markup': () => { if (app.doc) $('#markup-input').click(); else toast('Open the drawing first, then load its markups.', { kind: 'warn' }); },
   export: () => doExport(),
   print: () => openPrintDialog(),
-  compare: () => { if (!app.doc) { toast('Open a drawing first, then compare it with another revision.', { kind: 'warn' }); return; } import('./app/compare.js').then((m) => m.startCompare(app), () => toast('Compare is not available offline yet.', { kind: 'warn' })); },
+  compare: () => { if (!app.doc) { toast('Open a drawing first, then compare it with another revision.', { kind: 'warn' }); return; } if (app.blockEdit) { okToReplace(); return; } import('./app/compare.js').then((m) => m.startCompare(app), () => toast('Compare is not available offline yet.', { kind: 'warn' })); },
   'e-delete': () => edit.deleteSel(),
   'e-copy': () => edit.copyButton(),
   'e-paste': () => edit.paste(),

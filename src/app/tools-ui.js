@@ -517,6 +517,7 @@ export function initTools(app, api) {
     if (!ready()) return;
     const sel = E.sel.size > 0, b = $('#btn-etools'), st = $('#stage').getBoundingClientRect(), r = b.getBoundingClientRect();
     const need = sel ? undefined : 'Select items first';
+    const one = E.sel.size === 1 ? [...E.sel][0] : -1, blk = one >= 0 && ['insert', 'cell'].includes((X.entity(one) || {}).type);
     X.openMenu(Math.max(4, r.left - st.left), 4, [
       { label: 'Find and replace text…', act: openFind, title: 'Ctrl+F' },
       { label: 'Key-in a point (XY= DL= DI= AA=)…', act: () => edit.openKeyin(''), title: 'In a draw tool: exact points. With a selection: move, copy or rotate it' },
@@ -531,6 +532,7 @@ export function initTools(app, api) {
       { label: 'Select same…', act: openSelectSame, title: 'Level, colour, weight or type of the selection, or picked from lists' },
       { label: 'Match attributes', act: startMatch, title: 'Copy level, colour, weight and style from one item to others' },
       { label: `${info ? 'Hide' : 'Show'} element info`, act: () => toggleInfo(), title: 'I' },
+      { label: 'Edit block…', disabled: !blk || !!app.blockEdit, title: app.blockEdit ? 'Close this block first' : blk ? 'Its definition: every copy changes (or double-click it)' : 'Select one block or cell', act: () => edit.openBlock(one) },
     ]);
   }
 

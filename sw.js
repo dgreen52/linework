@@ -13,6 +13,7 @@ const SHELL = [
   'icons/icon-192.png',
   'icons/icon-512.png',
   'src/app.js',
+  'src/app/block-edit.js',
   'src/app/compare.js',
   'src/app/edit-ui.js',
   'src/app/files.js',

@@ -115,16 +115,23 @@ commit and the v0.7.16 tag). Keep that fork in place for as long as this build i
 
 * **Fixtures**: `tools/make_dwg_fixtures.mjs` converts the repo's own synthetic DXF files (the
   samples plus edge fixtures, and `edge-dwg-coverage.dxf`, a drawing made to exercise entity and
-  table variants) to **DWG R2000 (AC1015)** and **DWG R2004 (AC1018)** with `tools/dwg-r2000.mjs`,
-  a small DWG writer written for the tests from the public *Open Design Specification for .dwg
-  files* (`dwg-*.dwg` and `dwg2004-*.dwg`). R2004 files use the paged layout of chapter 4 of that
+  table variants) to **DWG R2000 (AC1015)**, **R2004 (AC1018)** and **R2010 (AC1024)** with
+  `tools/dwg-r2000.mjs`, a small DWG writer written for the tests from the public *Open Design
+  Specification for .dwg files* (`dwg-*.dwg`, `dwg2004-*.dwg`, `dwg2010-*.dwg`). R2004 files use the paged layout of chapter 4 of that
   specification: the header data encrypted at 0x80 with its CRC-32, data pages with masked 32 byte
   headers and both page checksums, compressed sections (written as literal runs, which every reader
   must accept), the section map and the section page map; and the R2004 forms of the header
   variables, classes, colours (colour methods, true colours) and objects (owned-object lists of
-  block headers, inserts and polylines; no entity links). One deviation from the specification:
-  it lists the entity "no links" bit for R2004 too ("always 1"), but LibreDWG, which reads R2004
-  files from CAD programs, reads none, so none is written. `edge-truecolor.dxf` adds true colours
+  block headers, inserts and polylines; no entity links). R2010 keeps that layout with the R2007+
+  object form: text as UTF-16 in a string stream at the end of each object's data (and of the
+  header), handles in their own stream, the object type as a bit pair and byte, the handle
+  stream's size after the object size, and the R2007+/R2010+ fields of the header (camera, loft,
+  geographic, dimension variables), entities (material, shadow, visual styles), attributes,
+  dimensions, vertices, MTEXT, layers and block headers. Three deviations from the specification,
+  each found by testing against LibreDWG (which reads files from CAD programs): it lists the entity
+  "no links" bit for R2004+ ("always 1"), LibreDWG reads none; R2007+ table entries have 6 more bits
+  after the xref fields than it lists (written as zeros); and LibreDWG reads no leader end-point
+  projection from R2010 (it lists one from R14). `edge-truecolor.dxf` adds true colours
   on layers, items, a block's insert (its ByBlock parts follow it) and a fill, which only R2004
   stores. Output is deterministic (a test regenerates and compares). No real or work drawings,
   ever.
@@ -146,12 +153,11 @@ commit and the v0.7.16 tag). Keep that fork in place for as long as this build i
   edit + Save → DXF (the dialog says DWG is not written) → re-open; offline re-open through the
   service worker; time limit; CSP negative control.
 
-**Covered by fixtures**: R2000 and R2004, both in every check above (R2004 also: the paged
-layout itself, colours item by item and in blocks, damaged-file fuzzing, strings with their NUL).
-**Not covered yet**: R13/R14 and R2007-R2018 files. LibreDWG reads them (its own test suite
-covers them), and the Unicode-string path of 2007+ is written against LibreDWG's API, but the test
-writer does not produce those versions: R2007 has a different file layout (Reed-Solomon coded
-pages), and R2007+ objects keep their text in a separate string stream.
+**Covered by fixtures**: R2000, R2004 and R2010, all in every check above (R2004 and R2010 also:
+the paged layout itself, colours item by item and in blocks, damaged-file fuzzing, strings with
+their NUL; R2010: text read as UTF-16, the Unicode path of 2007+). **Not covered yet**: R13/R14,
+R2007 (a different file layout: Reed-Solomon coded pages), R2013 and R2018 (small additions to
+R2010). LibreDWG reads them (its own test suite covers them).
 
 ## Known limits
 
@@ -186,4 +192,4 @@ the DWG reader must become a clearly separate, optional GPL component — get le
 2. ~~Direct object mapping, progress, partial-file handling~~ — done.
 3. ~~Rebuild from pinned sources~~ — done (`tools/build_dwg_wasm.sh` on GitHub Actions).
 4. Size/perf tuning (`-Oz`, drop unused LibreDWG parts, streaming compile); ~~R2004 synthetic
-   fixtures~~ (done); R2007+ fixtures.
+   fixtures~~, ~~R2010~~ (done); R2007, R2013, R2018 fixtures.

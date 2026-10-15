@@ -1,10 +1,14 @@
-// Minimal DWG R2000 (AC1015) and R2004 (AC1018) writer, used ONLY to make synthetic test fixtures from
-// the repo's own synthetic DXF files (see tools/make_dwg_fixtures.mjs). It is not part of the app.
+// Minimal DWG R2000 (AC1015), R2004 (AC1018) and R2010 (AC1024) writer, used ONLY to make synthetic
+// test fixtures from the repo's own synthetic DXF files (see tools/make_dwg_fixtures.mjs). It is not
+// part of the app.
 //
 // Written from the publicly available "Open Design Specification for .dwg files" (bit codes,
 // section layout, object encodings; for R2004 its chapter 4: the paged, compressed file layout, and
-// the R2004+ fields of the header variables, classes and objects). It writes just enough for a
-// reader to rebuild the drawing:
+// the R2004+ fields of the header variables, classes and objects; R2010 keeps that layout and adds
+// the R2007+ object form: text as UTF-16 in a string stream at the end of each object's data, the
+// handles in their own stream, and the R2007+/R2010+ fields). Where LibreDWG, which reads files from
+// CAD programs, reads a field differently from the specification, the writer follows LibreDWG and
+// says so (DWG.md lists those places). It writes just enough for a reader to rebuild the drawing:
 // file header, header variables, classes (none), tables (LTYPE, LAYER, STYLE, BLOCK_HEADER and
 // the other control objects), a root dictionary, blocks and these entities: LINE, POINT, CIRCLE,
 // ARC, ELLIPSE, LWPOLYLINE, POLYLINE (2D) + VERTEX, SPLINE, TEXT, MTEXT, ATTDEF, INSERT/MINSERT +
@@ -57,7 +61,9 @@ class Bits {
     for (const b of bytes) this.RC(b);
     if (nul) this.RC(0);
   }
-  H(code, value) {
+  /** A handle; in a header with its own handle stream (R2007+), there unless inData (HANDSEED). */
+  H(code, value, inData = false) {
+    if (this.hs && !inData) { this.hs.H(code, value); return; }
     value = Math.max(0, Math.floor(value || 0));
     const out = [];
     while (value > 0) { out.unshift(value & 0xff); value = Math.floor(value / 256); }
@@ -91,6 +97,30 @@ class Bits {
     this.p = save;
   }
   bytes() { return this.a.slice(0, (this.p + 7) >> 3); }
+  /** Text: before R2007 in code page 1252 (TV); from R2007 UTF-16 (TU) in the string stream, see strings(). */
+  T(s) {
+    if (!R21) { this.TV(cp1252(s)); return; }
+    const u = String(s ?? ''), S = this.str || (this.str = new Bits(64)), nul = NUL_TERMINATED && u.length > 0;
+    S.BS(u.length + (nul ? 1 : 0));
+    for (let i = 0; i < u.length; i++) S.RS(u.charCodeAt(i));
+    if (nul) S.RS(0);
+  }
+  /** Copy the bits of another stream. */
+  append(b) { for (let i = 0; i < b.p; i++) this.B((b.a[i >> 3] >> (7 - (i & 7))) & 1); }
+  /** R2007+, at the end of the data: the string stream, its size in bits (RS; above 0x7FFF a high RS first), a flag. */
+  strings() {
+    const S = this.str;
+    this.str = null;
+    if (!S || !S.p) { this.B(0); return; }
+    this.append(S);
+    if (S.p > 0x7fff) { this.RS(S.p >>> 15); this.RS((S.p & 0x7fff) | 0x8000); } else this.RS(S.p);
+    this.B(1);
+  }
+  /** Object type: a BS before R2010; from R2010 a bit pair and one byte (or two). */
+  OT(t) {
+    if (!R24) { this.BS(t); return; }
+    if (t < 0x100) { this.BB(0); this.RC(t); } else if (t >= 0x1f0 && t < 0x2f0) { this.BB(1); this.RC(t - 0x1f0); } else { this.BB(2); this.RS(t); }
+  }
 }
 
 // ------------------------------------------------------------------ CRC (CRC-16, reflected poly 0xA001)
@@ -175,18 +205,23 @@ const D2R = Math.PI / 180;
  * @returns {{ bytes: Uint8Array, notes: string[] }}
  */
 let NUL_TERMINATED = false;
-let R18 = false; // writing R2004 (AC1018)
+let R18 = false; // writing R2004+ (AC1018, AC1024)
+let R21 = false; // R2007+ objects (strings in a string stream): writing R2010
+let R24 = false; // writing R2010 (AC1024)
 /**
  * opts (test variants): nulTerminated — strings include their terminating NUL;
  * unlinkModelSpace — the model space block header lists no entities (damaged-file case).
  */
 export function writeDwgR2000(dxf, opts = {}) {
   NUL_TERMINATED = !!opts.nulTerminated;
-  R18 = opts.version === 'R2004';
-  try { return write(dxf, opts); } finally { NUL_TERMINATED = false; R18 = false; }
+  R18 = opts.version === 'R2004' || opts.version === 'R2010';
+  R21 = R24 = opts.version === 'R2010';
+  try { return write(dxf, opts); } finally { NUL_TERMINATED = false; R18 = R21 = R24 = false; }
 }
 /** The same drawing as DWG R2004 (AC1018): paged, compressed sections; R2004 header variables and objects. */
 export const writeDwgR2004 = (dxf, opts = {}) => writeDwgR2000(dxf, { ...opts, version: 'R2004' });
+/** The same drawing as DWG R2010 (AC1024): the R2004 layout, R2007+ objects (UTF-16 text in string streams). */
+export const writeDwgR2010 = (dxf, opts = {}) => writeDwgR2000(dxf, { ...opts, version: 'R2010' });
 function write(dxf, opts) {
   const notes = [];
   let nextHandle = 1;
@@ -263,26 +298,34 @@ function write(dxf, opts) {
   /** Common object (non-entity) frame. */
   function object(type, handle, data, handles) {
     const w = new Bits();
-    w.BS(type);
+    w.OT(type);
     const bsPos = w.p;
-    w.RL(0);
+    if (!R24) w.RL(0); // size of the data in bits (R2010+: from the handle stream size instead)
     w.H(0, handle);
     w.BS(0); // no extended data
     w.BL(0); // reactors
     if (R18) w.B(1); // no extension dictionary
     data(w);
-    w.setRL(bsPos, w.p);
-    handles(w);
-    return w.bytes();
+    return finish(w, bsPos, handles);
+  }
+  /** After an object's data: its strings (R2007+), the data size (before R2010), the handles; .hsize: the handle stream's bits. */
+  function finish(w, bsPos, handles) {
+    if (R21) w.strings();
+    if (!R24) w.setRL(bsPos, w.p);
+    const at = w.p;
+    if (handles) handles(w);
+    const b = w.bytes();
+    b.hsize = b.length * 8 - at;
+    return b;
   }
   /** The extension dictionary handle (none): R2000 writes a null one, R2004+ says it is missing instead. */
   const XD = (w) => { if (!R18) w.H(3, 0); };
   /** Common entity frame. owner: block handle when entmode 0. */
   function entity(type, handle, g, ctx, data, handles) {
     const w = new Bits();
-    w.BS(type);
+    w.OT(type);
     const bsPos = w.p;
-    w.RL(0);
+    if (!R24) w.RL(0); // size of the data in bits (R2010+: from the handle stream size instead)
     w.H(0, handle);
     w.BS(0); // no extended data
     w.B(0); // no graphics
@@ -303,17 +346,19 @@ function write(dxf, opts) {
     else if (lt !== 'BYLAYER') { const L = ltypes.get(lt); if (L) { ltFlag = 3; ltHandle = L.handle; } }
     w.BB(ltFlag);
     w.BB(0); // plot style by layer
+    if (R21) { w.BB(0); w.RC(0); } // material by layer, shadow flags
+    if (R24) { w.B(0); w.B(0); w.B(0); } // no full / face / edge visual style
     w.BS(g && g.i(60, 0) === 1 ? 1 : 0);
     w.RC(29); // lineweight: by layer
     data(w);
-    w.setRL(bsPos, w.p);
-    if (ctx.entmode === 0) w.H(4, ctx.owner);
-    XD(w);
-    if (!R18) { w.H(4, ctx.prev || 0); w.H(4, ctx.next || 0); }
-    w.H(5, g ? layerOf(g) : layers.get('0').handle);
-    if (ltFlag === 3) w.H(5, ltHandle);
-    if (handles) handles(w);
-    return w.bytes();
+    return finish(w, bsPos, (h) => {
+      if (ctx.entmode === 0) h.H(4, ctx.owner);
+      XD(h);
+      if (!R18) { h.H(4, ctx.prev || 0); h.H(4, ctx.next || 0); }
+      h.H(5, g ? layerOf(g) : layers.get('0').handle);
+      if (ltFlag === 3) h.H(5, ltHandle);
+      if (handles) handles(h);
+    });
   }
   const push = (handle, bytes) => objects.push({ handle, bytes });
 
@@ -343,7 +388,7 @@ function write(dxf, opts) {
     if (!(df & 8)) w.RD(rot);
     w.RD(Math.abs(g.f(40, 1)) || 1);
     if (!(df & 0x10)) w.RD(wf);
-    w.TV(cp1252(g.s(1, '')));
+    w.T(g.s(1, ''));
     if (!(df & 0x20)) w.BS(gen);
     if (!(df & 0x40)) w.BS(halign);
     if (!(df & 0x80)) w.BS(valign);
@@ -351,10 +396,12 @@ function write(dxf, opts) {
   function ext(g) { return g.has(210) || g.has(230) ? [g.f(210, 0), g.f(220, 0), g.f(230, 1)] : [0, 0, 1]; }
   function attribData(w, g, isDef) {
     textData(w, g, 74);
-    w.TV(cp1252(g.s(2, '')));
+    if (R24) w.RC(0); // version
+    w.T(g.s(2, ''));
     w.BS(g.i(73, 0)); // field length
     w.RC(g.i(70, 0)); // flags
-    if (isDef) w.TV(cp1252(g.s(3, '')));
+    if (R21) w.B(0); // lock position
+    if (isDef) { if (R24) w.RC(0); w.T(g.s(3, '')); } // (version), prompt
   }
 
   const ENCODERS = {
@@ -436,12 +483,13 @@ function write(dxf, opts) {
         if (!g.has(11)) { const r = g.f(50, 0); xd = [Math.cos(r), Math.sin(r), 0]; }
         w.BD3(xd);
         w.BD(g.f(41, 0));
+        if (R21) w.BD(g.f(46, 0)); // rectangle height
         w.BD(Math.abs(g.f(40, 1)) || 1);
         w.BS(g.i(71, 1) || 1);
         w.BS(g.i(72, 1) || 1);
         w.BD(g.f(43, 0)); // extents height
         w.BD(g.f(42, 0)); // extents width
-        w.TV(cp1252([...g.all(3), g.s(1, '')].join('')));
+        w.T([...g.all(3), g.s(1, '')].join(''));
         w.BS(g.i(73, 1) || 1);
         w.BD(g.f(44, 1) || 1);
         w.B(0);
@@ -552,7 +600,9 @@ function write(dxf, opts) {
         const P3 = [vg.f(10), vg.f(20), vg.f(30)];
         if (kind === '2d') {
           push(v.handle, entity(T.VERTEX_2D, v.handle, vg, vctx, (w) => {
-            w.RC(vf); w.BD3(P3); w.BD(vg.f(40, 0)); w.BD(vg.f(41, 0)); w.BD(vg.f(42, 0)); w.BD(vg.f(50, 0) * D2R);
+            w.RC(vf); w.BD3(P3); w.BD(vg.f(40, 0)); w.BD(vg.f(41, 0)); w.BD(vg.f(42, 0));
+            if (R24) w.BL(0); // vertex id
+            w.BD(vg.f(50, 0) * D2R);
           }));
         } else if (kind === 'pface' && !(vf & 64)) {
           push(v.handle, entity(T.VERTEX_PFACE_FACE, v.handle, vg, vctx, (w) => { for (const c of [71, 72, 73, 74]) w.BS(vg.i(c, 0)); }));
@@ -604,6 +654,7 @@ function write(dxf, opts) {
       const type = [T.DIM_LINEAR, T.DIM_ALIGNED, T.DIM_ANG2LN, T.DIM_DIAMETER, T.DIM_RADIUS, T.DIM_ANG3PT, T.DIM_ORDINATE][dt] || T.DIM_LINEAR;
       const P3 = (c) => [g.f(c), g.f(c + 10), g.f(c + 20)];
       push(it.handle, entity(type, it.handle, g, ctx, (w) => {
+        if (R24) w.RC(0); // version
         w.BD3(ext(g));
         w.RD2([g.f(11), g.f(21)]);
         w.BD(g.f(31, 0));
@@ -612,7 +663,7 @@ function write(dxf, opts) {
         if (!(f70 & 128)) f1 |= 1; // text at the default position
         if (f70 & 32) f1 |= 2;
         w.RC(f1);
-        w.TV(cp1252(g.s(1, '')));
+        w.T(g.s(1, ''));
         w.BD(g.f(53, 0) * D2R);
         w.BD(g.f(51, 0) * D2R);
         w.BD3([1, 1, 1]);
@@ -621,6 +672,7 @@ function write(dxf, opts) {
         w.BS(g.i(72, 1) || 1);
         w.BD(g.f(41, 1) || 1);
         w.BD(g.f(42, 0));
+        if (R21) { w.B(0); w.B(0); w.B(0); } // (unknown), arrows not flipped
         w.RD2([g.f(12), g.f(22)]);
         if (type === T.DIM_LINEAR || type === T.DIM_ALIGNED) {
           w.BD3(P3(13)); w.BD3(P3(14)); w.BD3(P3(10)); w.BD(g.f(52, 0) * D2R);
@@ -649,11 +701,12 @@ function write(dxf, opts) {
         w.BS(g.i(72, 0)); // path type
         w.BL(pts.length);
         for (const p of pts) w.BD3(p);
-        w.BD3([0, 0, 0]); // end point projection
+        w.BD3([0, 0, 0]); // the leader plane's origin
         w.BD3(ext(g));
         w.BD3([g.f(211, 1), g.f(221, 0), g.f(231, 0)]);
         w.BD3([g.f(213, 0), g.f(223, 0), g.f(233, 0)]); // offset to block insertion point
-        w.BD3([0, 0, 0]); // unknown (R2000+)
+        // end point projection: R14-R2004 (the specification lists it for later versions too; LibreDWG reads none from R2010)
+        if (!R24) w.BD3([0, 0, 0]);
         w.BD(g.f(40, 0)); w.BD(g.f(41, 0));
         w.B(g.i(74, 0)); // hookline on x dir
         w.B(g.i(71, 1)); // arrowhead on
@@ -677,10 +730,10 @@ function write(dxf, opts) {
     const num = () => parseFloat(vals[k++]);
     const int = () => parseInt(vals[k++], 10) | 0;
     const seek = (code) => { while (k < n && codes[k] !== code) k++; return k < n; };
-    if (R18) { w.BL(0); w.BL(0); w.BD(0); w.BD(0); w.BL(0); w.BD(0); w.BL(0); w.TV([]); } // not a gradient
+    if (R18) { w.BL(0); w.BL(0); w.BD(0); w.BD(0); w.BL(0); w.BD(0); w.BL(0); w.T(''); } // not a gradient
     w.BD(g.f(30, 0));
     w.BD3(ext(g));
-    w.TV(cp1252(g.s(2, 'SOLID')));
+    w.T(g.s(2, 'SOLID'));
     const solidFill = g.i(70, 0) === 1;
     w.B(solidFill);
     w.B(g.i(71, 0));
@@ -789,7 +842,9 @@ function write(dxf, opts) {
   const dimstyle = 0; // no DIMSTYLE table entries are written (dimensions are drawn from their blocks)
 
   // ---------------------------------------------------------------- tables
-  const tableEntryHead = (w, name) => { w.TV(cp1252(name)); w.B(0); w.BS(0); w.B(0); };
+  // name, 64-flag, xref index + 1, xref dependent. R2007+: LibreDWG reads 6 more bits here than the specification
+  // lists (found by testing against it: every table type needs them); written as zeros
+  const tableEntryHead = (w, name) => { w.T(name); w.B(0); w.BS(0); w.B(0); if (R21) for (let i = 0; i < 6; i++) w.B(0); };
   const tableHandles = (w, owner) => { w.H(4, owner); XD(w); w.H(5, 0); };
 
   const userLtypes = [...ltypes.values()].filter((l) => !/^(BYLAYER|BYBLOCK)$/i.test(l.name));
@@ -802,12 +857,12 @@ function write(dxf, opts) {
   for (const l of ltypes.values()) {
     push(l.handle, object(T.LTYPE, l.handle, (w) => {
       tableEntryHead(w, l.name);
-      w.TV(cp1252(l.desc));
+      w.T(l.desc);
       w.BD(l.dashes.reduce((s, d) => s + Math.abs(d), 0));
       w.RC(65); // 'A'
       w.RC(l.dashes.length);
       for (const d of l.dashes) { w.BD(d); w.BS(0); w.RD(0); w.RD(0); w.BD(1); w.BD(0); w.BS(0); }
-      for (let i = 0; i < 256; i++) w.RC(0); // strings area
+      if (!R21) for (let i = 0; i < 256; i++) w.RC(0); // strings area (R2007+: only with text in the dashes)
     }, (w) => { tableHandles(w, H.ltypeControl); for (let i = 0; i < l.dashes.length; i++) w.H(5, 0); }));
   }
 
@@ -830,6 +885,7 @@ function write(dxf, opts) {
     }, (w) => {
       tableHandles(w, H.layerControl);
       w.H(5, 0); // plot style
+      if (R21) w.H(5, 0); // material
       const lt = ltypes.get(String(L.ltype).toUpperCase()) || ltypes.get('CONTINUOUS');
       w.H(5, lt.handle);
     }));
@@ -850,8 +906,8 @@ function write(dxf, opts) {
       w.BD(g ? g.f(50, 0) * D2R : 0);
       w.RC(g ? g.i(71, 0) : 0);
       w.BD(g ? g.f(42, 2.5) : 2.5);
-      w.TV(cp1252(g ? g.s(3, 'txt') : 'txt'));
-      w.TV(cp1252(g ? g.s(4, '') : ''));
+      w.T(g ? g.s(3, 'txt') : 'txt');
+      w.T(g ? g.s(4, '') : '');
     }, (w) => tableHandles(w, H.styleControl)));
   }
 
@@ -881,10 +937,11 @@ function write(dxf, opts) {
       w.B(1); // loaded
       if (R18) w.BL(items.length); // owned objects: its entities
       w.BD3(base);
-      w.TV([]); // xref path
+      w.T(''); // xref path
       w.RC(0); // no insert handles follow
-      w.TV([]); // description
+      w.T(''); // description
       w.BL(0); // no preview
+      if (R21) { w.BS(0); w.B(1); w.RC(0); } // insert units, explodable, block scaling
     }, (w) => {
       tableHandles(w, H.blockControl);
       w.H(3, blk.blockEnt);
@@ -900,7 +957,7 @@ function write(dxf, opts) {
     const inBlock = blk !== ms && blk !== ps;
     const entmode = inBlock ? 0 : blk === ps ? 1 : 2;
     const bctx = { entmode: 0, owner: blk.handle };
-    push(blk.blockEnt, entity(T.BLOCK, blk.blockEnt, g && g.has(8) ? g : null, bctx, (w) => w.TV(cp1252(blk.name))));
+    push(blk.blockEnt, entity(T.BLOCK, blk.blockEnt, g && g.has(8) ? g : null, bctx, (w) => w.T(blk.name)));
     items.forEach((it, k) => {
       const ctx = { entmode, owner: blk.handle, prev: k ? items[k - 1].handle : 0, next: k + 1 < items.length ? items[k + 1].handle : 0 };
       ENCODERS[it.type](it, ctx);
@@ -916,7 +973,7 @@ function write(dxf, opts) {
   function headerVars(w) {
     const Bs = (...v) => v.forEach((x) => w.B(x)), BSs = (...v) => v.forEach((x) => w.BS(x)), BDs = (...v) => v.forEach((x) => w.BD(x));
     BDs(412148564080.0, 1, 1, 1);
-    for (let i = 0; i < 4; i++) w.TV([]);
+    for (let i = 0; i < 4; i++) w.T('');
     w.BL(24); w.BL(0);
     if (!R18) w.H(5, 0); // current viewport entity header (before R2004)
     Bs(1, 1); // DIMASO DIMSHO
@@ -940,15 +997,16 @@ function write(dxf, opts) {
     BDs(0, 0, 0, 0, 0); // USERR1-5
     BDs(0, 0, 0, 0); // CHAMFERA-D
     BDs(0.5, 1, 1); // FACETRES CMLSCALE CELTSCALE
-    w.TV(cp1252('acad')); // MENU
+    if (!R21) w.T('acad'); // MENU (R13-R2004)
     w.BL(2461000); w.BL(0); w.BL(2461000); w.BL(0); // TDCREATE TDUPDATE
     if (R18) { w.BL(0); w.BL(0); w.BL(0); } // (R2004+, unknown)
     w.BL(0); w.BL(0); w.BL(0); w.BL(0); // TDINDWG TDUSRTIMER
     w.CMC(256); // CECOLOR
-    w.H(0, nextHandle); // HANDSEED
+    w.H(0, nextHandle, true); // HANDSEED (in the data, also from R2007)
     w.H(5, layers.get('0').handle); // CLAYER
     w.H(5, styles.get('STANDARD').handle); // TEXTSTYLE
     w.H(5, ltypes.get('BYLAYER').handle); // CELTYPE
+    if (R21) w.H(5, 0); // CMATERIAL
     w.H(5, dimstyle); // DIMSTYLE
     w.H(5, 0); // CMLSTYLE
     w.BD(0); // PSVPSCALE
@@ -963,10 +1021,12 @@ function write(dxf, opts) {
     };
     ucsBlock([0, 0, 0], [0, 0, 0], [0, 0, 0]); // paper space
     ucsBlock([0, 0, 0], extmin, extmax); // model space
-    w.TV([]); w.TV([]); // DIMPOST DIMAPOST
+    w.T(''); w.T(''); // DIMPOST DIMAPOST
     BDs(num('$DIMSCALE', 40, 1) || 1, num('$DIMASZ', 40, 2.5), 0.625, 3.75, 1.25, 0, 0, 0, 0); // DIMSCALE ASZ EXO DLI EXE RND DLE TP TM
+    if (R21) { w.BD(1); w.BD(Math.PI / 4); w.BS(0); w.CMC(0); } // DIMFXL DIMJOGANG DIMTFILL DIMTFILLCLR
     Bs(0, 0, 0, 0, 0, 0); // DIMTOL DIMLIM DIMTIH DIMTOH DIMSE1 DIMSE2
     BSs(1, 8, 0); // DIMTAD DIMZIN DIMAZIN
+    if (R21) w.BS(0); // DIMARCSYM
     BDs(num('$DIMTXT', 40, 2.5), 2.5, 0, 0.03937007874, 1, 0, 1, 0.625); // DIMTXT CEN TSZ ALTF LFAC TVP TFAC GAP
     w.BD(0); w.B(0); w.BS(3); w.B(1); w.B(0); w.B(0); w.B(0); // DIMALTRND DIMALT DIMALTD DIMTOFL DIMSAH DIMTIX DIMSOXD
     w.CMC(0); w.CMC(0); w.CMC(0); // DIMCLRD DIMCLRE DIMCLRT
@@ -975,29 +1035,46 @@ function write(dxf, opts) {
     BSs(0, 8, 0, 0); // DIMTOLJ DIMTZIN DIMALTZ DIMALTTZ
     w.B(0); // DIMUPT
     w.BS(3); // DIMATFIT
+    if (R21) w.B(0); // DIMFXLON
+    if (R24) { w.B(0); w.BD(1); w.T(''); w.BD(1); w.T(''); } // DIMTXTDIRECTION DIMALTMZF DIMALTMZS DIMMZF DIMMZS
     w.H(5, styles.get('STANDARD').handle); // DIMTXSTY
     w.H(5, 0); w.H(5, 0); w.H(5, 0); w.H(5, 0); // DIMLDRBLK DIMBLK DIMBLK1 DIMBLK2
+    if (R21) { w.H(5, 0); w.H(5, 0); w.H(5, 0); } // DIMLTYPE DIMLTEX1 DIMLTEX2
     w.BS(-2); w.BS(-2); // DIMLWD DIMLWE
     for (const h of [H.blockControl, H.layerControl, H.styleControl, H.ltypeControl, H.viewControl, H.ucsControl, H.vportControl, H.appidControl, H.dimstyleControl]) w.H(3, h);
     if (!R18) w.H(3, H.vxControl); // (R13-R2000)
     w.H(5, 0); w.H(5, 0); // ACAD_GROUP, ACAD_MLINESTYLE dictionaries
     w.H(3, H.namedDict);
     w.BS(1); w.BS(70); // TSTACKALIGN TSTACKSIZE
-    w.TV([]); w.TV([]); // HYPERLINKBASE STYLESHEET
+    w.T(''); w.T(''); // HYPERLINKBASE STYLESHEET
     w.H(5, 0); w.H(5, 0); w.H(5, 0); // LAYOUTS PLOTSETTINGS PLOTSTYLES dictionaries
     if (R18) { w.H(5, 0); w.H(5, 0); } // MATERIALS COLORS dictionaries
+    if (R21) w.H(5, 0); // VISUALSTYLE dictionary
     w.BL(0x081d | 0x200); // flags: CELWEIGHT by layer, EXTNAMES, lineweights not displayed
     w.BS(num('$INSUNITS', 70, 0)); // INSUNITS
     w.BS(0); // CEPSNTYPE
-    w.TV(cp1252('{00000000-0000-0000-0000-000000000000}')); // FINGERPRINTGUID
-    w.TV(cp1252('{00000000-0000-0000-0000-000000000000}')); // VERSIONGUID
+    w.T('{00000000-0000-0000-0000-000000000000}'); // FINGERPRINTGUID
+    w.T('{00000000-0000-0000-0000-000000000000}'); // VERSIONGUID
     if (R18) {
       w.RC(0x7f); w.RC(0); w.RC(1); w.RC(0); w.RC(2); w.RC(0); // SORTENTS INDEXCTL HIDETEXT XCLIPFRAME DIMASSOC HALOGAP
       w.BS(257); w.BS(257); w.RC(0); w.RC(0); // OBSCUREDCOLOR INTERSECTIONCOLOR OBSCUREDLTYPE INTERSECTIONDISPLAY
-      w.TV([]); // PROJECTNAME
+      w.T(''); // PROJECTNAME
     }
     w.H(5, ps.handle); w.H(5, ms.handle); // BLOCK_RECORD_PSPACE / MSPACE
     w.H(5, ltypes.get('BYLAYER').handle); w.H(5, ltypes.get('BYBLOCK').handle); w.H(5, ltypes.get('CONTINUOUS').handle);
+    if (R21) {
+      w.B(0); w.BL(0); w.BL(0); w.BD(0); // CAMERADISPLAY, unknown
+      BDs(2, 6, 2, 50, 0); // STEPSPERSEC STEPSIZE 3DDWFPREC LENSLENGTH CAMERAHEIGHT
+      w.RC(0); w.RC(0); // SOLIDHIST SHOWHIST
+      BDs(0.25, 4, Math.PI / 2, Math.PI / 2, 0, 0); // PSOLWIDTH PSOLHEIGHT LOFTANG1 LOFTANG2 LOFTMAG1 LOFTMAG2
+      w.BS(7); w.RC(1); // LOFTPARAM LOFTNORMALS
+      BDs(37.795, -122.394, 0); // LATITUDE LONGITUDE NORTHDIRECTION
+      w.BL(-8000 >>> 0); // TIMEZONE
+      w.RC(1); w.RC(1); w.RC(2); w.RC(2); // LIGHTGLYPHDISPLAY TILEMODELIGHTSYNCH DWFFRAME DGNFRAME
+      w.B(0); w.CMC(1); // unknown, INTERFERECOLOR
+      w.H(5, 0); w.H(5, 0); w.H(5, 0); // INTERFEREOBJVS INTERFEREVPVS DRAGVS
+      w.RC(0); w.BD(0); // CSHADOW, unknown
+    }
     w.BS(0); w.BS(0); w.BS(0); w.BS(0);
   }
 
@@ -1085,7 +1162,7 @@ function objectMap(map) {
 
 /** An object's bytes as stored: MS size, the object, CRC (seed 0xC0C1). */
 function framed(o) {
-  const ms = MS(o.bytes.length);
+  const ms = [...MS(o.bytes.length), ...(R24 ? UMC(o.bytes.hsize) : [])]; // R2010+: the handle stream's size in bits
   const body = new Uint8Array(ms.length + o.bytes.length + 2);
   body.set(ms, 0);
   body.set(o.bytes, ms.length);
@@ -1151,10 +1228,26 @@ const le = (vals) => { const b = new Uint8Array(4 * vals.length), dv = new DataV
 function assembleR2004(objects, headerVars, { handseed, measurement }) {
   // ---- the data sections (decompressed)
   const hw = new Bits(4096);
+  if (R21) hw.hs = new Bits(1024); // R2007+: the header's handles in their own stream after the data and strings
   headerVars(hw);
-  const header = sectionWithSize(SENTINEL.varsBegin, hw.bytes(), SENTINEL.varsEnd);
+  let header;
+  if (R21) {
+    hw.strings();
+    const end = hw.p;
+    hw.append(hw.hs);
+    const d = new Bits(hw.p + 64);
+    d.RL(end + 32); // where the handles start: the bits of this size, the data and the strings
+    d.append(hw);
+    header = sectionWithSize(SENTINEL.varsBegin, d.bytes(), SENTINEL.varsEnd);
+  } else header = sectionWithSize(SENTINEL.varsBegin, hw.bytes(), SENTINEL.varsEnd);
   const cw = new Bits(16);
-  cw.BS(499); cw.RC(0); cw.RC(0); cw.B(1); // highest class number (no classes), 0, 0, true
+  if (R21) {
+    const c = new Bits(16);
+    c.BL(499); c.B(1); // highest class number (no classes), true
+    c.B(0); // no string stream
+    cw.RL(c.p + 32); // size in bits (this size included)
+    cw.append(c);
+  } else { cw.BS(499); cw.RC(0); cw.RC(0); cw.B(1); } // highest class number (no classes), 0, 0, true
   const classes = cat([sectionWithSize(SENTINEL.classesBegin, cw.bytes(), SENTINEL.classesEnd), new Uint8Array(8)]);
   objects.sort((a, b) => a.handle - b.handle);
   const parts = [le([0x0dca])], map = [];
@@ -1167,7 +1260,8 @@ function assembleR2004(objects, headerVars, { handseed, measurement }) {
   {
     let o = 0;
     const RC = (v) => { aux[o++] = v; }, RS = (v) => { ad.setUint16(o, v, true); o += 2; }, RL = (v) => { u32(ad, o, v); o += 4; };
-    RC(0xff); RC(0x77); RC(0x01); RS(25); RS(0); RL(1); RL(0xffffffff); RS(1); RS(0); RL(0); RS(25); RS(0); RS(25); RS(0);
+    const ver = R24 ? 29 : 25; // AC1024 : AC1018
+    RC(0xff); RC(0x77); RC(0x01); RS(ver); RS(0); RL(1); RL(0xffffffff); RS(1); RS(0); RL(0); RS(ver); RS(0); RS(ver); RS(0);
     RS(5); RS(0x893); RS(5); RS(0x893); RS(0); RS(1); for (let k = 0; k < 5; k++) RL(0);
     RL(2461000); RL(0); RL(2461000); RL(0); // TDCREATE TDUPDATE
     RL(handseed < 0x7fffffff ? handseed : 0xffffffff); RL(0); RS(0); RS(1); RL(0); RL(0); RL(0); RL(1); for (let k = 0; k < 4; k++) RL(0);
@@ -1244,8 +1338,8 @@ function assembleR2004(objects, headerVars, { handseed, measurement }) {
   const enc = hd.map((b, k) => b ^ MAGIC[k]);
   out.push(enc);
   const fh = out[0], fv = new DataView(fh.buffer);
-  fh.set([0x41, 0x43, 0x31, 0x30, 0x31, 0x38], 0); // AC1018
-  fh[0x0b] = 0; fh[0x0c] = 3; u32(fv, 0x0d, 0); fh[0x11] = 25; fh[0x12] = 0; fv.setUint16(0x13, 30, true); // ANSI_1252
+  fh.set([...(R24 ? 'AC1024' : 'AC1018')].map((c) => c.charCodeAt(0)), 0);
+  fh[0x0b] = 0; fh[0x0c] = 3; u32(fv, 0x0d, 0); fh[0x11] = R24 ? 29 : 25; fh[0x12] = 0; fv.setUint16(0x13, 30, true); // ANSI_1252
   u32(fv, 0x18, 0); u32(fv, 0x1c, 0); u32(fv, 0x20, 0); u32(fv, 0x24, 0); u32(fv, 0x28, 0x80);
   fh.set(enc, 0x80);
   fh.set(MAGIC.subarray(0xec, 0x100), 0xec);

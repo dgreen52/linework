@@ -69,7 +69,7 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 | `src/worker.js` | Parse worker. |
 | `lib/core.js` | Library entry (`linework/core` package export) for Node and other hosts: re-exports readers, scene, find, compare, wire tracing, sheet-set helpers (index, search, references), writers, SVG builder. Not part of the app — never import it from `src/`, never add it to `sw.js` (`core.test.mjs` checks). |
 | `sw.js` | Offline app-shell cache. **Add new files to `SHELL` (or `ON_DEMAND` / `PDF_ON_DEMAND` if loaded lazily) and bump the version in `src/version.js`** (the one place it lives; the about line, saved files and the cache name read it). The DWG and PDF readers have their own caches (`READER_CACHE`, `PDF_READER_CACHE`). |
-| `tools/` | Fixture generators (`dwg-r2000.mjs` = test-only DWG R2000/R2004 writer), DWG reader vendoring/build, palette extraction, icon rendering, static server, `make_dist.mjs`. |
+| `tools/` | Fixture generators (`dwg-r2000.mjs` = test-only DWG R2000/R2004/R2010 writer), DWG reader vendoring/build, palette extraction, icon rendering, static server, `make_dist.mjs`. |
 | `tests/unit/` | `node --test` suites. `tests/e2e/run.mjs` is the Playwright suite. |
 
 ## Commands
@@ -77,7 +77,7 @@ crash on a bad file — show what loaded plus "N items not shown"), and cheap (s
 ```
 node tools/make_fixtures.mjs           # DXF samples + edge-case fixtures (+ 50k stress, not committed)
 python tools/make_dgn_fixtures.py      # DGN fixtures + OGR oracles (needs Python GDAL)
-node tools/make_dwg_fixtures.mjs       # DWG R2000 + R2004 fixtures from the synthetic DXF files
+node tools/make_dwg_fixtures.mjs       # DWG R2000 + R2004 + R2010 fixtures from the synthetic DXF files
 node tools/make_pdf_fixtures.mjs       # PDF fixtures (--print: also Linework's own vector prints, needs Playwright)
 node tools/vendor_pdfjs.mjs            # install the pinned pdf.js into vendor/pdfjs/ (checks the npm integrity)
 tools/build_dwg_wasm.sh                # build the DWG reader from pinned sources (runs on GitHub Actions, see DWG.md)

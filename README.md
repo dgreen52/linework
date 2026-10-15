@@ -33,7 +33,8 @@ DGN v7 — on a desktop, a tablet or a phone, online or offline.
   correctly), layer panel (toggle, isolate, colour swatches, filter), live coordinates in drawing
   units, hover to see what an item is (type, layer, block).
 * **Measures** distance, path length and area with snaps to ends, middles, centres, crossings and
-  nearest points; values in the drawing's units with 0–6 decimals; copy to clipboard.
+  nearest points; values in the drawing's units with 0–6 decimals; copy to clipboard, or save every
+  measurement as a CSV list (type, value, unit, ΔX/ΔY/angle, perimeter, the points).
 * **Marks up** with pen, line, arrow, box, ellipse, revision cloud (drag a box or click a
   polygon), text callout (leader + box) and highlighter; colours and widths; select, move and
   delete; undo/redo (Ctrl+Z / Ctrl+Y); your name and a timestamp on every markup.
